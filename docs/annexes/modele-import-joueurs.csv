@@ -1,0 +1,5 @@
+email,prenom,nom,telephone,poste,numero,date_naissance,poids,taille,type_cotisation
+jean.mbala@example.com,Jean,Mbala,+243811111111,Gardien,1,14/03/1990,78.5,182,Mensuelle 20$
+alice.tshimanga@example.com,Alice,Tshimanga,,,,,,,
+patrick.kalala@example.com,Patrick,Kalala,,midfielder,8,1988-07-22,74,178,Mensuelle 10$
+sarah.ilunga@example.com,Sarah,Ilunga,0899999999,Attaquant,9,05/11/1995,"62,3",167,Mensuelle 5$

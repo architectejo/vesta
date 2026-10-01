@@ -1,0 +1,16 @@
+# Stub minimal — Lot 1, tâche 1.0.
+# Configuration complète de production (HTTPS, en-têtes de sécurité, cache,
+# proxy API) à livrer par `devops-cpanel` au Lot 5 (§5.3 du plan des lots).
+
+# Redirige toutes les routes inconnues vers index.html (React Router en
+# mode "history") sans toucher aux fichiers réels ni au dossier /assets.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  RewriteCond %{REQUEST_FILENAME} -f
+  RewriteRule ^ - [L]
+
+  RewriteRule ^index\.html$ - [L]
+  RewriteRule . /index.html [L]
+</IfModule>

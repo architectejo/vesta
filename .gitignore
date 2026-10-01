@@ -1,0 +1,55 @@
+# Python / Django (backend/)
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.sqlite3-journal
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Fichiers uploades en developpement local (photos, logos, documents
+# prives). Jamais commites : ni donnee de demonstration, ni donnee
+# personnelle reelle dans le depot (CLAUDE.md section 3).
+backend/media/
+# Stockage prive (justificatifs, fiches d'adhesion, fichiers d'import --
+# ecart bloquant B10, revue de conformite fin de Lot 1, tache 1.14).
+backend/private_media/
+
+# Environnements virtuels Python (quel que soit le nom choisi localement)
+.venv/
+.env/
+venv/
+
+# Variables d'environnement locales (jamais commitees, cf. .env.example)
+.env
+backend/.env
+
+# Node / frontend (a venir)
+node_modules/
+dist/
+.vite/
+
+# Artefacts de tests (Vitest/Playwright) : resultats d'execution locale,
+# jamais du code source (peuvent contenir des captures d'ecran de donnees
+# de demonstration).
+frontend/test-results/
+frontend/playwright-report/
+frontend/coverage/
+
+# Editeurs / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Fichiers reels du club pilote (CSV/PDF de cotisations, fiches
+# individuelles) : donnees personnelles et financieres reelles de vrais
+# joueurs, jamais commitees (structure du depot, CLAUDE.md section 5).
+/data/
+
+# Fichier de reference hors structure du projet (CLAUDE.md section 3 :
+# aucun fichier inutile a la racine).
+/bord.tsx
+
+# Verrou local des taches planifiees (ephemere, propre a la machine).
+.claude/scheduled_tasks.lock

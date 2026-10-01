@@ -1,0 +1,34 @@
+# Vesta - dependances backend
+# Python 3.12, Django 5.2 LTS (CLAUDE.md section 4).
+# Aucune valeur reelle ici : les secrets viennent des variables
+# d'environnement (voir .env.example).
+
+Django>=5.2,<5.3
+djangorestframework>=3.16,<3.19
+djangorestframework-simplejwt>=5.5,<6.0
+django-environ>=0.12,<1.0
+
+# Pilote MySQL/MariaDB de production (config.settings.prod). PyMySQL est
+# un pilote pur Python (pas de compilation native requise), choisi par
+# defaut pour rester installable sans effort sur les postes de
+# developpement (voir backend/README.md). A confirmer/ajuster par
+# `devops-cpanel` au Lot 5 : mysqlclient reste une alternative possible
+# si l'hebergement cPanel fournit les bibliotheques natives necessaires.
+PyMySQL>=1.1,<2.0
+
+# Requis par les champs ImageField (photo de profil User.photo, logo de
+# club Club.logo -- tache 1.2, schema-donnees.md §3.1/§4.1). Aucune
+# donnee de demonstration : uniquement la dependance de traitement
+# d'image cote serveur (verification du type reel des fichiers envoyes,
+# CLAUDE.md section 2 regle 12 / CDC 7.6).
+Pillow>=10.4,<12.0
+
+# Generation de la fiche d'adhesion en PDF, aux couleurs du club (CDC 4.3
+# etape 3 ; tache 1.4b). Mise en page minimale (canevas bas niveau) :
+# aucune dependance sur un moteur de gabarits HTML->PDF.
+reportlab>=4.2,<5.0
+
+# Tests
+pytest>=8.3,<10.0
+pytest-django>=4.9,<5.0
+factory_boy>=3.3,<4.0

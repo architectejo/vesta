@@ -1,0 +1,183 @@
+/*
+ * Carte de joueur (style FC/FIFA, effet 3D) — géométrie et animations
+ * décoratives (docs/ecrans/club-carte-joueur.md A4, A5). Les couleurs
+ * viennent uniquement des tokens `--color-player-card-*` (design-system
+ * tokens/tokens.css) : rien n'est écrit en dur ici.
+ *
+ * Structure en trois niveaux (A5.3) : A conteneur (perspective) > B élément
+ * incliné (transform + drop-shadow) > C carte découpée (clip-path, cadre,
+ * fond, contenu). `clip-path` et `filter` aplatissant le rendu 3D des
+ * enfants, la profondeur des calques (photo, colonne gauche) se fait par
+ * translations 2D, jamais par `translateZ`.
+ */
+
+.player-trading-card {
+  width: min(100%, 280px);
+  perspective: 900px;
+}
+
+.player-trading-card__tilt {
+  /*
+   * `overflow: hidden` n'a ici aucun effet visuel voulu (aucun descendant
+   * ne déborde de ce rectangle : le cadre et le fond sont chacun contenus
+   * dans cette boîte, et `filter: drop-shadow` — la seule chose censée
+   * dépasser — n'est jamais rogné par le `overflow` de l'élément qui le
+   * porte, seulement par un `clip-path` ou par le `overflow` d'un ANCÊTRE).
+   * Son seul rôle est d'établir un nouveau contexte de formatage de bloc
+   * pour empêcher la marge de `.player-trading-card__body` de « fusionner »
+   * avec ce conteneur et de faire retomber sa hauteur à 0 (voir le
+   * commentaire sur `.player-trading-card__body` plus bas).
+   */
+  position: relative;
+  overflow: hidden;
+  transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+  filter: drop-shadow(0 10px 18px rgb(0 0 0 / 0.28)) drop-shadow(0 2px 4px rgb(0 0 0 / 0.2));
+  transition: transform 300ms ease-out;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .player-trading-card__tilt:hover {
+    transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) scale(1.02);
+    will-change: transform;
+  }
+}
+
+.player-trading-card__tilt--enter {
+  animation: player-trading-card-enter 450ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes player-trading-card-enter {
+  from {
+    opacity: 0;
+    transform: rotateY(-14deg);
+  }
+  to {
+    opacity: 1;
+    transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+  }
+}
+
+/* Silhouette de carte à collectionner (A4.2) : coins supérieurs biseautés
+   de 18 px, pointe basse centrale descendant de 10 px. */
+.player-trading-card__shape {
+  clip-path: polygon(
+    18px 0,
+    calc(100% - 18px) 0,
+    100% 18px,
+    100% calc(100% - 10px),
+    50% 100%,
+    0 calc(100% - 10px),
+    0 18px
+  );
+}
+
+/*
+ * `.player-trading-card__frame` (le cadre métallique) reste en
+ * `position: absolute; inset: 0` : purement décoratif, il ne doit jamais
+ * peser sur la mise en page.
+ *
+ * `.player-trading-card__body` (le fond + tout le contenu réel de la carte)
+ * est volontairement en flux normal (pas de `position: absolute`) : c'est
+ * l'unique enfant en flux de `.player-trading-card__tilt`, donc c'est lui
+ * qui donne sa hauteur intrinsèque à `.player-trading-card__tilt`, puis à
+ * `.player-trading-card` (A4.2 : « Hauteur : automatique, aucune hauteur
+ * fixe, pour qu'un nom long ne déborde jamais »). `.player-trading-card__tilt`
+ * est en `position: relative` : le cadre, en `inset: 0`, hérite alors
+ * exactement de cette même hauteur — jamais 0, car elle ne dépend plus d'un
+ * ancêtre sans hauteur propre mais du contenu réel de la carte.
+ * La marge de 3 px (au lieu de l'ancien `inset: 3px`) reproduit le même
+ * retrait visuel du cadre sur les quatre côtés.
+ */
+.player-trading-card__frame {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    var(--color-player-card-frame),
+    var(--color-player-card-frame-highlight)
+  );
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.25),
+    inset 0 -1px 0 rgb(0 0 0 / 0.25);
+}
+
+.player-trading-card__body {
+  position: relative;
+  margin: 3px;
+  background: linear-gradient(160deg, var(--color-player-card-from), var(--color-player-card-to));
+  overflow: hidden;
+}
+
+/* Bande de reflet diagonale fixe, aspect glacé (A4.2). */
+.player-trading-card__glare {
+  position: absolute;
+  top: -30%;
+  left: 30%;
+  width: 40px;
+  height: 160%;
+  background: rgb(255 255 255 / 0.08);
+  transform: rotate(20deg);
+  pointer-events: none;
+}
+
+/* Reflet qui traverse la carte une fois à l'ouverture (A5.2). */
+.player-trading-card__sweep {
+  position: absolute;
+  inset: -20% -40%;
+  background: linear-gradient(115deg, transparent 40%, rgb(255 255 255 / 0.35) 50%, transparent 60%);
+  transform: translateX(-120%);
+  pointer-events: none;
+}
+
+.player-trading-card__sweep--enter {
+  animation: player-trading-card-sweep 700ms ease-out 200ms both;
+}
+
+@keyframes player-trading-card-sweep {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(120%);
+  }
+}
+
+/* Reflet qui suit le pointeur (A5.1), sous le texte : jamais sur le contenu. */
+.player-trading-card__reflect {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at var(--mx, 50%) var(--my, 50%),
+    rgb(255 255 255 / 0.12),
+    transparent 60%
+  );
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease-out;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .player-trading-card__tilt:hover .player-trading-card__reflect {
+    opacity: 1;
+  }
+}
+
+.player-trading-card__content {
+  position: relative;
+  z-index: 1;
+}
+
+/* Parallaxe (A5.1) : décalage 2D de la photo et de la colonne gauche. */
+.player-trading-card__photo-parallax {
+  transform: translate(var(--photo-tx, 0px), var(--photo-ty, 0px));
+}
+
+.player-trading-card__left-parallax {
+  transform: translate(var(--left-tx, 0px), var(--left-ty, 0px));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-trading-card__tilt {
+    transform: none !important;
+  }
+}

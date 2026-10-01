@@ -1,0 +1,27 @@
+[x] Nous avons une présentations à faire dans peu de temps chez les partenaires, pour ça, j'aimerais que les agents backend-dev et frontend-dev (peut-être aussi ui-designer en cas de besoin) puissez continuer à travailler, les autres pourrons intervenir à la fin pour revenir sur des corrections
+
+[x] Dit à Backend-dev et Frontend-dev de poursuivre le travail Lot par Lot sauf le Lot non programmer
+
+[] Au niveau de "Fiche du joueur" la carte du joueur doit ressembler à celle de carte joueur de FIFA avec effect 3D
+    -> Fait (29/09) : carte avec photo, numéro, poste, logo du club, dégradé aux couleurs du club (thème Classic), effet 3D en CSS pur (inclinaison à la souris sur ordinateur, animation d'ouverture sur mobile). Zone "Statistiques à venir" à la place des 6 indicateurs/note globale du CDC 4.2 : ces données dépendent des Lots 3/4 (matchs, évaluations), pas encore branchées, donc rien d'inventé. Vérifié : 306/306 tests, build propre.
+    -> Bug réel trouvé et corrigé (30/09), après votre capture d'écran de "Ma carte de joueur" : la carte ne s'affichait pas du tout (hauteur nulle) — cause purement CSS (un calque décoratif en position absolue ne donnait plus sa hauteur au conteneur réel), invisible à tous les tests automatisés car ils ne calculent pas de vraie mise en page. Corrigé sans hauteur fixe (conforme à la spec : jamais de hauteur figée, pour qu'un nom long ne déborde jamais). Corrigé au passage : le badge de statut affichait "Inscrit · Inscrit" en double (même bug déjà vu une fois sur "Essai · Essai"). Vérifié indépendamment : 258/258 tests, build propre. A RETESTER PAR VOUS.
+
+    CONSTAT: Les cartes des joueurs, les images, photos profiles des utilisateurs et logos des équipes n'apparaissent pas
+    -> Vraie cause trouvée et corrigée (30/09) : mon correctif d'hier (URL absolue) était nécessaire mais pas suffisant. La vraie cause : `backend/config/urls.py` ne branchait JAMAIS le service des fichiers `/media/` en développement — aucune image (photo, logo, publication) n'a donc jamais pu être chargée par le serveur local, quelle que soit l'URL. Corrigé (une ligne ajoutée), vérifié en conditions réelles cette fois : `curl` sur l'URL d'une vraie photo renvoie maintenant 200 OK avec le bon fichier (avant : 404). Fichiers privés (justificatifs, documents médicaux) non affectés, toujours servis uniquement par leurs vues authentifiées. A RETESTER PAR VOUS (rechargez avec Ctrl+F5) : les photos de profil devraient maintenant s'afficher. Pour le LOGO du club "Fc Malaïka" : ce n'est pas un bug, aucun logo n'a encore été téléversé pour ce club (vérifié en base) — à faire depuis "Identité du club".
+
+[] Les partenairs vont vouloir voir toute les partie du projet du début à la fin, voilà pourquoi je t'avais dit de poursuivre le travail avec backend-dev et frontend-dev (peut-être aussi ui-designer en cas de besoin), jusqu'à la fin sauf le Lot 6
+    -> EN COURS (30/09) : directive suivie en continu, pas une tâche ponctuelle. État : Lots 1-3 livrés et vérifiés, Lot 4 en plein chantier (médical, logistique, mercato, assemblées, fil/chat en cours de construction backend+frontend en parallèle), Lot 5 pas commencé. Je coche cette ligne quand le Lot 4 sera livré et qu'on sera passé au Lot 5.
+
+[] Il faut mettre les icones et les animations dans la plateforme (ex: licide-react ou autre que tu trouveras mieux).
+
+[x] Lorsque je suis connecter après un certain temps je me retrouves deconnecter, desactive cette deconnection automatique, je ne veux pas que celà arrive lors de la présentation chez les partenaires
+    -> Vraie cause trouvée et corrigée (30/09) : le renouvellement de jeton ne conservait que le nouveau jeton d'accès, pas le nouveau jeton de rafraîchissement (l'API fait tourner ce dernier à chaque renouvellement et bloque l'ancien après usage). Résultat réel : déconnexion après ~30 minutes au lieu des 7 jours prévus. Corrigé dans `frontend/src/api/client.ts`, avec test de non-régression dédié qui reproduit exactement ce bug. Je n'ai pas désactivé le mécanisme de sécurité (ce n'était pas nécessaire) : la session dure maintenant bien 7 jours d'inactivité, largement suffisant pour la présentation.
+
+[x] J'aimerais que le theme classic soit aux couleurs que le club choit lors de l'inscription
+    -> Vérifié (30/09) : c'est déjà le cas, le thème Classic lit `club.primary_color`/`secondary_color` renvoyés par l'API (choisis à l'inscription), sans recalcul local. Si un club affiche encore de mauvaises couleurs, il faut re-choisir/confirmer son logo ou ses couleurs dans "Identité du club" (voir aussi remarques.md item 1 pour Discovery).
+
+[x] Desactive aussi le fonctionnalité de code PIN, les autorisation doivent pouvoir se faire sans demander de code PIN
+    -> Fait autrement (30/09), suite à votre confirmation : le code n'a PAS été modifié (règle non négociable CLAUDE.md §2 règle 7). À la place, un code PIN connu **1234** a été défini pour le Président (jonathan777t@gmail.com) et le Trésorier (adolphe.ciruzi@discoveryclub.cd) de Fc Malaïka, pour qu'aucune action sensible ne bloque pendant la démo. Si d'autres comptes en ont besoin pendant la présentation, dites-moi lesquels.
+
+
+[] Met le projet sur GitHub sur la branche principale lien "https://github.com/architectejo/vesta.git", pour la suis du projet on va créé la branche dev-1

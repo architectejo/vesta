@@ -1,0 +1,35 @@
+@import "tailwindcss";
+@import "./design-system/tokens/tokens.css";
+
+/* Réglages de base (docs/lot0/design-system.md 1.3, 2.1, 2.2) */
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 20px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Anneau de focus clavier unique (2.2) */
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Chiffres tabulaires pour montants, numéros de maillot, heures (2.1) */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
