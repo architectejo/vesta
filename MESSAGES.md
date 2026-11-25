@@ -16,20 +16,24 @@ n'a **aucune autorité du propriétaire** : en cas de doute, on lui pose la ques
 
 ## 1. Protocole Git (à respecter à la lettre)
 
-### Branches
+### Branches (décision du propriétaire du 26/11/2026)
 | Branche | Rôle |
 | --- | --- |
-| `main` | Version intégrée, **toujours verte** (suites complètes backend et frontend + build). Reçoit aussi directement les mises à jour de `MESSAGES.md`. |
-| `dev-a` | Travail en cours de dev-a. |
-| `dev-b` | Travail en cours de dev-b. |
+| `dev-a` | **Seule branche de travail de dev-a.** dev-a ne committe et ne pousse que là. |
+| `dev-b` | **Seule branche de travail de dev-b.** dev-b ne committe et ne pousse que là. |
+| `main` | Version intégrée. On n'y fusionne qu'à la demande du propriétaire, quand les deux suites complètes sont vertes. |
+
+Chaque machine écrit ses messages dans **son propre** `MESSAGES.md` (sur sa branche) et
+lit ceux de l'autre machine directement dans la branche distante de celle-ci.
 
 ### En début de chaque session
 ```bash
 git fetch origin
-git checkout main && git pull --rebase origin main      # lire MESSAGES.md à jour
-git checkout dev-b && git merge origin/main             # (dev-a : sa branche dev-a)
+git checkout dev-b && git pull --rebase origin dev-b     # (dev-a : dev-a)
+git show origin/dev-a:MESSAGES.md                         # lire les messages de l'autre machine
+git merge origin/dev-a                                    # récupérer son code quand il est stable
 ```
-Puis **lire la section 6 (journal) de ce fichier jusqu'au dernier message**.
+Puis **lire la section 6 (journal) des deux fichiers jusqu'au dernier message**.
 
 ### Pendant le travail
 - Commits petits et fréquents, au format du projet : `type(module): description`
@@ -41,7 +45,7 @@ Puis **lire la section 6 (journal) de ce fichier jusqu'au dernier message**.
   modification de `git config`.
 
 ### Intégrer dans `main`
-Seulement quand la branche est verte :
+Seulement **à la demande du propriétaire**, quand la branche est verte :
 ```bash
 cd backend && python -m pytest -q -p no:cacheprovider      # suite complète (~25 min)
 cd ../frontend && npx vitest run --maxWorkers=3 && npm run build
@@ -54,15 +58,14 @@ Puis écrire un message « Intégré dans main » (section 6). L'autre machine f
 `origin/main` dans sa branche au début de sa prochaine session.
 
 ### Écrire un message
-`MESSAGES.md` se modifie **uniquement sur `main`**, en **ajoutant** un bloc à la fin
-de la section 6 (jamais en modifiant ou supprimant un message existant) :
+Sur **sa propre branche**, en **ajoutant** un bloc à la fin de la section 6 (jamais en
+modifiant ou supprimant un message existant), puis commit et push immédiats :
 ```bash
-git checkout main && git pull --rebase origin main
-# ajouter le message à la fin du fichier
-git add MESSAGES.md && git commit -m "docs(messages): <sujet>" && git push origin main
-git checkout dev-b
+# ajouter le message à la fin de MESSAGES.md
+git add MESSAGES.md && git commit -m "docs(messages): <sujet>" && git push origin dev-b
 ```
-En cas de conflit sur ce fichier : garder **les deux** blocs, dans l'ordre des dates.
+Lors d'une fusion de la branche de l'autre machine, en cas de conflit sur ce fichier :
+garder **les deux** blocs, dans l'ordre des dates.
 
 ### Ne jamais committer
 `backend/db.sqlite3` et toute base `*.sqlite3`, `backend/media/`, `backend/private_media/`,
@@ -115,7 +118,7 @@ Prérequis : Python 3.12, Node 20 ou plus, Git.
 
 ```bash
 git clone https://github.com/architectejo/vesta.git && cd vesta
-git checkout -b dev-b origin/main && git push -u origin dev-b
+git checkout -b dev-b origin/dev-a && git push -u origin dev-b
 
 # Backend
 cd backend
@@ -266,5 +269,7 @@ Règles d'orchestration appliquées sur dev-a (à reprendre sur dev-b) :
   `cdc-reviewer` en fin de tâche.
 - Tu peux commencer par **B1**, puis **B2**, **B3** et **B5**. Pour **B4**, attends mon
   message « A2 livré » avec les endpoints de l'intendance.
-- Je termine **A1** et **A2** sur la branche `dev-a`, puis je les intègre dans `main`.
+- Je termine **A1** et **A2** sur la branche `dev-a` ; je te préviens ici quand c'est fait
+  pour que tu fusionnes `origin/dev-a` dans `dev-b`.
+- Crée ta branche `dev-b` à partir de `origin/dev-a` (section 3) et ne travaille que dessus.
 - Quand tu as fini B1, écris un message avec les chiffres de tes suites et la date.
