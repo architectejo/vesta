@@ -145,7 +145,7 @@ Erreurs : de champ sous le champ ; générale dans le bandeau du corps (« Conne
 - Titre : « Signaler cette publication ? »
 - Texte : « L'équipe Vesta sera prévenue et examinera la publication. Elle reste visible en attendant. »
 - Champ « Motif (facultatif) » : TextArea 3 lignes, 500 caractères max. (« 500 caractères au maximum. »), aide « Ex. : propos insultants, image choquante, information personnelle. »
-- Pied : « Annuler » / « Signaler » (bouton principal, pas `danger` : ce n'est pas une destruction). Pas de code PIN (7.2 ne le demande pas).
+- Pied : « Annuler » / « Signaler » (bouton principal, pas `danger` : ce n'est pas une destruction).
 - Succès : fermeture, toast « Merci. La publication a été signalée à l'équipe Vesta. » ; la ligne du menu devient « Signalée le {date} ».
 - Effet côté API (rappel, aucune logique dans l'interface) : création d'un `PostReport`, **notification au Superuser** et **entrée dans le journal d'activité** (`social.post.reported`), `schema-donnees.md` §10.4. Le signalement n'est pas montré à l'auteur ni aux autres joueurs.
 - Vocabulaire : « équipe Vesta » désigne les Superusers ; le nom de l'Éditeur n'apparaît pas (CLAUDE.md règle 19).
@@ -190,13 +190,25 @@ Informer officiellement tous les joueurs et savoir qui a lu. Le communiqué est 
 | Action | Qui |
 | --- | --- |
 | Lire, accuser réception (« J'ai lu »), partager sur WhatsApp | Tous les joueurs du club |
-| Publier, épingler / désépingler, voir les accusés de lecture | Président, Vice-président |
+| Publier, épingler / désépingler, voir les accusés de lecture | Président, Vice-président, **Secrétaire** (révision 11/10) |
 
 Les communiqués ne sont **jamais publics** : ils ne figurent pas dans le fil « Tous les clubs ».
 
+(révision 11/10) **Secrétaire** (décision client du 11/10/2026, à inscrire au CDC 2.4 ligne « Communiqués officiels » et au 4.16 par le circuit 9.4) : il a exactement les mêmes boutons que le Président et le VP sur les communiqués, rien de plus :
+
+| Emplacement | Bouton ou élément affiché au Secrétaire |
+| --- | --- |
+| En-tête de la page Communiqués | Action principale « Publier un communiqué » |
+| Carte « Communiqués » de l'accueil | Action de carte « Publier un communiqué » |
+| État vide (page et accueil) | Action « Publier un communiqué » |
+| Ligne de communiqué | « Lu par {n} sur {total} » sous le titre |
+| Modale « Communiqué », menu « … » | « Épingler » / « Désépingler », « Voir les accusés de lecture » |
+
+Les droits restent renvoyés par l'API (`can_publish`, `can_pin`, `can_view_receipts`) ; l'interface n'affiche rien sur la seule foi du libellé du rôle. Il n'y a ni validation préalable par le Président, ni brouillon (le CDC n'en prévoit pas ; point ouvert 16). Auteur affiché : « Publié par {nom} le {date} », inchangé (point ouvert 17).
+
 ## B3. Structure de la page
 
-**En-tête** : titre « Communiqués » ; contexte « {nom du club} · {n} non lu(s) » (ou « {nom du club} · Tout est lu »). Action principale (Président, VP) : « Publier un communiqué » → modale `club-accueil.md` §5.2 (inchangée).
+**En-tête** : titre « Communiqués » ; contexte « {nom du club} · {n} non lu(s) » (ou « {nom du club} · Tout est lu »). Action principale (Président, VP, Secrétaire — révision 11/10) : « Publier un communiqué » → modale `club-accueil.md` §5.2 (inchangée).
 
 1. **Épinglés** — carte, tous les communiqués épinglés (en pratique peu nombreux), du plus récent au plus ancien. Masquée s'il n'y en a aucun.
 2. **Tous les communiqués** — carte, **10 derniers** + « Voir plus ».
@@ -231,7 +243,7 @@ Ouvre `https://wa.me/?text=` avec : « {titre du communiqué} — {nom du club} 
 | Zone | Chargement | Vide | Erreur |
 | --- | --- | --- | --- |
 | Épinglés | 2 lignes squelettes | Carte masquée | Modèle standard |
-| Tous | 5 lignes squelettes | « Aucun communiqué pour l'instant. » + (Pdt, VP) « Publier un communiqué » | « Impossible de charger les communiqués. » + « Réessayer » |
+| Tous | 5 lignes squelettes | « Aucun communiqué pour l'instant. » + (Pdt, VP, Secrétaire) « Publier un communiqué » | « Impossible de charger les communiqués. » + « Réessayer » |
 | « J'ai lu » | Bouton `loading` « Enregistrement… » | — | Toast « Connexion impossible. Vérifiez votre réseau et réessayez. » |
 
 Succès : « Communiqué publié. Tous les joueurs ont été prévenus. » (`club-accueil.md`) ; « Lecture confirmée. » après « J'ai lu ».
@@ -357,3 +369,6 @@ Footer.
 13. **Pour `security-auditor` et `backend-dev` — confidentialité des images** : `schema-donnees.md` §1 classe `Image` comme fichier **public** (servi comme un asset). C'est correct pour les images de publications « Publiques », mais **pas** pour les images des publications « Club », des communiqués et du **chat** (surtout du canal « Bureau ») : quiconque obtient l'adresse les verrait sans connexion, contraire à 7.4 et à l'esprit de la règle 10. Position provisoire la plus prudente : ces images doivent être servies par une vue authentifiée qui vérifie le club (et le canal). À trancher avant la tâche 4.6.
 14. **Variante de pied « conversation »** (A5.2, C4) : champ + « Envoyer », **sans bouton « Annuler »**, alors que 3.2 veut « Annuler » et « Enregistrer » visibles en bas. La fermeture reste possible par la croix, Échap, le voile et le retour Android, avec confirmation si une saisie est en cours. Écart mineur à la lettre du 3.2, proposé pour ne pas encombrer un pied de 360 px ; à valider par le client et à ajouter au `design-system.md` §3.2 s'il l'accepte. Sinon : bouton « Fermer » secondaire à gauche du champ.
 15. **Messages de chat dans le journal** : la règle 6 impose une entrée par création de donnée ; copier le texte des messages (canal « Bureau ») dans un journal lisible par les Superusers est discutable. Proposition : journaliser l'événement sans le texte. À valider avec `backend-dev`.
+16. (révision 11/10) **Secrétaire et communiqués** : décision client du 11/10/2026 (« le Secrétaire publie les communiqués »), absente du CDC (2.4, 4.16). Position appliquée : mêmes droits que Président et VP (publier, épingler, accusés de lecture). Le Secrétaire publie **sans validation** du Président (aucun circuit de brouillon au CDC). À confirmer ; si le client veut une validation préalable, c'est une demande nouvelle (9.4).
+17. (révision 11/10) **Fonction de l'auteur** : proposition facultative d'afficher « Publié par {nom}, {fonction} le {date} » (ex. « Secrétaire ») pour marquer le caractère officiel du communiqué. Non appliquée ; à décider.
+18. (révision 11/10) **Secrétaire et canal « Bureau »** — décidé : le Secrétaire est membre du canal « Bureau » (choix du client « Bureau, un seul titulaire, membre du canal de chat Bureau » ; CDC 10.3 n° 165 mis à jour). Complète le point 10.

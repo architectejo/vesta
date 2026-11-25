@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { deletePost, togglePostLike, type Post } from "../../api/social";
-import { Avatar, ConfirmDialog, IconButton, useToast } from "../../design-system";
+import { Avatar, ConfirmDialog, IconButton, IconMore, IconPrivate, IconPublic, useToast } from "../../design-system";
+import { useClosingState } from "../../hooks/useClosingState";
 import { PostImagesGrid } from "./PostImagesGrid";
 import { ReportPostModal } from "./ReportPostModal";
 
@@ -47,6 +48,8 @@ export function PostCard({ post, onOpen, onChanged }: { post: Post; onOpen: () =
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const [menuOpen, setMenuOpen] = useState(false);
+  const { mounted: menuMounted, dataState: menuDataState, onAnimationEnd: onMenuAnimationEnd } =
+    useClosingState(menuOpen, 200);
   const [reportOpen, setReportOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -94,16 +97,15 @@ export function PostCard({ post, onOpen, onChanged }: { post: Post; onOpen: () =
           <IconButton
             aria-label="Plus d'actions"
             onClick={() => setMenuOpen((v) => !v)}
-            icon={
-              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
-                <circle cx="5" cy="12" r="1.5" />
-                <circle cx="12" cy="12" r="1.5" />
-                <circle cx="19" cy="12" r="1.5" />
-              </svg>
-            }
+            icon={<IconMore aria-hidden="true" className="h-5 w-5" />}
           />
-          {menuOpen ? (
-            <div role="menu" className="absolute right-0 z-10 mt-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated">
+          {menuMounted ? (
+            <div
+              role="menu"
+              data-state={menuDataState}
+              onAnimationEnd={onMenuAnimationEnd}
+              className="vesta-anim-menu absolute right-0 z-10 mt-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated"
+            >
               <button
                 type="button"
                 role="menuitem"
@@ -135,16 +137,11 @@ export function PostCard({ post, onOpen, onChanged }: { post: Post; onOpen: () =
       </div>
 
       <div className="mt-2 flex items-center gap-1 rounded-sm bg-surface-muted px-2 py-1 text-xs text-text-muted">
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5}>
-          {post.visibility === "public" ? (
-            <circle cx="12" cy="12" r="9" />
-          ) : (
-            <>
-              <rect x="5" y="11" width="14" height="9" rx="1.5" />
-              <path d="M8 11V8a4 4 0 018 0v3" />
-            </>
-          )}
-        </svg>
+        {post.visibility === "public" ? (
+          <IconPublic aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
+        ) : (
+          <IconPrivate aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
+        )}
         <span>{post.visibility === "public" ? "Publique" : "Club"}</span>
       </div>
 
@@ -165,17 +162,17 @@ export function PostCard({ post, onOpen, onChanged }: { post: Post; onOpen: () =
         </div>
       ) : null}
 
-      <div className="mt-2 flex h-11 items-center gap-4">
+      <div className="mt-1 flex items-center gap-2">
         <button
           type="button"
           aria-pressed={post.is_liked_by_me}
           disabled={likeMutation.isPending}
           onClick={() => likeMutation.mutate()}
-          className={["flex items-center gap-1 text-sm", post.is_liked_by_me ? "text-primary-text" : "text-text-muted"].join(" ")}
+          className={["flex min-h-[36px] items-center gap-1 rounded-sm px-2 text-sm", post.is_liked_by_me ? "text-primary-text" : "text-text-muted"].join(" ")}
         >
           J'aime{post.like_count > 0 ? ` · ${post.like_count}` : ""}
         </button>
-        <button type="button" onClick={onOpen} className="flex items-center gap-1 text-sm text-text-muted">
+        <button type="button" onClick={onOpen} className="flex min-h-[36px] items-center gap-1 rounded-sm px-2 text-sm text-text-muted">
           Commenter{post.comment_count > 0 ? ` · ${post.comment_count}` : ""}
         </button>
       </div>

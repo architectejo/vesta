@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../../api/client";
@@ -10,6 +10,7 @@ import {
   listEventIncidents,
   markMatchAttendance,
   publishComposition,
+  publishMatchResult,
   removeFromComposition,
   setMatchScore,
   updateGoal,
@@ -42,10 +43,19 @@ import { useOfflineActionQueue } from "../../hooks/useOfflineActionQueue";
 import { reportInjury, type InjuryReportInput } from "../../api/medical";
 import { getMatchEquipment, recordMatchEquipmentOut, type MatchEquipmentLine } from "../../api/logistics";
 import { AddMatchEquipmentModal } from "../logistics/AddMatchEquipmentModal";
+import { getMaterialAccess } from "../logistics/materielAccess";
 import { MatchEquipmentModal } from "../logistics/MatchEquipmentModal";
 import { equipmentLineStatusKey } from "../logistics/materielLabels";
 import { InjuryReportModal } from "../medical/InjuryReportModal";
+import {
+  BulkActionBar,
+  BulkConfirmModal,
+  BulkExcuseModal,
+  BulkHeaderBar,
+  BulkResultModal,
+} from "./BulkAttendance";
 import { IncidentModal } from "./IncidentModal";
+import { useBulkAttendance, type BulkAttendanceState } from "./useBulkAttendance";
 import { MatchComposeModal } from "./MatchComposeModal";
 import { getSportAccess } from "./sportAccess";
 import { formatTime } from "./sportTime";
@@ -195,7 +205,7 @@ function CompositionCard({
                     <li key={entry.id} className="flex items-center gap-3 py-1.5">
                       <Avatar name={entry.player.name} photoUrl={entry.player.photo} size={32} />
                       <div className="min-w-0 flex-1">
-                        <p className={`truncate text-sm ${entry.no_longer_eligible ? "text-text-muted" : "text-text"}`}>
+                        <p className={`break-words text-sm ${entry.no_longer_eligible ? "text-text-muted" : "text-text"}`}>
                           n° {entry.jersey_number} · {entry.player.name}
                         </p>
                         {entry.no_longer_eligible ? (
@@ -243,13 +253,27 @@ function MatchAttendanceCard({
   canRecord,
   pendingIds,
   onMark,
+  bulk,
 }: {
   match: MatchDetail;
   roster: { membership_id: number; first_name: string; last_name: string; photo: string | null; jersey_number: number | null }[];
   canRecord: boolean;
   pendingIds: Set<number>;
   onMark: (membershipId: number) => void;
+  bulk: BulkAttendanceState;
 }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [excuseOpen, setExcuseOpen] = useState(false);
+  // Droits renvoyés par l'API (faux si le match est verrouillé).
+  const canBulk = match.capabilities?.can_bulk_mark ?? false;
+  const canBulkExcuse = match.capabilities?.can_bulk_excuse ?? false;
+  const canSetTime = match.capabilities?.can_set_arrival_time ?? false;
+  const selecting = bulk.active && canBulk;
+  const stopBulk = bulk.stop;
+  useEffect(() => {
+    if (bulk.active && !canBulk) stopBulk();
+  }, [bulk.active, canBulk, stopBulk]);
+
   const byMember = useMemo(() => {
     const map = new Map<number, Attendance>();
     for (const a of match.attendances) map.set(a.membership_id, a);
@@ -257,10 +281,33 @@ function MatchAttendanceCard({
   }, [match.attendances]);
 
   const notMarked = roster.filter((p) => !byMember.has(p.membership_id) && !pendingIds.has(p.membership_id));
+  const checkableIds = notMarked.map((p) => p.membership_id);
+  const nameOf = (id: number) => {
+    const p = roster.find((r) => r.membership_id === id);
+    return p ? `${p.first_name} ${p.last_name}` : `Joueur n° ${id}`;
+  };
+  const selectedPlayers = bulk.selected.map((id) => ({ id, name: nameOf(id) }));
 
   return (
     <section className="rounded-md border border-border p-3">
-      <h2 className="mb-2 text-sm font-semibold text-text">Pointage</h2>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-text">Pointage</h2>
+        {canBulk && !selecting ? (
+          <Button size="sm" variant="secondary" onClick={bulk.start}>
+            Sélectionner
+          </Button>
+        ) : null}
+      </div>
+      {selecting ? (
+        <BulkHeaderBar
+          checkableIds={checkableIds}
+          selected={bulk.selected}
+          onCheckAll={bulk.checkAll}
+          onUncheckAll={bulk.uncheckAll}
+          onStop={bulk.stop}
+          disabled={bulk.submitting}
+        />
+      ) : null}
       <p className="mb-2 flex flex-wrap gap-3 text-sm">
         <span className="text-status-success-fg">Présents {match.attendance_counts.present}</span>
         <span className="text-status-danger-fg">En retard {match.attendance_counts.late}</span>
@@ -270,16 +317,40 @@ function MatchAttendanceCard({
         {match.attendances.map((a) => (
           <li key={a.id} className="flex items-center gap-3 py-1.5">
             <Avatar name={a.player.name} photoUrl={a.player.photo} size={32} />
-            <span className="min-w-0 flex-1 truncate text-sm text-text">{a.player.name}</span>
+            <span className="min-w-0 flex-1 break-words text-sm text-text">{a.player.name}</span>
             <span className="text-xs text-text-muted">{formatTime(a.arrived_at)}</span>
             <StatusBadge status={attendanceStatusKey(a.status)} />
           </li>
         ))}
-        {canRecord
+        {selecting
+          ? notMarked.map((p) => {
+              const rank = bulk.selected.indexOf(p.membership_id) + 1;
+              const fullName = `${p.first_name} ${p.last_name}`;
+              return (
+                <li key={p.membership_id}>
+                  <label className="flex min-h-14 cursor-pointer items-center gap-3 py-1.5">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center">
+                      <input
+                        type="checkbox"
+                        aria-label={`Sélectionner ${fullName}`}
+                        className="h-5 w-5 rounded-sm border-border-strong text-primary"
+                        checked={rank > 0}
+                        disabled={bulk.submitting}
+                        onChange={() => bulk.toggle(p.membership_id)}
+                      />
+                    </span>
+                    <Avatar name={fullName} photoUrl={p.photo} size={32} />
+                    <span className="min-w-0 flex-1 break-words text-sm text-text">{fullName}</span>
+                    {rank > 0 ? <span className="text-[13px] text-text-muted">{rank}</span> : null}
+                  </label>
+                </li>
+              );
+            })
+          : canRecord
           ? notMarked.map((p) => (
               <li key={p.membership_id} className="flex items-center gap-3 py-1.5">
                 <Avatar name={`${p.first_name} ${p.last_name}`} photoUrl={p.photo} size={32} />
-                <span className="min-w-0 flex-1 truncate text-sm text-text">
+                <span className="min-w-0 flex-1 break-words text-sm text-text">
                   {p.first_name} {p.last_name}
                 </span>
                 <Button size="sm" variant="secondary" onClick={() => onMark(p.membership_id)}>
@@ -294,7 +365,7 @@ function MatchAttendanceCard({
           return (
             <li key={`pending-${id}`} className="flex items-center gap-3 py-1.5">
               <Avatar name={`${p.first_name} ${p.last_name}`} photoUrl={p.photo} size={32} />
-              <span className="min-w-0 flex-1 truncate text-sm text-text">
+              <span className="min-w-0 flex-1 break-words text-sm text-text">
                 {p.first_name} {p.last_name}
               </span>
               <StatusBadge status="queued" />
@@ -302,6 +373,43 @@ function MatchAttendanceCard({
           );
         })}
       </ul>
+
+      {selecting ? (
+        <BulkActionBar
+          count={bulk.selected.length}
+          canExcuse={canBulkExcuse}
+          submitting={bulk.submitting}
+          onArrive={() => {
+            bulk.clearError();
+            setConfirmOpen(true);
+          }}
+          onExcuse={() => {
+            bulk.clearError();
+            setExcuseOpen(true);
+          }}
+        />
+      ) : null}
+
+      <BulkConfirmModal
+        open={confirmOpen}
+        players={selectedPlayers}
+        canSetTime={canSetTime}
+        eventDate={match.event_date}
+        lateCutoff={match.kickoff_time}
+        submitting={bulk.submitting}
+        error={bulk.error}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={(request) => void bulk.submit(request).then((ok) => ok && setConfirmOpen(false))}
+      />
+      <BulkExcuseModal
+        open={excuseOpen}
+        players={selectedPlayers}
+        submitting={bulk.submitting}
+        error={bulk.error}
+        onCancel={() => setExcuseOpen(false)}
+        onConfirm={(request) => void bulk.submit(request).then((ok) => ok && setExcuseOpen(false))}
+      />
+      <BulkResultModal summary={bulk.summary} nameOf={nameOf} onClose={bulk.clearSummary} />
     </section>
   );
 }
@@ -580,6 +688,9 @@ export function MatchPage() {
   const [removeConfirm, setRemoveConfirm] = useState<number | null>(null);
   const [addEquipmentOpen, setAddEquipmentOpen] = useState(false);
   const [equipmentDetailOpen, setEquipmentDetailOpen] = useState(false);
+  const [publishResultOpen, setPublishResultOpen] = useState(false);
+  const [publishingResult, setPublishingResult] = useState(false);
+  const [publishResultError, setPublishResultError] = useState<string | undefined>(undefined);
 
   const profileQuery = useQuery({ queryKey: ["profile", "me"], queryFn: getMyProfile, staleTime: 60_000 });
   const access = getSportAccess(profileQuery.data?.roles);
@@ -630,6 +741,17 @@ export function MatchPage() {
     onRejected: (_payload, message) => showToast(message),
   });
 
+  const refreshMatch = useCallback(
+    () => void queryClient.invalidateQueries({ queryKey: ["sport", "match", matchId] }),
+    [queryClient, matchId],
+  );
+  const bulk = useBulkAttendance({
+    kind: "match",
+    eventId: matchId,
+    onChanged: refreshMatch,
+    enqueueOffline: (item) => pendingQueue.enqueue(item),
+  });
+
   const pendingIds = new Set(pendingQueue.items.map((i) => i.payload.membershipId));
 
   async function handleMark(membershipId: number): Promise<void> {
@@ -676,6 +798,21 @@ export function MatchPage() {
       showToast("Composition publiée.");
     } catch (error) {
       showToast(error instanceof ApiError ? error.detail : "Publication impossible.");
+    }
+  }
+
+  async function handlePublishResult(): Promise<void> {
+    setPublishingResult(true);
+    setPublishResultError(undefined);
+    try {
+      await publishMatchResult(matchId);
+      await queryClient.invalidateQueries({ queryKey: ["sport", "match", matchId] });
+      setPublishResultOpen(false);
+      showToast("Résultat publié sur le fil du club.");
+    } catch (error) {
+      setPublishResultError(error instanceof ApiError ? error.detail : "Publication impossible. Réessayez.");
+    } finally {
+      setPublishingResult(false);
     }
   }
 
@@ -822,6 +959,21 @@ export function MatchPage() {
               Ajouter un but
             </Button>
           ) : null}
+          {match.result_published ? (
+            <p className="mt-2 text-sm text-text-muted">Résultat publié sur le fil</p>
+          ) : access.isCoach ? (
+            <Button
+              size="sm"
+              variant="primary"
+              className="mt-2"
+              onClick={() => {
+                setPublishResultError(undefined);
+                setPublishResultOpen(true);
+              }}
+            >
+              Publier le résultat sur le fil
+            </Button>
+          ) : null}
         </section>
       ) : null}
 
@@ -840,6 +992,7 @@ export function MatchPage() {
         canRecord={access.canRecordAttendance && !match.is_locked}
         pendingIds={pendingIds}
         onMark={(id) => void handleMark(id)}
+        bulk={bulk}
       />
 
       <section className="rounded-md border border-border p-3">
@@ -878,8 +1031,7 @@ export function MatchPage() {
             <p className="text-sm text-text-muted">Les blessures déclarées sont suivies par le Médecin.</p>
           ) : access.canSeeMedicalFull ? (
             <p className="text-sm text-text-muted">
-              La liste des blessures de ce match nécessite un point d'accès API supplémentaire (à ajouter par
-              backend-dev) : elle n'est pas encore affichée ici.
+              Les blessures du match s'affichent ici dès qu'elles sont déclarées.
             </p>
           ) : null}
         </section>
@@ -896,12 +1048,14 @@ export function MatchPage() {
         }}
       />
 
-      <MatchEquipmentSection
-        matchId={matchId}
-        isCoach={access.isCoach}
-        onAddEquipment={() => setAddEquipmentOpen(true)}
-        onOpenDetail={() => setEquipmentDetailOpen(true)}
-      />
+      {getMaterialAccess(profileQuery.data?.roles).canReadMaterial ? (
+        <MatchEquipmentSection
+          matchId={matchId}
+          isCoach={access.isCoach}
+          onAddEquipment={() => setAddEquipmentOpen(true)}
+          onOpenDetail={() => setEquipmentDetailOpen(true)}
+        />
+      ) : null}
 
       <MatchComposeModal
         open={composeOpen}
@@ -961,6 +1115,28 @@ export function MatchPage() {
           setIncidentOpen(false);
           void queryClient.invalidateQueries({ queryKey: ["sport", "incidents", matchId] });
         }}
+      />
+
+      <ConfirmDialog
+        open={publishResultOpen}
+        title="Publier le résultat sur le fil ?"
+        description={
+          <>
+            <span className="block">
+              Publier le résultat de ce match sur le fil du club ? Le score et les buteurs seront visibles des
+              membres du club.
+            </span>
+            {publishResultError ? (
+              <span role="alert" className="mt-2 block text-status-danger-fg">
+                {publishResultError}
+              </span>
+            ) : null}
+          </>
+        }
+        confirmLabel="Publier"
+        onConfirm={() => void handlePublishResult()}
+        onCancel={() => setPublishResultOpen(false)}
+        loading={publishingResult}
       />
 
       <ConfirmDialog

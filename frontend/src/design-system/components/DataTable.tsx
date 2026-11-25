@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { IconRemove, IconSearch, IconSortAsc, IconSortDesc } from "../icons";
 import { Button } from "./Button";
 import { EmptyState } from "./EmptyState";
 import { Skeleton } from "./Skeleton";
@@ -171,17 +172,10 @@ export function DataTable<T>({
         <div className="mb-2 flex flex-wrap items-center gap-2">
           {getSearchableText ? (
             <div className="relative">
-              <svg
+              <IconSearch
                 aria-hidden="true"
-                viewBox="0 0 24 24"
                 className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.3-4.3" strokeLinecap="round" />
-              </svg>
+              />
               <input
                 type="search"
                 value={searchInput}
@@ -215,7 +209,7 @@ export function DataTable<T>({
                 aria-label={`Retirer le filtre ${chip.label}`}
                 className="text-text-muted hover:text-text"
               >
-                ×
+                <IconRemove aria-hidden="true" className="h-4 w-4" />
               </button>
             </span>
           ))}
@@ -272,9 +266,13 @@ export function DataTable<T>({
                           className="inline-flex items-center gap-1"
                         >
                           {column.header}
-                          <span aria-hidden="true">
-                            {isActiveSort ? (sort?.direction === "asc" ? "▲" : "▼") : ""}
-                          </span>
+                          {isActiveSort ? (
+                            sort?.direction === "asc" ? (
+                              <IconSortAsc aria-hidden="true" className="h-4 w-4" />
+                            ) : (
+                              <IconSortDesc aria-hidden="true" className="h-4 w-4" />
+                            )
+                          ) : null}
                         </button>
                       ) : (
                         column.header

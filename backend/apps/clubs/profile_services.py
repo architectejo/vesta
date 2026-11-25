@@ -29,7 +29,32 @@ from apps.clubs.models import Membership, MembershipRole
 from apps.core.services import resolve_active_membership
 from apps.notifications.services import get_or_create_preference
 
-__all__ = ["get_my_profile"]
+__all__ = ["get_my_profile", "can_view_board_dashboard", "default_landing_for_membership"]
+
+#: Roles qui ouvrent le tableau de bord du bureau (matrice 2.4, fiche
+#: club-tableau-de-bord-bureau §2). Union des roles ACTIFS (CDC 2.2).
+BOARD_DASHBOARD_ROLES = frozenset({MembershipRole.Role.PRESIDENT, MembershipRole.Role.VICE_PRESIDENT})
+
+
+def can_view_board_dashboard(membership) -> bool:
+    """Calcule a la demande (jamais mis en cache dans un JWT, regle n9) a partir
+    des roles actifs : un role revoque ne compte plus."""
+
+    if membership is None:
+        return False
+    return MembershipRole.all_objects.filter(
+        club_id=membership.club_id,
+        membership_id=membership.pk,
+        revoked_at__isnull=True,
+        role__in=BOARD_DASHBOARD_ROLES,
+    ).exists()
+
+
+def default_landing_for_membership(membership) -> str:
+    """Destination d'arrivee apres connexion : ``"board_dashboard"`` pour le
+    President et le Vice-president, ``"home"`` pour tous les autres."""
+
+    return "board_dashboard" if can_view_board_dashboard(membership) else "home"
 
 
 def get_my_profile(user, request) -> dict[str, Any]:
@@ -86,4 +111,6 @@ def get_my_profile(user, request) -> dict[str, Any]:
             for role in roles
         ],
         "email_notifications_enabled": preference.email_enabled,
+        "capabilities": {"can_view_board_dashboard": can_view_board_dashboard(membership)},
+        "default_landing": default_landing_for_membership(membership),
     }

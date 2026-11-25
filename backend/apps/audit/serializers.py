@@ -14,7 +14,12 @@ from __future__ import annotations
 from rest_framework import serializers
 
 from apps.audit.models import AuditLog
-from apps.audit.services import GHOST_ACTOR_DISPLAY_NAME, get_actor_display_name
+from apps.audit.services import (
+    ALERT_ACTION_TYPES,
+    GHOST_ACTOR_DISPLAY_NAME,
+    get_actor_display_name,
+    is_medical_entry,
+)
 
 
 class AuditLogSerializer(serializers.ModelSerializer):
@@ -72,3 +77,85 @@ class AuditLogSerializer(serializers.ModelSerializer):
         if get_actor_display_name(obj, reader=reader) == GHOST_ACTOR_DISPLAY_NAME:
             return None
         return obj.actor_id
+
+
+class AuditLogListSerializer(AuditLogSerializer):
+    """Ligne du tableau Journal (ecran superuser §3.4) : sans avant/apres
+    ni contexte technique (reserves a la modale de detail)."""
+
+    club_name = serializers.SerializerMethodField()
+    club_timezone = serializers.SerializerMethodField()
+    is_alert = serializers.SerializerMethodField()
+
+    class Meta(AuditLogSerializer.Meta):
+        fields = [
+            "id",
+            "created_at",
+            "club_id",
+            "club_name",
+            "club_timezone",
+            "actor_id",
+            "actor_display",
+            "acted_as_ghost",
+            "support_session_id",
+            "action_type",
+            "object_type",
+            "object_id",
+            "is_alert",
+        ]
+        read_only_fields = fields
+
+    def get_club_name(self, obj: AuditLog):
+        return obj.club.name if obj.club_id else None
+
+    def get_club_timezone(self, obj: AuditLog):
+        if not obj.club_id:
+            return None
+        club_settings = getattr(obj.club, "settings", None)
+        return getattr(club_settings, "timezone", None)
+
+    def get_is_alert(self, obj: AuditLog) -> bool:
+        return obj.action_type in ALERT_ACTION_TYPES
+
+
+class AuditLogDetailSerializer(AuditLogListSerializer):
+    """Modale « Entree du journal » (§4.6). Pour une entree ``medical.*``,
+    ``before``/``after`` ne sont jamais renvoyes (10.2 n137, position
+    prudente) ; ``medical_content_withheld`` vaut alors vrai et
+    l'interface affiche « Contenu medical non copie dans le journal. »."""
+
+    support_session = serializers.SerializerMethodField()
+    medical_content_withheld = serializers.SerializerMethodField()
+    before = serializers.SerializerMethodField()
+    after = serializers.SerializerMethodField()
+
+    class Meta(AuditLogListSerializer.Meta):
+        fields = AuditLogListSerializer.Meta.fields + [
+            "support_session",
+            "before",
+            "after",
+            "medical_content_withheld",
+            "ip_address",
+            "user_agent",
+            "device",
+        ]
+        read_only_fields = fields
+
+    def get_support_session(self, obj: AuditLog):
+        if not obj.support_session_id:
+            return None
+        if not str(obj.support_session_id).isdigit():
+            return {"id": obj.support_session_id, "reason": None}
+        from apps.licences.models import SupportSession
+
+        session = SupportSession.objects.filter(pk=int(obj.support_session_id)).first()
+        return {"id": obj.support_session_id, "reason": session.reason if session else None}
+
+    def get_medical_content_withheld(self, obj: AuditLog) -> bool:
+        return is_medical_entry(obj)
+
+    def get_before(self, obj: AuditLog):
+        return None if is_medical_entry(obj) else obj.before
+
+    def get_after(self, obj: AuditLog):
+        return None if is_medical_entry(obj) else obj.after

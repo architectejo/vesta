@@ -98,6 +98,7 @@ export function UsersPage() {
                 <option value="vice_president">Vice-président</option>
                 <option value="treasurer">Trésorier</option>
                 <option value="coach">Coach</option>
+                <option value="assistant_coach">Assistant du Coach</option>
                 <option value="captain">Capitaine</option>
                 <option value="doctor">Médecin</option>
               </select>

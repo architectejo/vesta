@@ -54,7 +54,7 @@ describe("AddPlayerModal", () => {
       application: {
         id: 1,
         membership_id: 99,
-        application_pdf_file: null,
+        application_pdf_url: null,
         generated_at: null,
         sponsor_notified_at: null,
         sponsor_decision: "pending",

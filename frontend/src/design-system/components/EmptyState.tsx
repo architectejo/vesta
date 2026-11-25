@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { IconEmpty, IconError } from "../icons";
 import { Button } from "./Button";
 
 export type EmptyStateVariant = "default" | "error" | "no-results";
@@ -29,34 +30,9 @@ const DEFAULT_MESSAGE: Record<EmptyStateVariant, string> = {
 
 function DefaultIcon({ variant }: { variant: EmptyStateVariant }) {
   if (variant === "error") {
-    return (
-      <svg
-        aria-hidden="true"
-        viewBox="0 0 24 24"
-        className="h-6 w-6 text-text-muted"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.5}
-      >
-        <circle cx="12" cy="12" r="9" />
-        <path d="M12 8v5" strokeLinecap="round" />
-        <circle cx="12" cy="16" r="0.5" fill="currentColor" />
-      </svg>
-    );
+    return <IconError aria-hidden="true" className="h-6 w-6 text-text-muted" strokeWidth={1.5} />;
   }
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className="h-6 w-6 text-text-muted"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.5}
-    >
-      <rect x="4" y="5" width="16" height="14" rx="2" />
-      <path d="M8 9h8M8 13h5" strokeLinecap="round" />
-    </svg>
-  );
+  return <IconEmpty aria-hidden="true" className="h-6 w-6 text-text-muted" strokeWidth={1.5} />;
 }
 
 /**

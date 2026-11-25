@@ -6,13 +6,16 @@ import type {
   ContributionType,
   ContributionTypeInput,
 } from "../../api/treasury";
-import { Button, Modal, TextField } from "../../design-system";
+import { Button, Modal, MoneyField, TextField } from "../../design-system";
+import { isPositiveAmount, toApiAmount } from "./money";
 import { NATURE_LABELS, PERIODICITY_OPTIONS } from "./contributionTypeLabels";
 
 interface Props {
   open: boolean;
   type?: ContributionType;
   canEdit: boolean;
+  /** Devise du club, venant de l'API. */
+  currency: string;
   isSubmitting: boolean;
   /** Message d'erreur renvoyé par l'enregistrement, affiché dans la modale. */
   submitError?: string;
@@ -46,7 +49,7 @@ function validate(values: FormValues): FormErrors {
   if (!values.name.trim()) {
     errors.name = "Ce champ est obligatoire.";
   }
-  if (values.nature === "mandatory" && (!values.amount || Number(values.amount) <= 0)) {
+  if (values.nature === "mandatory" && !isPositiveAmount(values.amount)) {
     errors.amount = "Saisissez un montant supérieur à 0.";
   }
   if (
@@ -67,6 +70,7 @@ export function ContributionTypeModal({
   open,
   type,
   canEdit,
+  currency,
   isSubmitting,
   submitError,
   onClose,
@@ -86,7 +90,7 @@ export function ContributionTypeModal({
     onSubmit({
       name: name.trim(),
       nature,
-      amount: amount || null,
+      amount: amount.trim() === "" ? null : toApiAmount(amount),
       periodicity,
       due_day: hasDueDay(periodicity) ? Number(dueDay) : null,
       scope: type?.scope ?? "all",
@@ -135,11 +139,9 @@ export function ContributionTypeModal({
           </div>
           <p className="mt-1 text-sm text-text-muted">Seule une cotisation obligatoire crée une dette.</p>
         </fieldset>
-        <TextField
+        <MoneyField
           label={nature === "free" ? "Montant suggéré" : "Montant"}
-          type="number"
-          min="0"
-          step="0.01"
+          currency={currency}
           value={amount}
           onChange={setAmount}
           optional={nature === "free"}

@@ -3,7 +3,7 @@ d'écran logistique.md §2)."""
 
 from __future__ import annotations
 
-from apps.clubs.models import MembershipRole
+from apps.clubs.models import COACHING_STAFF_ROLES, MembershipRole
 from apps.core.roles import HasClubRole
 
 # Matrice 2.4, ligne « Matériel et inventaires » : Intendant seul en
@@ -21,34 +21,34 @@ MATERIAL_READER_ROLES = frozenset(
         MembershipRole.Role.PRESIDENT,
         MembershipRole.Role.VICE_PRESIDENT,
         MembershipRole.Role.TREASURER,
-        MembershipRole.Role.COACH,
+        *COACHING_STAFF_ROLES,
     }
 )
 
 # Retour d'équipements d'un match : Coach et Intendant (fiche §5.2, point
 # ouvert n° 4 de sport-feuille-de-match.md, proposition reprise).
-EQUIPMENT_RETURN_ROLES = frozenset({MembershipRole.Role.STEWARD, MembershipRole.Role.COACH})
+EQUIPMENT_RETURN_ROLES = frozenset({MembershipRole.Role.STEWARD, *COACHING_STAFF_ROLES})
 
 # Sortie d'équipements pour un match depuis la feuille de match : Coach
 # seul (matrice 2.4, « Feuille de match et composition »).
-EQUIPMENT_OUT_ROLES = frozenset({MembershipRole.Role.COACH})
+EQUIPMENT_OUT_ROLES = COACHING_STAFF_ROLES
 
 
 class CanManageMaterial(HasClubRole):
     required_roles = MATERIAL_MANAGER_ROLES
-    message = "Réservé à l'Intendant (CDC 2.4, 4.13)."
+    message = "Réservé à l'Intendant."
 
 
 class CanReadMaterial(HasClubRole):
     required_roles = MATERIAL_READER_ROLES
-    message = "Vous n'avez pas accès à cette page (CDC 2.4, 4.13)."
+    message = "Vous n'avez pas accès à cette page."
 
 
 class CanRecordEquipmentReturn(HasClubRole):
     required_roles = EQUIPMENT_RETURN_ROLES
-    message = "Réservé au Coach et à l'Intendant (logistique.md §5.2)."
+    message = "Réservé au Coach (ou son assistant) et à l'Intendant."
 
 
 class CanRecordEquipmentOut(HasClubRole):
     required_roles = EQUIPMENT_OUT_ROLES
-    message = "Réservé au Coach (CDC 2.4, 4.8)."
+    message = "Réservé au Coach du club ou à son assistant."

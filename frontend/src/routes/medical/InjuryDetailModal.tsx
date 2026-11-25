@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getHealthRecord, getInjury } from "../../api/medical";
-import { EmptyState, Modal, StatusBadge } from "../../design-system";
+import { EmptyState, IconButton, IconMore, Modal, StatusBadge } from "../../design-system";
+import { useClosingState } from "../../hooks/useClosingState";
 import { InjuryCompleteModal } from "./InjuryCompleteModal";
 import { InjuryFollowUpModal } from "./InjuryFollowUpModal";
 import { InjuryReturnDialog } from "./InjuryReturnDialog";
@@ -251,6 +252,8 @@ function InjuryDetailFooter({
 }) {
   const toComplete = injury.status === "open" && injury.doctor_completed_at === null;
   const inProgress = injury.status === "open" && injury.doctor_completed_at !== null;
+  const { mounted: menuMounted, dataState: menuDataState, onAnimationEnd: onMenuAnimationEnd } =
+    useClosingState(menuOpen, 200);
 
   return (
     <div className="flex w-full flex-wrap items-center justify-end gap-2">
@@ -273,16 +276,18 @@ function InjuryDetailFooter({
       {inProgress ? (
         <>
           <div className="relative">
-            <button
-              type="button"
+            <IconButton
+              variant="secondary"
               onClick={onToggleMenu}
-              className="h-control-md rounded-sm border border-border-strong bg-surface px-3 text-sm font-medium text-text hover:bg-surface-muted"
               aria-label="Autres actions"
-            >
-              …
-            </button>
-            {menuOpen ? (
-              <div className="absolute bottom-full right-0 mb-1 w-48 rounded-md border border-border bg-surface py-1 shadow-elevated">
+              icon={<IconMore aria-hidden="true" className="h-5 w-5" />}
+            />
+            {menuMounted ? (
+              <div
+                data-state={menuDataState}
+                onAnimationEnd={onMenuAnimationEnd}
+                className="vesta-anim-menu vesta-anim-menu--bottom absolute bottom-full right-0 mb-1 w-48 rounded-md border border-border bg-surface py-1 shadow-elevated"
+              >
                 <button
                   type="button"
                   onClick={onEditBilan}
@@ -311,16 +316,18 @@ function InjuryDetailFooter({
       ) : null}
       {injury.status === "resolved" ? (
         <div className="relative">
-          <button
-            type="button"
+          <IconButton
+            variant="secondary"
             onClick={onToggleMenu}
-            className="h-control-md rounded-sm border border-border-strong bg-surface px-3 text-sm font-medium text-text hover:bg-surface-muted"
             aria-label="Autres actions"
-          >
-            …
-          </button>
-          {menuOpen ? (
-            <div className="absolute bottom-full right-0 mb-1 w-48 rounded-md border border-border bg-surface py-1 shadow-elevated">
+            icon={<IconMore aria-hidden="true" className="h-5 w-5" />}
+          />
+          {menuMounted ? (
+            <div
+              data-state={menuDataState}
+              onAnimationEnd={onMenuAnimationEnd}
+              className="vesta-anim-menu vesta-anim-menu--bottom absolute bottom-full right-0 mb-1 w-48 rounded-md border border-border bg-surface py-1 shadow-elevated"
+            >
               <button
                 type="button"
                 onClick={onEditBilan}

@@ -65,6 +65,23 @@ def get_active_roles(user, club=None) -> frozenset[str]:
     return frozenset(role_codes)
 
 
+def is_ghost_read_access(request) -> bool:
+    """Vrai pour une requête de LECTURE d'un Superuser pendant une session de
+    support valide (Ghost Mode, CDC 4.18, 5.4) : le club actif est alors celui
+    de la session (posé par ``TenantJWTAuthentication``). Position prudente :
+    lecture seule (aucune écriture), jamais hors session de support."""
+
+    from apps.core.ghost_context import get_ghost_context
+    from apps.core.tenant import get_active_club
+
+    user = getattr(request, "user", None)
+    if not (getattr(user, "is_authenticated", False) and getattr(user, "is_superuser", False)):
+        return False
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        return False
+    return get_ghost_context() is not None and get_active_club() is not None
+
+
 def has_any_role(user, roles: Iterable[str], club=None) -> bool:
     """Vrai si ``user`` porte au moins un des ``roles`` (union, CDC 2.2)."""
 
@@ -83,12 +100,17 @@ class HasClubRole(BasePermission):
     """
 
     required_roles: frozenset[str] = frozenset()
-    message = "Vous n'avez pas le role requis pour cette action (CDC 2.4)."
+    message = "Vous n'avez pas le rôle requis pour cette action."
+    #: Lecture ouverte au Superuser en session de support. Faux pour le
+    #: module médical (aucun accès au contenu médical, 10.2 n° 137).
+    ghost_readable: bool = True
 
     def has_permission(self, request, view) -> bool:
         user = getattr(request, "user", None)
         if not getattr(user, "is_authenticated", False):
             return False
+        if self.ghost_readable and is_ghost_read_access(request):
+            return True
         return has_any_role(user, self.required_roles)
 
     @classmethod

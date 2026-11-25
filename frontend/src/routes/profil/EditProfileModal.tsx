@@ -3,7 +3,6 @@ import {
   removeProfilePhoto,
   updateCredentials,
   updatePersonalInfo,
-  updatePin,
   updateProfilePhoto,
 } from "../../api/auth";
 import type { MyProfile } from "../../api/clubs";
@@ -21,12 +20,11 @@ import {
   useToast,
 } from "../../design-system";
 
-type TabKey = "informations" | "identifiants" | "pin" | "photo";
+type TabKey = "informations" | "identifiants" | "photo";
 
 const TAB_ITEMS: Array<{ value: TabKey; label: string }> = [
   { value: "informations", label: "Informations" },
   { value: "identifiants", label: "Identifiant et mot de passe" },
-  { value: "pin", label: "Code PIN" },
   { value: "photo", label: "Photo" },
 ];
 
@@ -70,13 +68,6 @@ export function EditProfileModal({
   const [credGlobalError, setCredGlobalError] = useState<string | null>(null);
   const [credSubmitting, setCredSubmitting] = useState(false);
 
-  // Onglet « Code PIN »
-  const [pinPassword, setPinPassword] = useState("");
-  const [newPin, setNewPin] = useState("");
-  const [confirmPin, setConfirmPin] = useState("");
-  const [pinError, setPinError] = useState<string | null>(null);
-  const [pinSubmitting, setPinSubmitting] = useState(false);
-
   // Onglet « Photo »
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(profile.identity.photo);
@@ -91,8 +82,6 @@ export function EditProfileModal({
     email !== profile.identity.email ||
     currentPassword !== "" ||
     newPassword !== "" ||
-    pinPassword !== "" ||
-    newPin !== "" ||
     photoFile !== null;
 
   function applyApiError(err: unknown, setGlobal: (m: string) => void, setFields?: (f: Record<string, string>) => void): void {
@@ -165,30 +154,6 @@ export function EditProfileModal({
     }
   }
 
-  async function savePin(): Promise<void> {
-    setPinError(null);
-    if (!/^\d{4,6}$/.test(newPin)) {
-      setPinError("Le code PIN doit contenir 4 à 6 chiffres.");
-      return;
-    }
-    if (newPin !== confirmPin) {
-      setPinError("Les deux codes ne correspondent pas.");
-      return;
-    }
-    setPinSubmitting(true);
-    try {
-      await updatePin({ current_password: pinPassword, new_pin: newPin, confirm_new_pin: confirmPin });
-      setPinPassword("");
-      setNewPin("");
-      setConfirmPin("");
-      showToast("Code PIN enregistré.");
-    } catch (err) {
-      setPinError(err instanceof ApiError ? err.detail : "Une erreur est survenue de notre côté. Réessayez dans un instant.");
-    } finally {
-      setPinSubmitting(false);
-    }
-  }
-
   async function savePhoto(): Promise<void> {
     if (!photoFile) return;
     setPhotoError(null);
@@ -223,7 +188,6 @@ export function EditProfileModal({
   const footerByTab: Record<TabKey, { label: string; onSave: () => void; submitting: boolean }> = {
     informations: { label: "Enregistrer", onSave: () => void saveInformations(), submitting: infoSubmitting },
     identifiants: { label: "Enregistrer", onSave: () => void saveCredentials(), submitting: credSubmitting },
-    pin: { label: "Enregistrer", onSave: () => void savePin(), submitting: pinSubmitting },
     photo: { label: "Enregistrer la photo", onSave: () => void savePhoto(), submitting: photoSubmitting },
   };
   const activeFooter = footerByTab[tab];
@@ -336,35 +300,6 @@ export function EditProfileModal({
                 value={currentPassword}
                 onChange={setCurrentPassword}
                 error={credErrors.current_password}
-              />
-            </div>
-          ) : null}
-
-          {tab === "pin" ? (
-            <div className="space-y-4">
-              <p className="text-sm text-text-muted">
-                Le code PIN confirme les actions sensibles : validation de paiement ou de dépense,
-                signature, annulation.
-              </p>
-              {pinError ? <Banner variant="danger">{pinError}</Banner> : null}
-              <PasswordField
-                label="Mot de passe actuel"
-                value={pinPassword}
-                onChange={setPinPassword}
-              />
-              <TextField
-                label="Nouveau code PIN"
-                inputMode="numeric"
-                type="password"
-                value={newPin}
-                onChange={(v) => setNewPin(v.replace(/\D/g, "").slice(0, 6))}
-              />
-              <TextField
-                label="Confirmez le code"
-                inputMode="numeric"
-                type="password"
-                value={confirmPin}
-                onChange={(v) => setConfirmPin(v.replace(/\D/g, "").slice(0, 6))}
               />
             </div>
           ) : null}

@@ -159,7 +159,7 @@ class TestAddPlayerWithSponsorAtomicityView:
         )
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert "deja membre de ce club" in response.data["detail"]
+        assert "déjà membre de ce club" in response.data["detail"]
         existing.refresh_from_db()
         existing.user.refresh_from_db()
         assert existing.user.phone == ORIGINAL_PHONE

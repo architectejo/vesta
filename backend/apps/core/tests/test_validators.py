@@ -134,7 +134,7 @@ class TestValidateImageFormat:
         with pytest.raises(ValidationError) as exc_info:
             validate_image_format(_cleaned_image_upload("GIF", "anime.gif"))
 
-        assert "acceptees" in exc_info.value.messages[0]
+        assert "acceptées" in exc_info.value.messages[0]
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +207,7 @@ class TestValidateCsvFile:
             validate_csv_file(_csv_file(content, name=f"deguise-{label}.csv"))
 
         assert exc_info.value.code == "invalid_csv_type"
-        assert "type reel incorrect" in exc_info.value.messages[0]
+        assert "type réel incorrect" in exc_info.value.messages[0]
 
     def test_file_containing_a_null_byte_is_rejected(self):
         with pytest.raises(ValidationError) as exc_info:

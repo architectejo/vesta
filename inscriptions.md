@@ -2,17 +2,19 @@
 
 [x] Dit à Backend-dev et Frontend-dev de poursuivre le travail Lot par Lot sauf le Lot non programmer
 
-[] Au niveau de "Fiche du joueur" la carte du joueur doit ressembler à celle de carte joueur de FIFA avec effect 3D
+[x] Au niveau de "Fiche du joueur" la carte du joueur doit ressembler à celle de carte joueur de FIFA avec effect 3D
     -> Fait (29/09) : carte avec photo, numéro, poste, logo du club, dégradé aux couleurs du club (thème Classic), effet 3D en CSS pur (inclinaison à la souris sur ordinateur, animation d'ouverture sur mobile). Zone "Statistiques à venir" à la place des 6 indicateurs/note globale du CDC 4.2 : ces données dépendent des Lots 3/4 (matchs, évaluations), pas encore branchées, donc rien d'inventé. Vérifié : 306/306 tests, build propre.
     -> Bug réel trouvé et corrigé (30/09), après votre capture d'écran de "Ma carte de joueur" : la carte ne s'affichait pas du tout (hauteur nulle) — cause purement CSS (un calque décoratif en position absolue ne donnait plus sa hauteur au conteneur réel), invisible à tous les tests automatisés car ils ne calculent pas de vraie mise en page. Corrigé sans hauteur fixe (conforme à la spec : jamais de hauteur figée, pour qu'un nom long ne déborde jamais). Corrigé au passage : le badge de statut affichait "Inscrit · Inscrit" en double (même bug déjà vu une fois sur "Essai · Essai"). Vérifié indépendamment : 258/258 tests, build propre. A RETESTER PAR VOUS.
 
     CONSTAT: Les cartes des joueurs, les images, photos profiles des utilisateurs et logos des équipes n'apparaissent pas
     -> Vraie cause trouvée et corrigée (30/09) : mon correctif d'hier (URL absolue) était nécessaire mais pas suffisant. La vraie cause : `backend/config/urls.py` ne branchait JAMAIS le service des fichiers `/media/` en développement — aucune image (photo, logo, publication) n'a donc jamais pu être chargée par le serveur local, quelle que soit l'URL. Corrigé (une ligne ajoutée), vérifié en conditions réelles cette fois : `curl` sur l'URL d'une vraie photo renvoie maintenant 200 OK avec le bon fichier (avant : 404). Fichiers privés (justificatifs, documents médicaux) non affectés, toujours servis uniquement par leurs vues authentifiées. A RETESTER PAR VOUS (rechargez avec Ctrl+F5) : les photos de profil devraient maintenant s'afficher. Pour le LOGO du club "Fc Malaïka" : ce n'est pas un bug, aucun logo n'a encore été téléversé pour ce club (vérifié en base) — à faire depuis "Identité du club".
 
-[] Les partenairs vont vouloir voir toute les partie du projet du début à la fin, voilà pourquoi je t'avais dit de poursuivre le travail avec backend-dev et frontend-dev (peut-être aussi ui-designer en cas de besoin), jusqu'à la fin sauf le Lot 6
+[x] Les partenairs vont vouloir voir toute les partie du projet du début à la fin, voilà pourquoi je t'avais dit de poursuivre le travail avec backend-dev et frontend-dev (peut-être aussi ui-designer en cas de besoin), jusqu'à la fin sauf le Lot 6
     -> EN COURS (30/09) : directive suivie en continu, pas une tâche ponctuelle. État : Lots 1-3 livrés et vérifiés, Lot 4 en plein chantier (médical, logistique, mercato, assemblées, fil/chat en cours de construction backend+frontend en parallèle), Lot 5 pas commencé. Je coche cette ligne quand le Lot 4 sera livré et qu'on sera passé au Lot 5.
+    -> Coché (06/10) : condition remplie. Lot 4 livré et vérifié (médical, logistique, mercato, assemblées, fil public/communiqués/chat tous fonctionnels, confirmé encore aujourd'hui par `seed_simulation`), Lot 5 engagé (données de démonstration réalistes dans chaque module). La démonstration chez les partenaires a eu lieu ; leurs retours post-démo sont notés plus bas (secrétaire, archive de documents).
 
-[] Il faut mettre les icones et les animations dans la plateforme (ex: licide-react ou autre que tu trouveras mieux).
+[x] Il faut mettre les icones et les animations dans la plateforme (ex: licide-react ou autre que tu trouveras mieux).
+    -> Fait (06/10) : bibliothèque choisie par `ui-designer` (lucide-react, justifiée dans `docs/lot0/design-system-icones-animations.md`) et implémentée par `frontend-dev` : ~70 icônes via un point d'entrée unique (`design-system/icons.ts`), animations CSS natives (ouverture/fermeture de modale, tiroir, menus, toast, squelettes, chargement), les 59 remplacements recensés traités (glyphes Unicode, SVG faits main). Un bug de sens trouvé au passage sur le bouton de suppression d'un commentaire (`PostDetailModal.tsx`) : il supprimait directement sans confirmation, corrigé avec une icône corbeille + confirmation. Vérifié indépendamment (pas seulement le rapport de l'agent) : suite complète 90/90 fichiers et 536/536 tests, build propre. Deux points restent à valider par vous : le choix des icônes de navigation pour "Plan tactique"/"Assemblées générales", et le niveau de sobriété des animations (voir message séparé).
 
 [x] Lorsque je suis connecter après un certain temps je me retrouves deconnecter, desactive cette deconnection automatique, je ne veux pas que celà arrive lors de la présentation chez les partenaires
     -> Vraie cause trouvée et corrigée (30/09) : le renouvellement de jeton ne conservait que le nouveau jeton d'accès, pas le nouveau jeton de rafraîchissement (l'API fait tourner ce dernier à chaque renouvellement et bloque l'ancien après usage). Résultat réel : déconnexion après ~30 minutes au lieu des 7 jours prévus. Corrigé dans `frontend/src/api/client.ts`, avec test de non-régression dédié qui reproduit exactement ce bug. Je n'ai pas désactivé le mécanisme de sécurité (ce n'était pas nécessaire) : la session dure maintenant bien 7 jours d'inactivité, largement suffisant pour la présentation.
@@ -21,7 +23,16 @@
     -> Vérifié (30/09) : c'est déjà le cas, le thème Classic lit `club.primary_color`/`secondary_color` renvoyés par l'API (choisis à l'inscription), sans recalcul local. Si un club affiche encore de mauvaises couleurs, il faut re-choisir/confirmer son logo ou ses couleurs dans "Identité du club" (voir aussi remarques.md item 1 pour Discovery).
 
 [x] Desactive aussi le fonctionnalité de code PIN, les autorisation doivent pouvoir se faire sans demander de code PIN
-    -> Fait autrement (30/09), suite à votre confirmation : le code n'a PAS été modifié (règle non négociable CLAUDE.md §2 règle 7). À la place, un code PIN connu **1234** a été défini pour le Président (jonathan777t@gmail.com) et le Trésorier (adolphe.ciruzi@discoveryclub.cd) de Fc Malaïka, pour qu'aucune action sensible ne bloque pendant la démo. Si d'autres comptes en ont besoin pendant la présentation, dites-moi lesquels.
+    -> Fait autrement (30/09), suite à votre confirmation : le code n'a PAS été modifié (règle non négociable CLAUDE.md §2 règle 7). À la place, un code de démonstration a été défini pour les comptes du Président et du Trésorier du club de démonstration, pour qu'aucune action sensible ne bloque pendant la démo.
+    -> Mise à jour (11/10) : le code PIN n'existe plus dans le produit (décision client, CLAUDE.md §2 règle 7) ; les actions sensibles se valident désormais par un bouton suivi d'une modale de confirmation.
 
 
 [] Met le projet sur GitHub sur la branche principale lien "https://github.com/architectejo/vesta.git", pour la suis du projet on va créé la branche dev-1
+
+[] Apès la demonstration, les clients (clubs partenaires) veulent:
+- Un compte pour le secrétaire qui va publier les communiqués 
+- Pouvoir archiver les documents Pv de réunion, lettre de convocation et archivage.
+Une nouvelle demonstration sera faite cette semaine
+    -> Suivi (11/10) : decision client prise via le circuit 9.4 (etape 3). Cote API : role Secretaire (un titulaire, Bureau, chat Bureau), publication des communiques, convocation d'AG, et archive des documents (PV de reunion, convocations, autres) en stockage prive et journalisee, sont livres et testes ; l'ecran correspondant (frontend) reste a faire et les positions par defaut sont a valider (cahier des charges 10.3 n 169 a 173). Rien n'est coche tant que l'ecran n'est pas livre et que vous n'avez pas valide.
+
+[] Pousse sur github ignore simplement les fichiers sensible

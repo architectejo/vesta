@@ -87,7 +87,19 @@ export function getStoredIdentity(): StoredIdentity | null {
   const raw = window.sessionStorage.getItem(IDENTITY_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as StoredIdentity;
+    const parsed: unknown = JSON.parse(raw);
+    // Valeur périmée ou tronquée (ancienne version, stockage modifié) : sans
+    // utilisateur identifiable, on la traite comme absente plutôt que de
+    // laisser l'application planter sur `user.id`.
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      typeof (parsed as { user?: unknown }).user !== "object" ||
+      (parsed as { user?: unknown }).user === null
+    ) {
+      return null;
+    }
+    return parsed as StoredIdentity;
   } catch {
     return null;
   }

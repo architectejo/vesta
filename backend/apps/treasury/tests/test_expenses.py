@@ -1,9 +1,10 @@
 """Dépenses : catégories, circuit, blocage, dérogation, caisse (tâche 2.2).
 
 Sources : CDC 2.4 (matrice), 4.4.6 (caisse disponible), 4.5.1, 4.5.2, 4.17,
-5.3, 7.2 ; invariant 8 (En attente -> Libérée (PIN Pdt/VP) -> Justifiée ;
-Non justifiée après le délai -> blocage ; dérogation Président avec motif +
-PIN, journalisée) ; schema-treasury.md §7, invariant I8.
+5.3 ; invariant 8 (En attente -> Libérée (Pdt/VP) -> Justifiée ;
+Non justifiée après le délai -> blocage ; dérogation Président avec motif,
+journalisée). Plus aucun PIN depuis la décision client du 11/10/2026
+(CLAUDE.md règle 7) : l'auteur de chaque action est journalisé. ; schema-treasury.md §7, invariant I8.
 """
 
 from __future__ import annotations
@@ -15,7 +16,6 @@ from pathlib import Path
 import pytest
 from django.conf import settings as django_settings
 
-from apps.accounts.services import InvalidPinError
 from apps.audit.models import AuditLog
 from apps.clubs.models import ClubSettings
 from apps.notifications.models import Notification
@@ -28,7 +28,7 @@ from apps.treasury.models import (
     LedgerImmutableError,
     Transaction,
 )
-from apps.treasury.tests.conftest import PIN, WRONG_PIN
+from apps.treasury.tests.conftest import PIN, assert_logged_by
 from apps.treasury.tests.expense_helpers import (
     club_today,
     days_ago,
@@ -128,7 +128,8 @@ class TestExpenseCategories:
 class TestExpenseEntry:
     @pytest.mark.parametrize("role", ["treasurer", "assistant_treasurer"])
     def test_treasurer_and_assistant_enter_a_pending_expense(self, ctx, role):
-        expense = make_expense(ctx, amount="25.005", by=getattr(ctx, role))
+        # D7 : arrondi d'une valeur Decimal ; une saisie texte à 3 décimales est refusée (D-A7).
+        expense = make_expense(ctx, amount=Decimal("25.005"), by=getattr(ctx, role))
 
         assert expense.status == Expense.Status.PENDING
         assert expense.amount == Decimal("25.01")  # arrondi ROUND_HALF_UP
@@ -233,7 +234,7 @@ class TestRefusal:
 
 class TestRelease:
     @pytest.mark.parametrize("role", ["president", "vice_president"])
-    def test_release_with_pin_creates_a_sealed_negative_transaction(self, ctx, role):
+    def test_release_creates_a_sealed_negative_transaction(self, ctx, role):
         expense = make_expense(ctx, amount="30")
         released = release(ctx, expense, by=getattr(ctx, role))
 
@@ -252,21 +253,21 @@ class TestRelease:
         assert PIN not in str(entry.after)
 
     @pytest.mark.parametrize("role", ["treasurer", "assistant_treasurer", "player"])
-    def test_other_roles_refused_before_pin_is_checked(self, ctx, role):
+    def test_other_roles_refused(self, ctx, role):
         expense = make_expense(ctx)
         user = getattr(ctx, role).user
         with pytest.raises(services.TreasuryPermissionError):
-            services.release_expense(expense=expense, released_by=user, pin=WRONG_PIN)
-        user.refresh_from_db()
-        assert user.pin_failed_attempts == 0
-        assert Expense.all_objects.get(pk=expense.pk).status == Expense.Status.PENDING
-
-    def test_wrong_pin_releases_nothing(self, ctx):
-        expense = make_expense(ctx)
-        with pytest.raises(InvalidPinError):
-            services.release_expense(expense=expense, released_by=ctx.president.user, pin=WRONG_PIN)
+            services.release_expense(expense=expense, released_by=user)
         assert Expense.all_objects.get(pk=expense.pk).status == Expense.Status.PENDING
         assert not Transaction.all_objects.exists()
+
+    def test_release_without_pin_logs_the_author(self, ctx):
+        """Décision client du 11/10/2026 : plus de PIN ; l'auteur est journalisé."""
+
+        expense = make_expense(ctx)
+        released = services.release_expense(expense=expense, released_by=ctx.vice_president.user)
+        assert released.status == Expense.Status.RELEASED
+        assert_logged_by("treasury.expense.released", ctx.vice_president.user, club=ctx.club)
 
     def test_justification_delay_is_configurable_per_club(self, ctx):
         ClubSettings.objects.filter(club=ctx.club).update(expense_justification_days=3)
@@ -345,9 +346,7 @@ class TestBlockingAndJustification:
 
         other = make_expense(ctx, make_category(ctx, name="Autre"))
         with pytest.raises(services.ExpenseReleaseBlockedError, match="dérogation"):
-            services.release_expense(expense=other, released_by=ctx.president.user, pin=WRONG_PIN)
-        ctx.president.user.refresh_from_db()
-        assert ctx.president.user.pin_failed_attempts == 0  # bloqué avant le PIN
+            services.release_expense(expense=other, released_by=ctx.president.user)
         assert Expense.all_objects.get(pk=other.pk).status == Expense.Status.PENDING
 
     def test_deadline_day_itself_is_not_yet_overdue(self, ctx):
@@ -414,12 +413,12 @@ class TestBlockingAndJustification:
 
 
 class TestDerogation:
-    def test_president_releases_despite_blocking_with_reason_and_pin(self, ctx):
+    def test_president_releases_despite_blocking_with_reason(self, ctx):
         late = release(ctx, make_expense(ctx), now=days_ago(10))
         urgent = make_expense(ctx, make_category(ctx, name="Décès"), amount="100")
 
         released = services.release_expense_with_derogation(
-            expense=urgent, president=ctx.president.user, reason="Décès d'un joueur", pin=PIN
+            expense=urgent, president=ctx.president.user, reason="Décès d'un joueur"
         )
 
         assert released.status == Expense.Status.RELEASED
@@ -428,6 +427,7 @@ class TestDerogation:
         assert derogation.granted_by_id == ctx.president.user_id
         assert list(derogation.blocking_expenses.values_list("pk", flat=True)) == [late.pk]
         entry = logs("treasury.expense.derogation_granted").get()
+        assert entry.actor_id == ctx.president.user_id  # auteur journalisé, sans PIN
         assert entry.after["blocking_expense_ids"] == [late.pk]
         assert entry.after["reason"] == "Décès d'un joueur"
         assert Transaction.all_objects.get(expense=released).amount == Decimal("-100.00")
@@ -443,20 +443,16 @@ class TestDerogation:
         expense = make_expense(ctx)
         with pytest.raises(services.TreasuryValidationError, match="sans dérogation"):
             services.release_expense_with_derogation(
-                expense=expense, president=ctx.president.user, reason="Urgence", pin=PIN
+                expense=expense, president=ctx.president.user, reason="Urgence"
             )
         release(ctx, make_expense(ctx, make_category(ctx, name="Autre")), now=days_ago(10))
         with pytest.raises(services.TreasuryPermissionError):
             services.release_expense_with_derogation(
-                expense=expense, president=ctx.vice_president.user, reason="Urgence", pin=PIN
+                expense=expense, president=ctx.vice_president.user, reason="Urgence"
             )
         with pytest.raises(services.TreasuryValidationError, match="motif de la dérogation"):
             services.release_expense_with_derogation(
-                expense=expense, president=ctx.president.user, reason="  ", pin=PIN
-            )
-        with pytest.raises(InvalidPinError):
-            services.release_expense_with_derogation(
-                expense=expense, president=ctx.president.user, reason="Urgence", pin=WRONG_PIN
+                expense=expense, president=ctx.president.user, reason="  "
             )
         assert Expense.all_objects.get(pk=expense.pk).status == Expense.Status.PENDING
         assert not ExpenseDerogation.all_objects.exists()
@@ -468,7 +464,7 @@ class TestDerogation:
         release(ctx, make_expense(ctx, make_category(ctx, name="Autre")), now=days_ago(10))
         with pytest.raises(services.TreasuryValidationError, match="en dette"):
             services.release_expense_with_derogation(
-                expense=expense, president=ctx.president.user, reason="Urgence", pin=PIN
+                expense=expense, president=ctx.president.user, reason="Urgence"
             )
 
 
@@ -486,7 +482,6 @@ class TestAvailableCash:
             method="cash",
             paid_on=club_today(ctx) - datetime.timedelta(days=2),
             validated_by=ctx.treasurer.user,
-            pin=PIN,
         )
         ctype = put_in_debt(ctx, ctx.player, amount="40")
         pay_mandatory(ctx, ctx.player, ctype, amount="40")
@@ -499,5 +494,5 @@ class TestAvailableCash:
         assert services.get_available_cash(ctx.club) == Decimal("32.50")
 
         reversal = services.request_payment_reversal(payment=payment, reason="Erreur", requested_by=ctx.treasurer.user)
-        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=PIN)
+        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user)
         assert services.get_available_cash(ctx.club) == Decimal("27.50")

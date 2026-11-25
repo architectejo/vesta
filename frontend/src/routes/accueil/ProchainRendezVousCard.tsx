@@ -1,14 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { getLockerRoom, type MatchDetail, type SessionDetail } from "../../api/sport";
-import { Button, EmptyState, Modal, Skeleton } from "../../design-system";
-
-function formatDateLong(iso: string): string {
-  const date = new Date(`${iso}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long" }).format(date);
-}
+import { Button, EmptyState, Modal, Skeleton, useToast } from "../../design-system";
+import { CreateSessionModal } from "../sport/CreateSessionModal";
+import { formatDateLong, formatNextEventLabel } from "../sport/sportTime";
 
 function convocationLabel(match: MatchDetail, membershipId: number): string | null {
   if (!match.is_composition_published) return null;
@@ -74,21 +70,25 @@ function RendezVousDetailModal({
 }
 
 /**
- * Carte « Prochain rendez-vous » (club-accueil.md §4 point 5).
+ * Carte « Prochain rendez-vous » (club-accueil.md §4 point 5, états §6).
  *
- * Point ouvert documenté (voir compte rendu) : aucune API ne renvoie
- * aujourd'hui « le prochain événement à venir » (séance ou match) --
- * `listSessions`/`listMatches` sont triées par date décroissante, sans
- * filtre « à venir » ni tri croissant, et mélangent passé et futur. Calculer
- * ce « prochain » événement côté interface obligerait à tout charger et à
- * trier soi-même une donnée métier, ce que CLAUDE.md interdit. Cette carte
- * réutilise donc l'événement du jour déjà chargé par `getLockerRoom`
- * (même source que « Vestiaire du jour ») : s'il n'y a rien aujourd'hui,
- * la carte l'indique explicitement plutôt que de deviner un événement plus
- * lointain.
+ * Point ouvert partiellement résolu (voir compte rendu) : `listSessions`/
+ * `listMatches` restent triées par date décroissante, sans filtre « à
+ * venir » ni tri croissant, et mélangent toujours passé et futur -- cette
+ * carte ne charge donc toujours pas elle-même « le » prochain événement en
+ * parcourant ces listes, ce que CLAUDE.md interdirait (donnée métier triée
+ * côté interface). Elle réutilise l'événement du jour déjà chargé par
+ * `getLockerRoom` (même source que « Vestiaire du jour »). Ce qui a changé :
+ * `getLockerRoom` renvoie désormais aussi `next_event`, le prochain
+ * événement à venir calculé par l'API quand rien n'a lieu aujourd'hui ; la
+ * carte affiche cette précision au lieu de rester silencieuse au-delà
+ * d'aujourd'hui.
  */
-export function ProchainRendezVousCard({ membershipId }: { membershipId: number }) {
+export function ProchainRendezVousCard({ membershipId, isCoach }: { membershipId: number; isCoach: boolean }) {
   const [detailOpen, setDetailOpen] = useState(false);
+  const [createSessionOpen, setCreateSessionOpen] = useState(false);
+  const { showToast } = useToast();
+  const queryClient = useQueryClient();
   const query = useQuery({ queryKey: ["sport", "locker-room"], queryFn: getLockerRoom, refetchInterval: 30_000 });
 
   const data = query.data;
@@ -129,7 +129,9 @@ export function ProchainRendezVousCard({ membershipId }: { membershipId: number 
         ) : (
           <EmptyState
             message="Aucune séance ni aucun match prévu aujourd'hui."
-            description="Les prochains événements au-delà d'aujourd'hui ne sont pas encore disponibles ici."
+            description={data?.next_event ? `Prochain rendez-vous : ${formatNextEventLabel(data.next_event)}` : undefined}
+            actionLabel={isCoach ? "Créer une séance" : undefined}
+            onAction={isCoach ? () => setCreateSessionOpen(true) : undefined}
           />
         )}
       </div>
@@ -142,6 +144,16 @@ export function ProchainRendezVousCard({ membershipId }: { membershipId: number 
           onClose={() => setDetailOpen(false)}
         />
       ) : null}
+
+      <CreateSessionModal
+        open={createSessionOpen}
+        onClose={() => setCreateSessionOpen(false)}
+        onCreated={() => {
+          setCreateSessionOpen(false);
+          void queryClient.invalidateQueries({ queryKey: ["sport", "locker-room"] });
+          showToast("Séance créée. Les joueurs ont été prévenus.");
+        }}
+      />
     </section>
   );
 }

@@ -336,6 +336,8 @@ class TestPlayerListViewLicenceGate:
             "membership_status_label",
             "joined_on",
             "roles",
+            # Booléen « bloqué » du pointage groupé, sans motif (10.2 n° 16).
+            "is_unavailable",
         }
         for row in response.data:
             assert set(row.keys()) == expected_keys

@@ -156,13 +156,13 @@ def activate_licence(
     """
 
     now = now or timezone.now()
-    _require_superuser(superuser, message="Seul un Superuser peut activer une licence (CDC 2.5).")
+    _require_superuser(superuser, message="Seul un Superuser peut activer une licence.")
 
     if licence.status == Licence.Status.TERMINATED:
-        raise InvalidLicenceTransitionError("Une licence resiliee ne peut plus etre activee (10.2 n26).")
+        raise InvalidLicenceTransitionError("Une licence résiliée ne peut plus être activée.")
     if licence.status == Licence.Status.SUSPENDED:
         raise InvalidLicenceTransitionError(
-            "Une licence suspendue doit d'abord etre reprise (resume_licence), pas activee."
+            "Une licence suspendue doit d'abord être reprise avant d'être activée."
         )
 
     with transaction.atomic():
@@ -223,17 +223,17 @@ def extend_licence(
     """
 
     now = now or timezone.now()
-    _require_superuser(superuser, message="Seul un Superuser peut prolonger une licence (CDC 2.5).")
+    _require_superuser(superuser, message="Seul un Superuser peut prolonger une licence.")
 
     if licence.status == Licence.Status.TERMINATED:
-        raise InvalidLicenceTransitionError("Une licence resiliee ne peut plus etre prolongee (10.2 n26).")
+        raise InvalidLicenceTransitionError("Une licence résiliée ne peut plus être prolongée.")
     if licence.status == Licence.Status.SUSPENDED:
         raise InvalidLicenceTransitionError(
-            "Une licence suspendue doit d'abord etre reprise (resume_licence) avant d'etre prolongee."
+            "Une licence suspendue doit d'abord être reprise avant d'être prolongée."
         )
     if end_date <= licence.end_date:
         raise InvalidLicenceTransitionError(
-            "La nouvelle date de fin doit etre strictement posterieure a la date de fin actuelle."
+            "La nouvelle date de fin doit être strictement postérieure à la date de fin actuelle."
         )
 
     with transaction.atomic():
@@ -279,14 +279,14 @@ def suspend_licence(*, superuser, licence: Licence, reason: str, now=None) -> Li
     """
 
     now = now or timezone.now()
-    _require_superuser(superuser, message="Seul un Superuser peut suspendre une licence (CDC 2.5).")
+    _require_superuser(superuser, message="Seul un Superuser peut suspendre une licence.")
 
     if not (reason or "").strip():
         raise InvalidLicenceTransitionError("Le motif de suspension est obligatoire.")
     if licence.status == Licence.Status.TERMINATED:
-        raise InvalidLicenceTransitionError("Une licence resiliee ne peut plus etre suspendue (10.2 n26).")
+        raise InvalidLicenceTransitionError("Une licence résiliée ne peut plus être suspendue.")
     if licence.status == Licence.Status.SUSPENDED:
-        raise InvalidLicenceTransitionError("Cette licence est deja suspendue.")
+        raise InvalidLicenceTransitionError("Cette licence est déjà suspendue.")
 
     with transaction.atomic():
         before = _licence_snapshot(licence)
@@ -325,10 +325,10 @@ def resume_licence(*, superuser, licence: Licence, note: str = "", now=None) -> 
     """
 
     now = now or timezone.now()
-    _require_superuser(superuser, message="Seul un Superuser peut reprendre une licence (CDC 2.5).")
+    _require_superuser(superuser, message="Seul un Superuser peut reprendre une licence.")
 
     if licence.status != Licence.Status.SUSPENDED:
-        raise InvalidLicenceTransitionError("Seule une licence suspendue peut etre reprise.")
+        raise InvalidLicenceTransitionError("Seule une licence suspendue peut être reprise.")
 
     with transaction.atomic():
         before = _licence_snapshot(licence)
@@ -375,16 +375,16 @@ def terminate_licence(
     """
 
     now = now or timezone.now()
-    _require_superuser(superuser, message="Seul un Superuser peut resilier une licence (CDC 2.5).")
+    _require_superuser(superuser, message="Seul un Superuser peut résilier une licence.")
 
     if not (reason or "").strip():
-        raise InvalidLicenceTransitionError("Le motif de resiliation est obligatoire (10.2 n26).")
+        raise InvalidLicenceTransitionError("Le motif de résiliation est obligatoire.")
     if licence.status == Licence.Status.TERMINATED:
-        raise InvalidLicenceTransitionError("Cette licence est deja resiliee.")
+        raise InvalidLicenceTransitionError("Cette licence est déjà résiliée.")
 
     if (confirm_club_name or "").strip() != licence.club.name:
         raise LicenceTerminationConfirmationError(
-            "Le nom du club saisi ne correspond pas : la resiliation est annulee (10.2 n26)."
+            "Le nom du club saisi ne correspond pas : la résiliation est annulée."
         )
 
     with transaction.atomic():
@@ -669,9 +669,9 @@ def start_support_session(*, superuser, club, reason: str, now=None) -> SupportS
     """
 
     now = now or timezone.now()
-    _require_superuser(superuser, message="Seul un Superuser peut ouvrir une session de support (CDC 4.18).")
+    _require_superuser(superuser, message="Seul un Superuser peut ouvrir une session de support.")
     if not (reason or "").strip():
-        raise SupportSessionError("Le motif de la session de support est obligatoire (CDC 4.18).")
+        raise SupportSessionError("Le motif de la session de support est obligatoire.")
 
     session = SupportSession.objects.create(club=club, superuser=superuser, reason=reason, started_at=now)
 
@@ -700,13 +700,13 @@ def end_support_session(*, session: SupportSession, superuser, now=None) -> Supp
     """
 
     now = now or timezone.now()
-    _require_superuser(superuser, message="Seul un Superuser peut clore une session de support (CDC 4.18).")
+    _require_superuser(superuser, message="Seul un Superuser peut clore une session de support.")
     if session.superuser_id != superuser.id:
         raise SupportSessionPermissionError(
             "Seul le Superuser ayant ouvert cette session de support peut la clore par anticipation."
         )
     if session.ended_at is not None:
-        raise SupportSessionError("Cette session de support est deja terminee.")
+        raise SupportSessionError("Cette session de support est déjà terminée.")
 
     session.ended_at = now
     session.save(update_fields=["ended_at"])
@@ -762,9 +762,9 @@ def enter_ghost_mode(*, session: SupportSession, superuser, now=None):
     """
 
     if session.superuser_id != getattr(superuser, "id", None):
-        raise SupportSessionPermissionError("Cette session de support n'appartient pas a ce Superuser.")
+        raise SupportSessionPermissionError("Cette session de support n'appartient pas à ce Superuser.")
     if not is_support_session_valid(session, now=now):
-        raise SupportSessionError("Cette session de support n'est plus valide (expiree ou terminee).")
+        raise SupportSessionError("Cette session de support n'est plus valide (expirée ou terminée).")
 
     return _enter_ghost_mode_contexts(session)
 

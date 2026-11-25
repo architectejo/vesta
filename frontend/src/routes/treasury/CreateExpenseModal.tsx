@@ -13,6 +13,7 @@ import {
   type PlayerSearchResult,
 } from "../../design-system";
 import { describeExpenseCategory } from "./expenseLabels";
+import { isPositiveAmount, toApiAmount } from "./money";
 
 const CATEGORIES_QUERY_KEY = ["treasury", "expense-categories", "active"] as const;
 
@@ -105,8 +106,7 @@ export function CreateExpenseModal({
   function submit(): void {
     const nextErrors: FormErrors = {};
     if (categoryId === "") nextErrors.category = "Choisissez une catégorie.";
-    const numericAmount = Number(amount.replace(",", "."));
-    if (!amount || Number.isNaN(numericAmount) || numericAmount <= 0) {
+    if (!isPositiveAmount(amount)) {
       nextErrors.amount = "Saisissez un montant supérieur à 0.";
     }
     if (!beneficiaryName.trim()) nextErrors.beneficiary = "Ce champ est obligatoire.";
@@ -117,7 +117,7 @@ export function CreateExpenseModal({
 
     onSubmit({
       categoryId: Number(categoryId),
-      amount: amount.replace(",", "."),
+      amount: toApiAmount(amount),
       beneficiaryName: beneficiaryName.trim(),
       beneficiaryMembershipId: player ? Number(player.id) : null,
       reason: reason.trim(),

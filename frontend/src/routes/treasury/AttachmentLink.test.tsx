@@ -32,6 +32,21 @@ describe("AttachmentLink", () => {
     expect(window.open).toHaveBeenCalledWith("blob:mock-url", "_blank", "noopener,noreferrer");
   });
 
+  it("n'ouvre jamais un Blob text/html : téléchargement seulement et message en français", async () => {
+    const blob = new Blob(["<script>alert(1)</script>"], { type: "text/html" });
+    const download = vi.fn().mockResolvedValue({ blob, filename: "piege.html" });
+    URL.createObjectURL = vi.fn().mockReturnValue("blob:mock-url");
+    URL.revokeObjectURL = vi.fn();
+    window.open = vi.fn();
+    const user = userEvent.setup();
+    render(<AttachmentLink label="Voir le justificatif" download={download} />);
+
+    await user.click(screen.getByRole("button", { name: "Voir le justificatif" }));
+
+    expect(await screen.findByText("Ce type de fichier ne peut pas être ouvert.")).toBeInTheDocument();
+    expect(window.open).not.toHaveBeenCalled();
+  });
+
   it("affiche l'erreur en français quand le téléchargement échoue", async () => {
     const download = vi.fn().mockRejectedValue(new ApiError(404, { detail: "Ce fichier n'existe plus." }));
     const user = userEvent.setup();

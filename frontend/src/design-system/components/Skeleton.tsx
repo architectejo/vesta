@@ -2,7 +2,7 @@
 // sans dupliquer le clip-path.
 import "./PlayerTradingCard.css";
 
-export type SkeletonVariant = "row" | "table-row" | "card" | "kpi" | "pitch" | "player-card";
+export type SkeletonVariant = "row" | "table-row" | "card" | "kpi" | "pitch" | "player-card" | "chart";
 
 export interface SkeletonProps {
   variant?: SkeletonVariant;
@@ -14,7 +14,7 @@ export interface SkeletonProps {
  * `prefers-reduced-motion: reduce` (géré globalement dans tokens.css).
  */
 export function Skeleton({ variant = "row", className = "" }: SkeletonProps) {
-  const base = "rounded-md bg-skeleton motion-safe:animate-pulse";
+  const base = "rounded-md bg-skeleton motion-safe:animate-skeleton";
 
   if (variant === "row") {
     return (
@@ -41,6 +41,10 @@ export function Skeleton({ variant = "row", className = "" }: SkeletonProps) {
     );
   }
 
+  if (variant === "chart") {
+    return <div className={[base, "h-40 w-full", className].join(" ")} />;
+  }
+
   if (variant === "pitch") {
     return <div className={[base, "aspect-[68/105] w-full bg-surface-muted", className].join(" ")} />;
   }
@@ -51,7 +55,7 @@ export function Skeleton({ variant = "row", className = "" }: SkeletonProps) {
     return (
       <div className={["space-y-3", className].join(" ")}>
         <div
-          className="player-trading-card__shape mx-auto h-[320px] w-[280px] bg-skeleton motion-safe:animate-pulse"
+          className="player-trading-card__shape mx-auto h-[320px] w-[280px] bg-skeleton motion-safe:animate-skeleton"
         />
         <div className="space-y-2">
           <div className={[base, "h-3 w-3/5"].join(" ")} />

@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ClubBrandingProvider, type ClubBranding } from "../context/ClubBrandingContext";
@@ -93,7 +93,11 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: "Fermer" })).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
-    expect(screen.queryByRole("button", { name: "Fermer" })).not.toBeInTheDocument();
+    // Le tiroir reste monté pendant son animation de fermeture
+    // (design-system-icones-animations.md §2.2 : démontage différé).
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Fermer" })).not.toBeInTheDocument(),
+    );
   });
 
   it("ouvre le menu utilisateur et déclenche la déconnexion", async () => {

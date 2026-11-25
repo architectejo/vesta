@@ -12,6 +12,7 @@ import {
   useClubBranding,
 } from "../../design-system";
 import type { StatusKey } from "../../design-system";
+import { MembershipActions } from "./adhesion/MembershipActions";
 import { PlayerComparisonModal } from "./PlayerComparisonModal";
 
 export const MEMBERSHIP_STATUS_KEY: Record<string, StatusKey> = {
@@ -70,11 +71,16 @@ export function PlayerCardModal({
             <Button variant="secondary" size="md" onClick={onClose}>
               Fermer
             </Button>
-            {card ? (
-              <Button variant="secondary" size="md" onClick={() => setComparisonOpen(true)}>
-                Comparer
-              </Button>
-            ) : null}
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {card && card.membership_status === "pending" ? (
+                <MembershipActions membershipId={card.membership_id} />
+              ) : null}
+              {card ? (
+                <Button variant="secondary" size="md" onClick={() => setComparisonOpen(true)}>
+                  Comparer
+                </Button>
+              ) : null}
+            </div>
           </div>
         }
         cancelLabel="Fermer"

@@ -79,6 +79,8 @@ compte rendu de la tache 3.2 pour le contrat d'integration attendu.
 
 from __future__ import annotations
 
+import logging
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -89,7 +91,7 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 
-from apps.clubs.models import ClubSettings, Membership, MembershipRole, Season
+from apps.clubs.models import COACHING_STAFF_ROLES, ClubSettings, Membership, MembershipRole, Season
 from apps.core.roles import get_active_roles, has_any_role
 from apps.core.services import log_action
 from apps.sport.models import (
@@ -109,6 +111,8 @@ from apps.sport.models import (
     Evaluation,
 )
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "SportError",
     "SportValidationError",
@@ -122,6 +126,7 @@ __all__ = [
     "ensure_event_writable",
     "unlock_event",
     "get_club_today",
+    "get_next_upcoming_event",
     "create_session",
     "update_session",
     "mark_arrival",
@@ -132,10 +137,13 @@ __all__ = [
     "place_team_player",
     "sync_pending_regularizations",
     "get_unassigned_players",
+    "reason_visible_to_viewer",
     "UnassignedGroups",
     "create_match",
     "update_match",
     "mark_match_arrival",
+    "mark_arrivals_bulk",
+    "excuse_absences_bulk",
     "add_to_composition",
     "remove_from_composition",
     "publish_composition",
@@ -221,6 +229,56 @@ def get_club_today(club, *, now: Optional[datetime] = None) -> date:
     ``apps.treasury.services.get_club_today``."""
 
     return _club_today(club, now=now)
+
+
+def get_next_upcoming_event(club, *, after: Optional[date] = None):
+    """Prochain évènement à venir du club (séance ou match), c'est-à-dire
+    celui dont ``event.event_date`` est strictement postérieure à
+    ``after`` (date du jour du club par défaut, :func:`get_club_today`),
+    trié par date croissante. Renvoie l'instance ``Session`` ou ``Match``
+    elle-même (jamais l'``Event`` nu : l'appelant a besoin de
+    ``gathering_time``/``kickoff_time``), ou ``None`` s'il n'y en a pas.
+
+    Utilisée UNIQUEMENT pour la précision « Prochain rendez-vous » de
+    l'état vide du vestiaire quand aucun évènement n'a lieu aujourd'hui
+    (sport-vestiaire.md §6, ligne « Aucun événement aujourd'hui » ; même
+    source pour club-accueil.md §4 point 5, carte « Prochain
+    rendez-vous ») -- jamais appelée quand un évènement du jour existe
+    déjà, pour ne pas alourdir ce cas (demande explicite de la tâche).
+
+    Critère de départage non tranché par le CDC écrit à ce jour : si une
+    séance et un match tombent le même jour futur le plus proche, la
+    séance l'emporte -- choix arbitraire documenté ici, décision par
+    défaut signalée au compte rendu, à confirmer par le client si le cas
+    se présente en pratique."""
+
+    reference_date = after if after is not None else _club_today(club)
+
+    next_session = (
+        Session.all_objects.select_related("event")
+        .filter(club_id=club.id, event__event_date__gt=reference_date)
+        .order_by("event__event_date", "event_id")
+        .first()
+    )
+    next_match = (
+        Match.all_objects.select_related("event")
+        .filter(club_id=club.id, event__event_date__gt=reference_date)
+        .order_by("event__event_date", "event_id")
+        .first()
+    )
+
+    candidates = [c for c in (next_session, next_match) if c is not None]
+    if not candidates:
+        return None
+    earliest_date = min(c.event.event_date for c in candidates)
+    for candidate in candidates:
+        if candidate.event.event_date == earliest_date:
+            # Séance prioritaire sur un match à date égale (voir
+            # docstring ci-dessus) : ``candidates`` est construit dans
+            # l'ordre [séance, match], donc le premier trouvé ici est
+            # toujours la séance quand les deux partagent cette date.
+            return candidate
+    return None  # pragma: no cover - inatteignable (earliest_date vient de candidates)
 
 
 def _combine_local(event_date: date, time_value, club_settings: ClubSettings) -> datetime:
@@ -319,11 +377,29 @@ def get_playability(membership: Membership, *, at_date: Optional[date] = None) -
 # le Capitaine (voir sport-seance.md §7, point ouvert 3) : « Indisponible »
 # seul, sans motif — appliquée telle quelle ici.
 _FINANCIAL_DETAIL_ROLES = frozenset(
-    {MembershipRole.Role.PRESIDENT, MembershipRole.Role.VICE_PRESIDENT, MembershipRole.Role.COACH}
+    {MembershipRole.Role.PRESIDENT, MembershipRole.Role.VICE_PRESIDENT, *COACHING_STAFF_ROLES}
 )
 _FULL_DETAIL_ROLES = _FINANCIAL_DETAIL_ROLES | frozenset(
     {MembershipRole.Role.SPORTS_DIRECTOR, MembershipRole.Role.DOCTOR}
 )
+
+
+def reason_visible_to_viewer(playability: Playability, *, viewer, membership: Membership) -> bool:
+    """Le lecteur a-t-il droit au motif réel de blocage (10.2 n° 16) ?
+
+    Le joueur voit toujours le sien. Dette et attente d'adhésion (motifs
+    administratifs/financiers) : Président, VP, Coach. Suspension et
+    inaptitude : ces rôles + Directeur sportif + Médecin. Tous les autres
+    (coéquipiers, Capitaine) : « Indisponible » seul, sans code de motif."""
+
+    if playability.eligible:
+        return True
+    if getattr(viewer, "id", None) == membership.user_id:
+        return True
+    roles = get_active_roles(viewer, club=membership.club)
+    if playability.reason_code in ("debt", "pending_membership"):
+        return bool(roles & _FINANCIAL_DETAIL_ROLES)
+    return bool(roles & _FULL_DETAIL_ROLES)
 
 
 def describe_reason_for_viewer(playability: Playability, *, viewer, membership: Membership) -> str:
@@ -333,12 +409,9 @@ def describe_reason_for_viewer(playability: Playability, *, viewer, membership: 
 
     if playability.eligible:
         return ""
-    if getattr(viewer, "id", None) == membership.user_id:
+    if reason_visible_to_viewer(playability, viewer=viewer, membership=membership):
         return playability.detail
-    roles = get_active_roles(viewer, club=membership.club)
-    if playability.reason_code == "debt":
-        return playability.detail if roles & _FINANCIAL_DETAIL_ROLES else "Indisponible"
-    return playability.detail if roles & _FULL_DETAIL_ROLES else "Indisponible"
+    return "Indisponible"
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +444,7 @@ def unlock_event(event: Event, *, superuser, reason: str) -> Event:
     (CDC 4.7 ; CLAUDE.md règle n° 6)."""
 
     if not getattr(superuser, "is_superuser", False):
-        raise SportPermissionError("Seul le Superuser peut déverrouiller un événement verrouillé (CDC 4.7).")
+        raise SportPermissionError("Seul le Superuser peut déverrouiller un événement verrouillé.")
     reason = (reason or "").strip()
     if not reason:
         raise SportValidationError(
@@ -399,6 +472,24 @@ def unlock_event(event: Event, *, superuser, reason: str) -> Event:
 # ---------------------------------------------------------------------------
 # Séances et pointage (CDC 4.7)
 # ---------------------------------------------------------------------------
+
+
+def _notify_event_created(*, club, target, message: str) -> None:
+    """CDC 4.17 « Séance ou match créé » : tous les joueurs du club (adhésions
+    actives, club de l'événement uniquement), in-app, un envoi par joueur."""
+
+    from apps.notifications.models import Notification
+    from apps.notifications.services import create_notification
+
+    memberships = Membership.all_objects.filter(club=club, status=Membership.Status.ACTIVE).select_related("user")
+    for membership in memberships:
+        create_notification(
+            recipient=membership.user,
+            event_type=Notification.EventType.EVENT_CREATED,
+            message=message,
+            club=club,
+            target=target,
+        )
 
 
 def create_session(
@@ -434,6 +525,12 @@ def create_session(
         action_type="sport.session_created",
         obj=session,
         after={"event_date": event_date.isoformat(), "gathering_time": str(gathering_time)},
+    )
+    place = f", {location}" if location else ""
+    _notify_event_created(
+        club=club,
+        target=session,
+        message=f"Une séance est programmée le {event_date.strftime('%d/%m/%Y')} à {str(gathering_time)[:5]}{place}.",
     )
     return session
 
@@ -528,7 +625,15 @@ def _auto_assign_if_present(session: Session, membership: Membership, *, assigne
 
 
 def _upsert_attendance(
-    *, event: Event, membership: Membership, status: str, arrived_at, marked_by, client_uuid=None, client_recorded_at=None
+    *,
+    event: Event,
+    membership: Membership,
+    status: str,
+    arrived_at,
+    marked_by,
+    client_uuid=None,
+    client_recorded_at=None,
+    audit_extra: Optional[dict] = None,
 ) -> tuple[Attendance, bool]:
     attendance = Attendance.all_objects.filter(club=event.club_id, event=event, membership=membership).first()
     created = attendance is None
@@ -556,13 +661,43 @@ def _upsert_attendance(
         action_type="sport.attendance_marked" if created else "sport.attendance_corrected",
         obj=attendance,
         before=before,
-        after={"status": status, "arrived_at": arrived_at.isoformat() if arrived_at else None},
+        after={
+            "status": status,
+            "arrived_at": arrived_at.isoformat() if arrived_at else None,
+            # Pointage groupé : batch_id, taille du lot, etc. (une entrée
+            # par joueur, règle 6).
+            **(audit_extra or {}),
+        },
     )
     return attendance, created
 
 
+CLIENT_UUID_OTHER_PLAYER_MESSAGE = "Cet identifiant de pointage est déjà utilisé pour un autre joueur."
+
+
+def _existing_attendance_for_client_uuid(event: Event, membership: Membership, client_uuid) -> Optional[Attendance]:
+    """Déduplication d'un renvoi hors connexion (6.6) : renvoie le pointage
+    déjà enregistré pour CE joueur et CET événement. Un identifiant déjà
+    utilisé pour un autre joueur (ou un autre événement) est refusé, jamais
+    rendu avec les données d'un autre."""
+
+    existing = Attendance.all_objects.filter(club=event.club_id, client_uuid=client_uuid).first()
+    if existing is None:
+        return None
+    if existing.membership_id != membership.pk or existing.event_id != event.pk:
+        raise SportValidationError(CLIENT_UUID_OTHER_PLAYER_MESSAGE)
+    return existing
+
+
 def mark_arrival(
-    *, session: Session, membership: Membership, arrived_at: datetime, marked_by, client_uuid=None, client_recorded_at=None
+    *,
+    session: Session,
+    membership: Membership,
+    arrived_at: datetime,
+    marked_by,
+    client_uuid=None,
+    client_recorded_at=None,
+    audit_extra: Optional[dict] = None,
 ) -> Attendance:
     """Pointage d'une arrivée (CDC 4.7). Présent avant l'heure limite,
     sinon « en retard, compté absent » (10.2 n° 6, n° 25) — le comptage
@@ -574,10 +709,8 @@ def mark_arrival(
     ensure_event_writable(event, actor=marked_by)
 
     if client_uuid is not None:
-        existing = Attendance.all_objects.filter(club=event.club_id, client_uuid=client_uuid).first()
+        existing = _existing_attendance_for_client_uuid(event, membership, client_uuid)
         if existing is not None:
-            # Déduplication d'un renvoi hors connexion (6.6) : la même
-            # saisie ne crée jamais deux lignes.
             return existing
 
     club_settings = _club_settings(session.club)
@@ -592,6 +725,7 @@ def mark_arrival(
         marked_by=marked_by,
         client_uuid=client_uuid,
         client_recorded_at=client_recorded_at,
+        audit_extra=audit_extra,
     )
 
     if status == Attendance.Status.PRESENT:
@@ -608,9 +742,9 @@ def correct_arrival_time(*, attendance: Attendance, new_arrived_at: datetime, ac
     event = attendance.event
     ensure_event_writable(event, actor=actor)
     if not getattr(actor, "is_superuser", False) and not has_any_role(
-        actor, {MembershipRole.Role.COACH}, club=attendance.club
+        actor, COACHING_STAFF_ROLES, club=attendance.club
     ):
-        raise SportPermissionError("Seul le Coach corrige l'heure d'arrivée (CDC 4.7).")
+        raise SportPermissionError("Seul le Coach (ou son assistant) corrige l'heure d'arrivée.")
 
     session = event.session
     club_settings = _club_settings(attendance.club)
@@ -646,13 +780,20 @@ def correct_arrival_time(*, attendance: Attendance, new_arrived_at: datetime, ac
     return attendance
 
 
-def mark_excused_absence(*, event: Event, membership: Membership, reason: str, marked_by) -> Attendance:
+def mark_excused_absence(
+    *, event: Event, membership: Membership, reason: str, marked_by, audit_extra: Optional[dict] = None
+) -> Attendance:
     """Absence excusée (blessé, voyage, autre) : reste une absence, mais
     distinguée dans les statistiques (CDC 4.7)."""
 
     ensure_event_writable(event, actor=marked_by)
     attendance, _created = _upsert_attendance(
-        event=event, membership=membership, status=Attendance.Status.EXCUSED_ABSENT, arrived_at=None, marked_by=marked_by
+        event=event,
+        membership=membership,
+        status=Attendance.Status.EXCUSED_ABSENT,
+        arrived_at=None,
+        marked_by=marked_by,
+        audit_extra=audit_extra,
     )
     attendance.excused_reason = reason
     attendance.save()
@@ -670,7 +811,7 @@ def mark_excused_absence(*, event: Event, membership: Membership, reason: str, m
 # retardataire — le Président a « É » sur la répartition (matrice 2.4)
 # mais seulement pour déplacer un joueur déjà réparti (sport-seance.md
 # §2, position provisoire, point ouvert 1).
-_LATE_PLACERS = frozenset({MembershipRole.Role.COACH, MembershipRole.Role.CAPTAIN})
+_LATE_PLACERS = frozenset({*COACHING_STAFF_ROLES, MembershipRole.Role.CAPTAIN})
 
 
 def assign_team(*, session: Session, membership: Membership, team: str, assigned_by) -> TeamAssignment:
@@ -695,7 +836,7 @@ def assign_team(*, session: Session, membership: Membership, team: str, assigned
         if not getattr(assigned_by, "is_superuser", False) and not has_any_role(
             assigned_by, _LATE_PLACERS, club=session.club
         ):
-            raise SportPermissionError("Seuls le Coach et le Capitaine placent un retardataire (10.2 n° 38).")
+            raise SportPermissionError("Seuls le Coach (ou son assistant) et le Capitaine placent un retardataire.")
 
     if existing is not None:
         before = {"team": existing.team}
@@ -792,7 +933,7 @@ def get_unassigned_players(session: Session, *, actor) -> UnassignedGroups:
 # ci-dessus : ces deux nouveaux services n'ont pas encore de classe de
 # permission DRF dédiée (aucune vue n'est construite dans cette tâche).
 _TEAM_FORMATION_AND_PLACEMENT_ROLES = frozenset(
-    {MembershipRole.Role.PRESIDENT, MembershipRole.Role.COACH, MembershipRole.Role.CAPTAIN}
+    {MembershipRole.Role.PRESIDENT, *COACHING_STAFF_ROLES, MembershipRole.Role.CAPTAIN}
 )
 
 _MAX_PLAYERS_ON_FIELD = 11
@@ -803,7 +944,7 @@ def _ensure_team_formation_permission(actor, *, club) -> None:
         return
     if not has_any_role(actor, _TEAM_FORMATION_AND_PLACEMENT_ROLES, club=club):
         raise SportPermissionError(
-            "Réservé au Président, au Coach ou au Capitaine (CDC 2.4, 4.7)."
+            "Réservé au Président, au Coach (ou son assistant) ou au Capitaine."
         )
 
 
@@ -1006,6 +1147,40 @@ def create_match(
     challenge_status: str = Match.ChallengeStatus.NOT_APPLICABLE,
     challenge_to_club=None,
 ) -> Match:
+    if opponent_club is None and not (opponent_name or "").strip():
+        raise SportValidationError("Indiquez un club adverse Vesta ou le nom d'une équipe extérieure.")
+    if opponent_club is not None and opponent_club.pk == club.pk:
+        raise SportValidationError("Votre propre club ne peut pas être l'adversaire d'un match.")
+    if challenge_to_club is not None and challenge_to_club.pk == club.pk:
+        raise SportValidationError("Vous ne pouvez pas lancer un défi à votre propre club.")
+    if challenge_status != Match.ChallengeStatus.NOT_APPLICABLE and challenge_to_club is None:
+        raise SportValidationError("Un défi doit désigner le club destinataire.")
+    if challenge_to_club is not None or challenge_status != Match.ChallengeStatus.NOT_APPLICABLE:
+        # Un défi est toujours créé « Proposé » : il n'est jamais accepté ou
+        # refusé à la création, faute de consentement du club adverse.
+        challenge_status = Match.ChallengeStatus.PROPOSED
+    with transaction.atomic():
+        match = _create_match_atomic(
+            club=club, season=season, event_date=event_date, kickoff_time=kickoff_time, match_type=match_type,
+            venue=venue, created_by=created_by, opponent_club=opponent_club, opponent_name=opponent_name,
+            location=location, challenge_status=challenge_status, challenge_to_club=challenge_to_club,
+        )
+    place = f", {location}" if location else ""
+    _notify_event_created(
+        club=club,
+        target=match,
+        message=(
+            f"Un match contre {_opponent_label(match)} est programmé le "
+            f"{event_date.strftime('%d/%m/%Y')} à {str(kickoff_time)[:5]}{place}."
+        ),
+    )
+    return match
+
+
+def _create_match_atomic(
+    *, club, season, event_date, kickoff_time, match_type, venue, created_by, opponent_club, opponent_name,
+    location, challenge_status, challenge_to_club,
+) -> Match:
     event = Event(club=club, kind=Event.Kind.MATCH, event_date=event_date, season=season, created_by=created_by)
     event.save()
     match = Match(
@@ -1036,14 +1211,24 @@ def update_match(
     opponent_club=None,
     opponent_name: str = "",
     location: str = "",
+    challenge_to_club_id: int | None = None,
 ) -> Match:
     """Modifie un match existant (sport-feuille-de-match.md §4.7 : « Champs
     de Créer un match, adversaire non modifiable pour un défi accepté »).
     Verrouillée à minuit comme la séance (§5, « Verrouillé (lendemain) :
-    lecture seule, sauf buts et passes modifiables après coup »)."""
+    lecture seule, sauf buts et passes modifiables après coup »).
+
+    Comme à la création, le propre club ne peut être ni l'adversaire ni le
+    destinataire d'un défi ; ``challenge_to_club_id`` ne sert qu'à ce
+    contrôle (un défi ne se modifie pas depuis cette modale)."""
 
     event = match.event
     ensure_event_writable(event, actor=updated_by)
+
+    if opponent_club is not None and opponent_club.pk == match.club_id:
+        raise SportValidationError("Votre propre club ne peut pas être l'adversaire d'un match.")
+    if challenge_to_club_id is not None and challenge_to_club_id == match.club_id:
+        raise SportValidationError("Vous ne pouvez pas lancer un défi à votre propre club.")
 
     if match.challenge_status == Match.ChallengeStatus.ACCEPTED:
         # L'adversaire d'un défi accepté n'est jamais modifiable ici, quoi
@@ -1093,7 +1278,14 @@ def update_match(
 
 
 def mark_match_arrival(
-    *, match: Match, membership: Membership, arrived_at: datetime, marked_by, client_uuid=None, client_recorded_at=None
+    *,
+    match: Match,
+    membership: Membership,
+    arrived_at: datetime,
+    marked_by,
+    client_uuid=None,
+    client_recorded_at=None,
+    audit_extra: Optional[dict] = None,
 ) -> Attendance:
     """Pointage simple d'un match (CDC 4.8 : « mêmes règles que les
     séances » pour la présence, sans répartition A/B -- position déjà
@@ -1118,10 +1310,8 @@ def mark_match_arrival(
     ensure_event_writable(event, actor=marked_by)
 
     if client_uuid is not None:
-        existing = Attendance.all_objects.filter(club=event.club_id, client_uuid=client_uuid).first()
+        existing = _existing_attendance_for_client_uuid(event, membership, client_uuid)
         if existing is not None:
-            # Déduplication d'un renvoi hors connexion (6.6), même
-            # convention que :func:`mark_arrival`.
             return existing
 
     club_settings = _club_settings(match.club)
@@ -1136,8 +1326,208 @@ def mark_match_arrival(
         marked_by=marked_by,
         client_uuid=client_uuid,
         client_recorded_at=client_recorded_at,
+        audit_extra=audit_extra,
     )
     return attendance
+
+
+# ---------------------------------------------------------------------------
+# Pointage groupé (sport-pointage-selection-multiple.md ; décisions du
+# 15/11/2026). Une seule source de vérité : chaque joueur passe par
+# mark_arrival / mark_match_arrival / mark_excused_absence.
+# ---------------------------------------------------------------------------
+
+BULK_ATTENDANCE_MAX_ITEMS = 100
+
+EXCUSE_REASON_LABELS = {"injured": "Blessé", "travel": "Voyage", "other": "Autre"}
+
+
+def _is_coaching_staff(actor, club) -> bool:
+    return bool(getattr(actor, "is_superuser", False)) or has_any_role(actor, COACHING_STAFF_ROLES, club=club)
+
+
+def _bulk_prepare(event: Event, items, actor):
+    """Contrôles communs d'un lot : taille, verrou (une seule fois),
+    chargement des joueurs du club (étanchéité), ordre de sélection."""
+
+    items = list(items or [])
+    if not items:
+        raise SportValidationError("Cochez au moins un joueur.")
+    if len(items) > BULK_ATTENDANCE_MAX_ITEMS:
+        raise SportValidationError(
+            f"Un envoi ne peut pas dépasser {BULK_ATTENDANCE_MAX_ITEMS} joueurs. Envoyez plusieurs lots."
+        )
+    if not getattr(actor, "is_superuser", False) and is_event_locked(event):
+        raise EventLockedError(
+            "Cette séance est verrouillée depuis minuit. Seul le support peut la corriger, "
+            "à la demande du Président."
+        )
+    # Ordre de sélection (selection_rank), puis ordre d'envoi ; tri stable.
+    indexed = sorted(
+        enumerate(items),
+        key=lambda pair: (pair[1].get("selection_rank") is None, pair[1].get("selection_rank") or 0, pair[0]),
+    )
+    ordered = [item for _i, item in indexed]
+    ids = {item["membership_id"] for item in ordered}
+    members = {m.pk: m for m in Membership.all_objects.filter(club=event.club_id, pk__in=ids).select_related("user")}
+    return ordered, members
+
+
+def _bulk_result(membership_id, outcome, message, attendance=None) -> dict:
+    return {"membership_id": membership_id, "outcome": outcome, "message": message, "attendance": attendance}
+
+
+def _local_hhmm(event: Event, moment) -> str:
+    tz = _club_tz(_club_settings(event.club))
+    return moment.astimezone(tz).strftime("%H:%M")
+
+
+def _bulk_counts(results) -> dict:
+    return {key: sum(1 for r in results if r["outcome"] == key) for key in ("created", "skipped", "refused")}
+
+
+def _validate_common_arrival(event: Event, arrived_at, actor) -> None:
+    """Heure commune : Coach/Assistant seulement, dans la journée de
+    l'événement (fuseau du club), pas dans le futur."""
+
+    if not _is_coaching_staff(actor, event.club):
+        raise SportPermissionError("Seuls le Coach et son assistant peuvent indiquer une heure d'arrivée commune.")
+    tz = _club_tz(_club_settings(event.club))
+    if arrived_at > timezone.now():
+        raise SportValidationError("L'heure ne peut pas être dans le futur.")
+    if arrived_at.astimezone(tz).date() != event.event_date:
+        raise SportValidationError("L'heure doit être comprise dans la journée de la séance.")
+
+
+def mark_arrivals_bulk(*, event: Event, items, actor, arrived_at=None, batch_id=None) -> dict:
+    """Pointage d'arrivée groupé (une entrée de journal par joueur, avec
+    ``batch_id``). Jamais de statut forcé : le statut Présent/En retard est
+    calculé par le service unitaire à partir de l'heure. Chaque joueur est
+    traité dans sa propre transaction ; un échec n'arrête pas les autres.
+    Un joueur déjà pointé n'est pas écrasé (outcome « skipped »).
+
+    Refus du lot entier (exceptions) : SportValidationError (lot vide ou
+    trop grand, heure invalide), EventLockedError (verrou de minuit),
+    SportPermissionError (heure commune sans être Coach/Assistant)."""
+
+    batch_id = batch_id or str(uuid.uuid4())
+    ordered, members = _bulk_prepare(event, items, actor)
+    custom_time = arrived_at is not None
+    if custom_time:
+        _validate_common_arrival(event, arrived_at, actor)
+    when = arrived_at or timezone.now()
+    club_settings = _club_settings(event.club)
+    extra = {"batch_id": batch_id, "batch_size": len(ordered)}
+    if custom_time:
+        extra["common_time_entered_by_coach"] = True
+
+    session = match = None
+    if event.kind == Event.Kind.SESSION:
+        session = Session.all_objects.filter(club=event.club_id, event=event).first()
+    elif event.kind == Event.Kind.MATCH:
+        match = Match.all_objects.filter(club=event.club_id, event=event).first()
+    if session is None and match is None:
+        raise SportValidationError("Cet événement ne peut pas être pointé.")
+
+    results = []
+    for item in ordered:
+        mid = item["membership_id"]
+        membership = members.get(mid)
+        if membership is None:
+            results.append(_bulk_result(mid, "refused", "Ce joueur n'existe pas dans ce club."))
+            continue
+        existing = Attendance.all_objects.filter(club=event.club_id, event=event, membership=membership).first()
+        client_uuid = item.get("client_uuid")
+        if existing is None and client_uuid is not None:
+            try:
+                existing = _existing_attendance_for_client_uuid(event, membership, client_uuid)
+            except SportValidationError as exc:
+                results.append(_bulk_result(mid, "refused", str(exc)))
+                continue
+        if existing is not None:
+            if existing.arrived_at is not None:
+                message = f"Déjà pointé à {_local_hhmm(event, existing.arrived_at)}."
+            else:
+                message = "Déjà pointé (absence excusée)."
+            results.append(_bulk_result(mid, "skipped", message, existing))
+            continue
+        try:
+            with transaction.atomic():
+                kwargs = dict(
+                    membership=membership,
+                    arrived_at=when,
+                    marked_by=actor,
+                    client_uuid=client_uuid,
+                    client_recorded_at=item.get("client_recorded_at"),
+                    audit_extra=extra,
+                )
+                if session is not None:
+                    attendance = mark_arrival(session=session, **kwargs)
+                else:
+                    attendance = mark_match_arrival(match=match, **kwargs)
+        except SportError as exc:
+            results.append(_bulk_result(mid, "refused", str(exc)))
+            continue
+        except Exception:  # noqa: BLE001 - un joueur en échec ne bloque jamais les autres
+            logger.exception("Pointage groupé : échec inattendu pour le joueur %s", mid)
+            results.append(_bulk_result(mid, "refused", "Pointage non enregistré. Réessayez."))
+            continue
+        hhmm = _local_hhmm(event, attendance.arrived_at)
+        if attendance.status == Attendance.Status.PRESENT:
+            message = f"Pointé à {hhmm}."
+        elif club_settings.late_arrival_counts_absent:
+            message = f"Pointé en retard à {hhmm} (compté absent selon la règle du club)."
+        else:
+            message = f"Pointé en retard à {hhmm}."
+        results.append(_bulk_result(mid, "created", message, attendance))
+    return {"batch_id": batch_id, "results": results, "counts": _bulk_counts(results)}
+
+
+def excuse_absences_bulk(*, event: Event, items, actor, reason_code: str, reason_detail: str = "", batch_id=None) -> dict:
+    """Absences excusées groupées : Coach/Assistant seulement (vérifié ici,
+    pas seulement dans la vue). Seulement des joueurs non pointés."""
+
+    if not _is_coaching_staff(actor, event.club):
+        raise SportPermissionError("Seuls le Coach et son assistant marquent des absences excusées.")
+    if reason_code not in EXCUSE_REASON_LABELS:
+        raise SportValidationError("Choisissez un motif.")
+    reason_detail = (reason_detail or "").strip()
+    if len(reason_detail) > 200:
+        raise SportValidationError("La précision ne doit pas dépasser 200 caractères.")
+    batch_id = batch_id or str(uuid.uuid4())
+    ordered, members = _bulk_prepare(event, items, actor)
+    reason = EXCUSE_REASON_LABELS[reason_code] + (f" : {reason_detail}" if reason_detail else "")
+    extra = {"batch_id": batch_id, "batch_size": len(ordered), "reason_code": reason_code}
+
+    results = []
+    for item in ordered:
+        mid = item["membership_id"]
+        membership = members.get(mid)
+        if membership is None:
+            results.append(_bulk_result(mid, "refused", "Ce joueur n'existe pas dans ce club."))
+            continue
+        existing = Attendance.all_objects.filter(club=event.club_id, event=event, membership=membership).first()
+        if existing is not None:
+            results.append(
+                _bulk_result(
+                    mid, "skipped", "Déjà pointé : une absence excusée ne s'applique qu'à un joueur non pointé.", existing
+                )
+            )
+            continue
+        try:
+            with transaction.atomic():
+                attendance = mark_excused_absence(
+                    event=event, membership=membership, reason=reason, marked_by=actor, audit_extra=extra
+                )
+        except SportError as exc:
+            results.append(_bulk_result(mid, "refused", str(exc)))
+            continue
+        except Exception:  # noqa: BLE001
+            logger.exception("Absence excusée groupée : échec inattendu pour le joueur %s", mid)
+            results.append(_bulk_result(mid, "refused", "Absence non enregistrée. Réessayez."))
+            continue
+        results.append(_bulk_result(mid, "created", "Absence excusée enregistrée.", attendance))
+    return {"batch_id": batch_id, "results": results, "counts": _bulk_counts(results)}
 
 
 def add_to_composition(
@@ -1155,6 +1545,11 @@ def add_to_composition(
         raise PlayerNotEligibleError(playability.detail)
 
     existing = MatchComposition.all_objects.filter(club=match.club_id, match=match, membership=membership).first()
+    taken = MatchComposition.all_objects.filter(club=match.club_id, match=match, jersey_number=jersey_number)
+    if existing is not None:
+        taken = taken.exclude(pk=existing.pk)
+    if taken.exists():
+        raise SportValidationError(f"Le numéro {jersey_number} est déjà attribué à un autre joueur pour ce match.")
     if existing is not None:
         before = {"role": existing.role, "position": existing.position, "jersey_number": existing.jersey_number}
         existing.role, existing.position, existing.jersey_number, existing.added_by = role, position, jersey_number, added_by
@@ -1234,7 +1629,60 @@ def publish_composition(*, match: Match, published_by) -> Match:
 # ---------------------------------------------------------------------------
 
 
+def _result_post_body(match: Match, sheet: MatchSheet) -> str:
+    scorers = []
+    for goal in sheet.goals.select_related("scorer_membership__user").order_by("minute", "pk"):
+        if goal.scorer_membership_id:
+            user = goal.scorer_membership.user
+            label = f"{user.first_name} {user.last_name}".strip()
+            scorers.append(f"{label} {goal.minute}'" if goal.minute is not None else label)
+    body = f"Résultat : {match.club.name} {sheet.score_home} - {sheet.score_away} {_opponent_label(match)}."
+    if scorers:
+        body += " Buteurs : " + ", ".join(scorers) + "."
+    return body
+
+
+def _refresh_result_post(*, match: Match, sheet: MatchSheet, actor, before_score: Optional[dict]) -> None:
+    """Met à jour le post « résultat » déjà publié (même publication, pas de
+    doublon, visibilité inchangée) et journalise la mise à jour. Sans effet
+    si le résultat n'a pas été publié ou si le texte ne change pas."""
+
+    from apps.social.models import Post
+
+    post_id = Match.all_objects.filter(pk=match.pk, club=match.club_id).values_list("result_post_id", flat=True).first()
+    if post_id is None:
+        return
+    post = Post.all_objects.filter(pk=post_id, club=match.club_id, deleted_at__isnull=True).first()
+    if post is None:
+        return
+    body = _result_post_body(match, sheet)
+    if body == post.body:
+        return
+    before_body = post.body
+    post.body = body
+    post.save(update_fields=["body"])
+    after_score = {"score_home": sheet.score_home, "score_away": sheet.score_away}
+    log_action(
+        actor=actor,
+        club=match.club,
+        action_type="sport.match_result_post_updated",
+        obj=match,
+        before={**(before_score or after_score), "body": before_body},
+        after={**after_score, "body": body, "post_id": post.pk},
+    )
+
+
 def set_match_score(*, match: Match, score_home: int, score_away: int, filled_by) -> MatchSheet:
+    """Saisie du score (CDC 4.8). Verrouillé après minuit (fuseau du club ;
+    décision du client du 16/11/2026), sauf Superuser en session de support.
+    Les buts et passes, eux, restent modifiables après coup. Si le résultat
+    a déjà été publié, le post existant est mis à jour."""
+
+    if not getattr(filled_by, "is_superuser", False) and is_event_locked(match.event):
+        raise EventLockedError(
+            "Ce match est verrouillé depuis minuit : son score ne peut plus être modifié. "
+            "Seul le support peut le corriger, à la demande du Président."
+        )
     sheet = MatchSheet.all_objects.filter(club=match.club_id, match=match).first()
     if sheet is None:
         sheet = MatchSheet(club=match.club, match=match, score_home=score_home, score_away=score_away, filled_by=filled_by, filled_at=timezone.now())
@@ -1247,10 +1695,73 @@ def set_match_score(*, match: Match, score_home: int, score_away: int, filled_by
         sheet.save()
         action_type = "sport.match_score_updated"
     log_action(actor=filled_by, club=match.club, action_type=action_type, obj=sheet, before=before, after={"score_home": score_home, "score_away": score_away})
+    _refresh_result_post(match=match, sheet=sheet, actor=filled_by, before_score=before)
     return sheet
 
 
+def is_match_finished(match: Match, *, now: Optional[datetime] = None) -> bool:
+    """Vrai si l'heure du coup d'envoi est passée (fuseau du club)."""
+
+    now = now or timezone.now()
+    local_now = now.astimezone(_club_tz(_club_settings(match.club)))
+    event_date = match.event.event_date
+    if event_date != local_now.date():
+        return event_date < local_now.date()
+    return local_now.time() >= match.kickoff_time
+
+
+def publish_match_result(*, match: Match, published_by, now: Optional[datetime] = None) -> Match:
+    """Publie le résultat sur le fil du club en un clic (CDC 4.8).
+
+    Exige un score saisi et un match terminé ; une seule publication par
+    match. Visibilité « Club » (10.2 n° 160 : jamais public sans consentement).
+    """
+
+    from apps.social.services import create_auto_result_post
+
+    with transaction.atomic():
+        locked = (
+            Match.all_objects.select_for_update()
+            .select_related("event", "club", "opponent_club")
+            .get(pk=match.pk, club=match.club_id)
+        )
+        if locked.result_post_id is not None:
+            raise SportValidationError("Le résultat de ce match a déjà été publié sur le fil.")
+        sheet = MatchSheet.all_objects.filter(club=locked.club_id, match=locked).first()
+        if sheet is None:
+            raise SportValidationError("Saisissez d'abord le score du match avant de publier le résultat.")
+        if not is_match_finished(locked, now=now):
+            raise SportValidationError("Le match n'est pas encore terminé : le résultat ne peut pas être publié.")
+
+        body = _result_post_body(locked, sheet)
+
+        post = create_auto_result_post(club=locked.club, actor=published_by, body=body)
+        locked.result_post = post
+        locked.save(update_fields=["result_post"])
+        log_action(
+            actor=published_by,
+            club=locked.club,
+            action_type="sport.match_result_published",
+            obj=locked,
+            after={"post_id": post.pk, "visibility": post.visibility},
+        )
+    return locked
+
+
+def _refresh_result_post_for_sheet(sheet: MatchSheet, *, actor) -> None:
+    _refresh_result_post(
+        match=sheet.match, sheet=sheet, actor=actor,
+        before_score={"score_home": sheet.score_home, "score_away": sheet.score_away},
+    )
+
+
+def _check_scorer_assist(scorer_membership, assist_membership) -> None:
+    if scorer_membership is not None and assist_membership is not None and scorer_membership.pk == assist_membership.pk:
+        raise SportValidationError("Le passeur décisif doit être différent du buteur.")
+
+
 def add_goal(*, match_sheet: MatchSheet, created_by, scorer_membership=None, assist_membership=None, minute=None) -> MatchGoal:
+    _check_scorer_assist(scorer_membership, assist_membership)
     goal = MatchGoal(
         club=match_sheet.club, match_sheet=match_sheet, scorer_membership=scorer_membership,
         assist_membership=assist_membership, minute=minute, created_by=created_by,
@@ -1260,10 +1771,12 @@ def add_goal(*, match_sheet: MatchSheet, created_by, scorer_membership=None, ass
         actor=created_by, club=match_sheet.club, action_type="sport.goal_added", obj=goal,
         after={"scorer": getattr(scorer_membership, "pk", None), "minute": minute},
     )
+    _refresh_result_post_for_sheet(match_sheet, actor=created_by)
     return goal
 
 
 def update_goal(*, goal: MatchGoal, updated_by, scorer_membership=None, assist_membership=None, minute=None) -> MatchGoal:
+    _check_scorer_assist(scorer_membership, assist_membership)
     before = {
         "scorer": goal.scorer_membership_id, "assist": goal.assist_membership_id, "minute": goal.minute,
     }
@@ -1276,6 +1789,7 @@ def update_goal(*, goal: MatchGoal, updated_by, scorer_membership=None, assist_m
         actor=updated_by, club=goal.club, action_type="sport.goal_updated", obj=goal, before=before,
         after={"scorer": goal.scorer_membership_id, "assist": goal.assist_membership_id, "minute": minute},
     )
+    _refresh_result_post_for_sheet(goal.match_sheet, actor=updated_by)
     return goal
 
 
@@ -1284,7 +1798,9 @@ def delete_goal(*, goal: MatchGoal, deleted_by) -> None:
         actor=deleted_by, club=goal.club, action_type="sport.goal_deleted", obj=goal,
         before={"scorer": goal.scorer_membership_id, "minute": goal.minute},
     )
+    sheet = goal.match_sheet
     goal.delete()
+    _refresh_result_post_for_sheet(sheet, actor=deleted_by)
 
 
 # ---------------------------------------------------------------------------
@@ -1299,7 +1815,7 @@ def _notify_incident(incident: Incident, suspension: Optional[Suspension]) -> No
     label = dict(Incident.IncidentType.choices)[incident.incident_type]
     message = f"{label} reçu le {timezone.localtime(incident.recorded_at):%d/%m/%Y}."
     if suspension is not None:
-        message += f" Suspension automatique : {suspension.matches_total} match(s) (CDC 4.9)."
+        message += f" Suspension automatique : {suspension.matches_total} match(s)."
 
     create_notification(
         recipient=incident.membership.user,
@@ -1311,7 +1827,7 @@ def _notify_incident(incident: Incident, suspension: Optional[Suspension]) -> No
 
     coach_memberships = (
         Membership.all_objects.filter(
-            club=incident.club, roles__role=MembershipRole.Role.COACH, roles__revoked_at__isnull=True
+            club=incident.club, roles__role__in=COACHING_STAFF_ROLES, roles__revoked_at__isnull=True
         )
         .select_related("user")
         .distinct()
@@ -1477,7 +1993,7 @@ def submit_evaluation(
     :func:`get_average_evaluation`."""
 
     if is_evaluation_locked(event):
-        raise SportValidationError("La fenêtre d'évaluation de 48 h est dépassée (CDC 4.10).")
+        raise SportValidationError("La fenêtre d'évaluation de 48 h est dépassée.")
 
     has_participation = Attendance.all_objects.filter(
         club=event.club_id, event=event, membership=membership,
@@ -1638,19 +2154,26 @@ def remove_from_plan(*, placement: TacticalPlanPlacement, removed_by) -> None:
     placement.delete()
 
 
+_UNSET = object()
+
+
 def update_plan_placement_number_and_position(
-    *, placement: TacticalPlanPlacement, jersey_number: Optional[int], position: str, updated_by
+    *, placement: TacticalPlanPlacement, updated_by, jersey_number=_UNSET, position=_UNSET
 ) -> tuple[TacticalPlanPlacement, Optional[str]]:
     """Modifie le numéro/poste depuis le plan (CDC 4.11) : répercuté sur
-    la fiche joueur. Aucune règle d'unicité bloquante dans le CDC : un
-    simple avertissement non bloquant en cas de doublon
-    (sport-plan-tactique.md §4.5, point ouvert 4)."""
+    la fiche joueur. Un champ non transmis reste inchangé. Le numéro de
+    maillot est unique dans le club (CDC 4.1, tableau des champs) : un
+    doublon est refusé (le 10.2 n° 94 parle d'un simple avertissement :
+    contradiction signalée, position la plus restrictive appliquée)."""
 
     if placement.membership_id is None:
         raise SportValidationError("Cet emplacement n'a aucun joueur placé.")
 
     membership = placement.membership
-    warning = None
+    if jersey_number is _UNSET:
+        jersey_number = placement.jersey_number_override if placement.jersey_number_override is not None else membership.jersey_number
+    if position is _UNSET or position is None:
+        position = placement.position_override or membership.position
     if jersey_number is not None:
         duplicate = (
             Membership.all_objects.filter(club=membership.club_id, status=Membership.Status.ACTIVE, jersey_number=jersey_number)
@@ -1659,7 +2182,10 @@ def update_plan_placement_number_and_position(
             .first()
         )
         if duplicate is not None:
-            warning = f"Le numéro {jersey_number} est déjà porté par {duplicate.user.first_name} {duplicate.user.last_name}."
+            raise SportValidationError(
+                f"Le numéro {jersey_number} est déjà porté par {duplicate.user.first_name} {duplicate.user.last_name} : "
+                "choisissez un autre numéro."
+            )
 
     before = {"jersey_number": membership.jersey_number, "position": membership.position}
     placement.jersey_number_override = jersey_number
@@ -1672,7 +2198,7 @@ def update_plan_placement_number_and_position(
         actor=updated_by, club=membership.club, action_type="sport.tactical_plan_number_position_updated", obj=membership,
         before=before, after={"jersey_number": jersey_number, "position": position},
     )
-    return placement, warning
+    return placement, None
 
 
 def add_annotation(

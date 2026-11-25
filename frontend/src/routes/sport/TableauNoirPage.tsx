@@ -30,7 +30,11 @@ import {
   ConfirmDialog,
   EmptyState,
   FORMATION_LABELS,
+  IconBack,
   IconButton,
+  IconMore,
+  IconRedo,
+  IconUndo,
   Loader,
   Modal,
   PitchBoard,
@@ -44,6 +48,7 @@ import {
   type PitchPinData,
   useToast,
 } from "../../design-system";
+import { useClosingState } from "../../hooks/useClosingState";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { ChoosePlayerModal } from "./ChoosePlayerModal";
 import { ConsigneModal } from "./ConsigneModal";
@@ -178,12 +183,14 @@ export function TableauNoirPage() {
   const [consignesPanelOpen, setConsignesPanelOpen] = useState(false);
   const [cardMembershipId, setCardMembershipId] = useState<number | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const { mounted: menuMounted, dataState: menuDataState, onAnimationEnd: onMenuAnimationEnd } =
+    useClosingState(menuOpen, 200);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
   const pitchWrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!profileQuery.isLoading && !access.isCoach) {
-      navigate("/plans", { replace: true });
+      navigate("/vestiaire?onglet=plans", { replace: true });
     }
   }, [profileQuery.isLoading, access.isCoach, navigate]);
 
@@ -379,6 +386,8 @@ export function TableauNoirPage() {
       membershipId: p.membership_id as number,
       label: shortLabel(p.player?.name ?? ""),
       number: p.jersey_number_override ?? p.player?.jersey_number ?? null,
+      photoUrl: p.player?.photo ?? null,
+      fullName: p.player?.name,
       x: Number(p.x_coord),
       y: Number(p.y_coord),
       locked: Boolean(p.no_longer_eligible),
@@ -517,6 +526,8 @@ export function TableauNoirPage() {
                 membershipId: player.membership_id,
                 label: shortLabel(`${player.first_name} ${player.last_name}`),
                 number: player.jersey_number,
+                photoUrl: player.photo,
+                fullName: `${player.first_name} ${player.last_name}`,
                 x: 50,
                 y: 50,
               }}
@@ -555,8 +566,8 @@ export function TableauNoirPage() {
           {item.label}
         </button>
       ))}
-      <IconButton aria-label="Annuler" disabled={undoStack.length === 0} onClick={() => void handleUndo()} icon={<span aria-hidden>↶</span>} />
-      <IconButton aria-label="Rétablir" disabled={redoStack.length === 0} onClick={() => void handleRedo()} icon={<span aria-hidden>↷</span>} />
+      <IconButton aria-label="Annuler" disabled={undoStack.length === 0} onClick={() => void handleUndo()} icon={<IconUndo aria-hidden="true" className="h-5 w-5" />} />
+      <IconButton aria-label="Rétablir" disabled={redoStack.length === 0} onClick={() => void handleRedo()} icon={<IconRedo aria-hidden="true" className="h-5 w-5" />} />
       <Button
         size="sm"
         variant="ghost"
@@ -657,7 +668,7 @@ export function TableauNoirPage() {
         {plan.match_id ? ` · Match n° ${plan.match_id}` : ""}
       </p>
       <div className="flex h-12 items-center gap-2">
-        <IconButton aria-label="Retour aux plans" onClick={() => navigate("/plans")} icon={<span aria-hidden>←</span>} />
+        <IconButton aria-label="Retour aux plans" onClick={() => navigate("/vestiaire?onglet=plans")} icon={<IconBack aria-hidden="true" className="h-5 w-5" />} />
         <h1 className="min-w-0 flex-1 truncate text-lg font-semibold text-text">{plan.name}</h1>
         <span className="shrink-0 text-xs text-text-muted">
           {saveState === "saved" ? "Enregistré" : saveState === "saving" ? "Enregistrement…" : "Non enregistré"}
@@ -670,9 +681,13 @@ export function TableauNoirPage() {
           <span className="shrink-0 rounded-full bg-status-success-bg px-2 py-0.5 text-xs text-status-success-fg">Publié</span>
         )}
         <div className="relative">
-          <IconButton aria-label="Menu du plan" onClick={() => setMenuOpen((v) => !v)} icon={<span aria-hidden>⋯</span>} />
-          {menuOpen ? (
-            <div className="absolute right-0 z-20 mt-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated">
+          <IconButton aria-label="Plus d'actions" onClick={() => setMenuOpen((v) => !v)} icon={<IconMore aria-hidden="true" className="h-5 w-5" />} />
+          {menuMounted ? (
+            <div
+              data-state={menuDataState}
+              onAnimationEnd={onMenuAnimationEnd}
+              className="vesta-anim-menu absolute right-0 z-20 mt-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated"
+            >
               <button className="block w-full px-3 py-2 text-left text-sm hover:bg-surface-muted" onClick={() => { setMenuOpen(false); setSettingsOpen(true); }}>
                 Paramètres du plan
               </button>
@@ -905,7 +920,7 @@ export function TableauNoirPage() {
           await deleteTacticalPlan(planId);
           setDeleteConfirm(false);
           showToast("Plan supprimé.");
-          navigate("/plans");
+          navigate("/vestiaire?onglet=plans");
         }}
         onCancel={() => setDeleteConfirm(false)}
       />

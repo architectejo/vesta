@@ -1,8 +1,9 @@
-"""Revue indépendante : règles des dépenses (CDC 4.5.1, 4.5.2, 2.4, 7.2).
+"""Revue indépendante : règles des dépenses (CDC 4.5.1, 4.5.2, 2.4).
 
 Complète ``test_expenses.py`` sans le modifier : montants (arrondis, bornes),
 délai de justification et fuseau du club, blocage au jour près, dérogation,
-PIN (verrouillage, absence, jamais au journal), interleavings de concurrence,
+absence de PIN (décision client du 11/10/2026, CLAUDE.md règle 7 : aucun
+PIN demandé ni bloquant, auteur journalisé), interleavings de concurrence,
 immuabilité en masse, exhaustivité du journal.
 
 Aucune horloge externe : ``now=`` des services ou la fixture ``set_now``.
@@ -18,7 +19,6 @@ from django.contrib.auth.hashers import make_password
 from django.utils import timezone
 
 from apps.accounts.models import User
-from apps.accounts.services import InvalidPinError, PinError, PinLockedError, PinNotSetError
 from apps.audit.models import AuditLog, AuditLogImmutableError
 from apps.clubs.models import ClubSettings, MembershipRole
 from apps.core.tenant import active_club
@@ -34,7 +34,7 @@ from apps.treasury.models import (
     SocialAssistanceScale,
     Transaction,
 )
-from apps.treasury.tests.conftest import PIN, WRONG_PIN
+from apps.treasury.tests.conftest import PIN, WRONG_PIN, assert_logged_by
 from apps.treasury.tests.expense_helpers import (
     club_today,
     days_ago,
@@ -66,7 +66,9 @@ class TestAmounts:
         "bad",
         [
             "-5", "-0.01", "0", "0.00", "0.004", "abc", "", "  ", None, "NaN", "Infinity", "-Infinity",
-            True, 12.5, "10000000000.00", "1,5", "1 000",
+            # « 1,5 » est accepté depuis le correctif D-A7 (virgule décimale) ;
+            # plus de 2 décimales et notation scientifique sont refusées.
+            True, 12.5, "10000000000.00", "1,5,0", "1 000", "2.675", "1e3",
         ],
     )
     def test_invalid_amount_is_refused_and_nothing_is_written(self, ctx, bad):
@@ -84,12 +86,14 @@ class TestAmounts:
     @pytest.mark.parametrize(
         "given,stored",
         [
-            ("2.675", "2.68"),  # ROUND_HALF_UP exact (un float donnerait 2.67)
-            ("1.005", "1.01"),
-            ("0.005", "0.01"),
-            ("0.014", "0.01"),
-            ("7.125", "7.13"),
+            # D7 : ROUND_HALF_UP pour une valeur ``Decimal`` (calculée) ; une
+            # SAISIE texte à plus de 2 décimales est refusée (correctif D-A7).
+            (Decimal("2.675"), "2.68"),  # ROUND_HALF_UP exact (un float donnerait 2.67)
+            (Decimal("1.005"), "1.01"),
+            (Decimal("0.005"), "0.01"),
+            (Decimal("0.014"), "0.01"),
             (Decimal("7.125"), "7.13"),
+            ("1,5", "1.50"),
             (5, "5.00"),
             ("  12.5  ", "12.50"),
             ("9999999999.99", "9999999999.99"),
@@ -101,9 +105,9 @@ class TestAmounts:
 
     def test_ceiling_is_compared_after_rounding(self, ctx):
         category = make_category(ctx, ceiling="100")
-        assert make_expense(ctx, category, amount="100.004").amount == Decimal("100.00")
+        assert make_expense(ctx, category, amount=Decimal("100.004")).amount == Decimal("100.00")
         with pytest.raises(services.TreasuryValidationError, match="plafond"):
-            make_expense(ctx, category, amount="100.005")
+            make_expense(ctx, category, amount=Decimal("100.005"))
 
     def test_ten_releases_of_ten_cents_sum_exactly_without_float_drift(self, ctx):
         category = make_category(ctx, receipt_required=False)
@@ -182,8 +186,10 @@ class TestJustificationDeadline:
         assert [e.pk for e in marked] == [late.pk]
 
     def test_pending_and_refused_expenses_never_block_however_old(self, ctx):
-        old_pending = make_expense(ctx, make_category(ctx, name="A"), now=days_ago(90))
-        refused = make_expense(ctx, make_category(ctx, name="B"), now=days_ago(90))
+        # Date de dépense cohérente avec l'heure de saisie (jamais future, D-A6).
+        old_day = club_today(ctx) - datetime.timedelta(days=91)
+        old_pending = make_expense(ctx, make_category(ctx, name="A"), now=days_ago(90), expense_date=old_day)
+        refused = make_expense(ctx, make_category(ctx, name="B"), now=days_ago(90), expense_date=old_day)
         services.refuse_expense(expense=refused, refused_by=ctx.president.user, reason="Non", now=days_ago(80))
         check = services.can_release_expense(ctx.club)
         assert check.allowed and check.blocking_expense_ids == ()
@@ -253,11 +259,11 @@ class TestDerogationEdgeCases:
         # on la débloque par dérogation pour disposer de deux dépenses en retard.
         urgent_a = make_expense(ctx, make_category(ctx, name="U1"))
         services.release_expense_with_derogation(
-            expense=urgent_a, president=ctx.president.user, reason="Décès", pin=PIN, now=days_ago(20)
+            expense=urgent_a, president=ctx.president.user, reason="Décès", now=days_ago(20)
         )
         urgent_b = make_expense(ctx, make_category(ctx, name="U2"))
         released = services.release_expense_with_derogation(
-            expense=urgent_b, president=ctx.president.user, reason="Blessé", pin=PIN
+            expense=urgent_b, president=ctx.president.user, reason="Blessé"
         )
         derogation = ExpenseDerogation.all_objects.get(expense=released)
         assert sorted(derogation.blocking_expenses.values_list("pk", flat=True)) == sorted([first.pk, urgent_a.pk])
@@ -269,25 +275,23 @@ class TestDerogationEdgeCases:
         with pytest.raises(services.ExpenseReleaseBlockedError):
             release(ctx, again, by=ctx.president)
         with pytest.raises(services.TreasuryValidationError, match="motif de la dérogation"):
-            services.release_expense_with_derogation(expense=again, president=ctx.president.user, reason="", pin=PIN)
+            services.release_expense_with_derogation(expense=again, president=ctx.president.user, reason="")
 
-    def test_blank_reason_is_refused_before_the_pin_is_consumed(self, ctx):
+    def test_blank_reason_is_refused(self, ctx):
         _blockers, urgent = self._blocked_club_with_urgent(ctx)
         with pytest.raises(services.TreasuryValidationError):
             services.release_expense_with_derogation(
-                expense=urgent, president=ctx.president.user, reason="   ", pin=WRONG_PIN
+                expense=urgent, president=ctx.president.user, reason="   "
             )
-        ctx.president.user.refresh_from_db()
-        assert ctx.president.user.pin_failed_attempts == 0
+        assert not ExpenseDerogation.all_objects.exists()
+        assert Expense.all_objects.get(pk=urgent.pk).status == Expense.Status.PENDING
 
     @pytest.mark.parametrize("role", ["vice_president", "treasurer", "assistant_treasurer", "player"])
-    def test_derogation_by_a_non_president_is_refused_without_consuming_the_pin(self, ctx, role):
+    def test_derogation_by_a_non_president_is_refused(self, ctx, role):
         _blockers, urgent = self._blocked_club_with_urgent(ctx)
         user = getattr(ctx, role).user
         with pytest.raises(services.TreasuryPermissionError):
-            services.release_expense_with_derogation(expense=urgent, president=user, reason="Urgence", pin=WRONG_PIN)
-        user.refresh_from_db()
-        assert user.pin_failed_attempts == 0
+            services.release_expense_with_derogation(expense=urgent, president=user, reason="Urgence")
         assert not ExpenseDerogation.all_objects.exists()
         assert Expense.all_objects.get(pk=urgent.pk).status == Expense.Status.PENDING
 
@@ -296,7 +300,7 @@ class TestDerogationEdgeCases:
         for name, member in staff.all().items():
             with pytest.raises(services.TreasuryPermissionError):
                 services.release_expense_with_derogation(
-                    expense=urgent, president=member.user, reason="Urgence", pin=PIN
+                    expense=urgent, president=member.user, reason="Urgence"
                 )
         assert not ExpenseDerogation.all_objects.exists()
 
@@ -305,7 +309,7 @@ class TestDerogationEdgeCases:
         revoke_role(ctx.president, MembershipRole.Role.PRESIDENT)
         with pytest.raises(services.TreasuryPermissionError):
             services.release_expense_with_derogation(
-                expense=urgent, president=ctx.president.user, reason="Urgence", pin=PIN
+                expense=urgent, president=ctx.president.user, reason="Urgence"
             )
 
     @pytest.mark.parametrize("final", ["refused", "released"])
@@ -316,18 +320,18 @@ class TestDerogationEdgeCases:
             services.refuse_expense(expense=expense, refused_by=ctx.vice_president.user, reason="Non")
         else:
             services.release_expense_with_derogation(
-                expense=expense, president=ctx.president.user, reason="Urgence", pin=PIN
+                expense=expense, president=ctx.president.user, reason="Urgence"
             )
         with pytest.raises(services.TreasuryValidationError, match="plus en attente"):
             services.release_expense_with_derogation(
-                expense=expense, president=ctx.president.user, reason="Deux fois", pin=PIN
+                expense=expense, president=ctx.president.user, reason="Deux fois"
             )
         assert Transaction.all_objects.filter(expense=expense).count() == (1 if final == "released" else 0)
 
-    def test_derogation_journal_entry_carries_actor_club_reason_and_blocking_ids_but_no_pin(self, ctx):
+    def test_derogation_succeeds_without_pin_and_journal_carries_actor_club_reason_and_blocking_ids(self, ctx):
         blockers, urgent = self._blocked_club_with_urgent(ctx)
         services.release_expense_with_derogation(
-            expense=urgent, president=ctx.president.user, reason="Décès d'un joueur", pin=PIN
+            expense=urgent, president=ctx.president.user, reason="Décès d'un joueur"
         )
         entry = AuditLog.objects.get(action_type="treasury.expense.derogation_granted")
         assert entry.actor_id == ctx.president.user_id
@@ -337,101 +341,61 @@ class TestDerogationEdgeCases:
         assert "pin" not in {key.lower() for key in walk_keys(entry.after)}
         # Les deux écritures (dérogation + libération) sont journalisées.
         assert AuditLog.objects.filter(action_type="treasury.expense.released", object_id=str(urgent.pk)).count() == 1
+        assert_logged_by("treasury.expense.derogation_granted", ctx.president.user, club=ctx.club)
 
 
 # ---------------------------------------------------------------------------
-# PIN (CDC 7.2, CLAUDE.md règle n° 7)
+# Plus de PIN (décision client du 11/10/2026, CLAUDE.md règle 7) : la
+# libération et la dérogation se confirment par une modale côté interface ;
+# l'auteur est journalisé. L'ancien verrouillage ne bloque plus rien.
 # ---------------------------------------------------------------------------
 
 
-class TestPin:
-    def test_three_wrong_pins_lock_the_president_and_even_the_right_pin_is_then_refused(self, ctx):
-        expense = make_expense(ctx)
+class TestNoPin:
+    def test_repeated_releases_never_lock_the_president_and_each_author_is_journalised(self, ctx):
         user = ctx.president.user
-        with pytest.raises(InvalidPinError) as first:
-            services.release_expense(expense=expense, released_by=user, pin=WRONG_PIN)
-        assert first.value.attempts_remaining == 2
-        with pytest.raises(InvalidPinError) as second:
-            services.release_expense(expense=expense, released_by=user, pin=WRONG_PIN)
-        assert second.value.attempts_remaining == 1
-        with pytest.raises(PinLockedError):
-            services.release_expense(expense=expense, released_by=user, pin=WRONG_PIN)
-        with pytest.raises(PinLockedError):
-            services.release_expense(expense=expense, released_by=user, pin=PIN)
+        expenses = [make_expense(ctx, make_category(ctx, name=f"Dépense {i}")) for i in range(4)]
+        for expense in expenses:
+            assert services.release_expense(expense=expense, released_by=user).status == Expense.Status.RELEASED
+        assert_logged_by("treasury.expense.released", user, club=ctx.club, count=4)
 
-        assert Expense.all_objects.get(pk=expense.pk).status == Expense.Status.PENDING
-        assert not Transaction.all_objects.exists()
-        assert not AuditLog.objects.filter(action_type="treasury.expense.released").exists()
+    def test_the_release_services_no_longer_take_a_pin(self, ctx):
+        """Aucun PIN ne peut être transmis, donc aucun ne peut être utilisé."""
 
-    def test_release_works_again_once_the_lock_has_expired(self, ctx):
         expense = make_expense(ctx)
-        user = ctx.president.user
-        for _ in range(3):
-            with pytest.raises(PinError):
-                services.release_expense(expense=expense, released_by=user, pin=WRONG_PIN)
-        User.objects.filter(pk=user.pk).update(pin_locked_until=timezone.now() - datetime.timedelta(seconds=1))
-        user.refresh_from_db()
-        assert services.release_expense(expense=expense, released_by=user, pin=PIN).status == Expense.Status.RELEASED
-
-    def test_the_pin_lock_is_shared_between_release_and_derogation(self, ctx):
-        release(ctx, make_expense(ctx), now=days_ago(10))  # blocage actif
-        urgent = make_expense(ctx, make_category(ctx, name="Urgence"))
-        user = ctx.president.user
-        with pytest.raises(services.ExpenseReleaseBlockedError):
-            services.release_expense(expense=urgent, released_by=user, pin=WRONG_PIN)  # bloqué AVANT le PIN
-        for _ in range(2):
-            with pytest.raises(InvalidPinError):
-                services.release_expense_with_derogation(expense=urgent, president=user, reason="U", pin=WRONG_PIN)
-        with pytest.raises(PinLockedError):
-            services.release_expense_with_derogation(expense=urgent, president=user, reason="U", pin=WRONG_PIN)
-        with pytest.raises(PinLockedError):
-            services.release_expense_with_derogation(expense=urgent, president=user, reason="U", pin=PIN)
-        assert not ExpenseDerogation.all_objects.exists()
-
-    def test_a_validator_who_never_defined_a_pin_cannot_release(self, ctx):
-        expense = make_expense(ctx)
-        User.objects.filter(pk=ctx.vice_president.user_id).update(pin_hash="")
-        ctx.vice_president.user.refresh_from_db()
-        with pytest.raises(PinNotSetError):
-            services.release_expense(expense=expense, released_by=ctx.vice_president.user, pin=PIN)
-        assert Expense.all_objects.get(pk=expense.pk).status == Expense.Status.PENDING
-
-    @pytest.mark.parametrize("bad_pin", ["", "abcd", "0000", "24680", None, " 2468", "2468 "])
-    def test_empty_malformed_or_padded_pin_never_releases(self, ctx, bad_pin):
-        expense = make_expense(ctx)
-        with pytest.raises(PinError):
-            services.release_expense(expense=expense, released_by=ctx.president.user, pin=bad_pin)
-        assert Expense.all_objects.get(pk=expense.pk).status == Expense.Status.PENDING
-        assert not Transaction.all_objects.exists()
-
-    def test_pin_is_never_written_to_the_journal_nor_to_the_ledger(self, ctx):
-        expense = make_expense(ctx)
-        with pytest.raises(InvalidPinError):
+        with pytest.raises(TypeError):
             services.release_expense(expense=expense, released_by=ctx.president.user, pin=WRONG_PIN)
+        with pytest.raises(TypeError):
+            services.release_expense_with_derogation(
+                expense=expense, president=ctx.president.user, reason="U", pin=WRONG_PIN
+            )
+        assert Expense.all_objects.get(pk=expense.pk).status == Expense.Status.PENDING
+        assert not Transaction.all_objects.exists()
+
+    def test_no_pin_material_is_ever_written_to_the_journal_nor_to_the_ledger(self, ctx):
+        expense = make_expense(ctx)
         release(ctx, expense)
         late = release(ctx, make_expense(ctx, make_category(ctx, name="Autre")), now=days_ago(10))
         urgent = make_expense(ctx, make_category(ctx, name="Urgence"))
-        services.release_expense_with_derogation(expense=urgent, president=ctx.president.user, reason="U", pin=PIN)
+        services.release_expense_with_derogation(expense=urgent, president=ctx.president.user, reason="U")
         assert late.pk
 
-        pin_hash = User.objects.get(pk=ctx.president.user_id).pin_hash
         for entry in AuditLog.objects.all():
             for content in (entry.before, entry.after):
                 assert "pin" not in {key.lower().replace("_hash", "") for key in walk_keys(content)}, entry.action_type
                 text = dump(content)
                 assert f'"{PIN}"' not in text and f'"{WRONG_PIN}"' not in text
-                assert pin_hash not in text
         for txn in Transaction.all_objects.all():
             payload = services.transaction_canonical_payload(txn)
             assert PIN not in payload and WRONG_PIN not in payload
 
-    def test_a_refusal_neither_asks_for_nor_consumes_a_pin_attempt(self, ctx):
-        """CDC 4.5.2 : la validation exige le PIN, le refus motivé non (aucun essai consommé)."""
+    def test_a_refusal_is_journalised_with_its_author(self, ctx):
+        """CDC 4.5.2 : refus motivé, auteur journalisé (aucun PIN, comme la validation)."""
 
         refused = make_expense(ctx)
         services.refuse_expense(expense=refused, refused_by=ctx.vice_president.user, reason="Doublon")
         ctx.vice_president.user.refresh_from_db()
-        assert ctx.vice_president.user.pin_failed_attempts == 0
+        assert_logged_by("treasury.expense.refused", ctx.vice_president.user, club=ctx.club)
 
 
 # ---------------------------------------------------------------------------
@@ -442,36 +406,39 @@ class TestPin:
 
 class TestConcurrencyInterleavings:
     def _interleave(self, monkeypatch, action):
-        """Exécute ``action`` une seule fois pendant la vérification du PIN du premier appel."""
+        """Exécute ``action`` une seule fois entre les contrôles préalables
+        (sans verrou) et la transaction du premier appel. Point d'injection :
+        ``_precheck_ledger_writable``, dernier contrôle avant ``atomic()`` (il
+        remplace l'ancienne vérification du PIN, supprimée le 11/10/2026)."""
 
-        real = services.require_valid_pin
+        real = services._precheck_ledger_writable
         state = {"done": False}
 
-        def wrapper(*, user, pin):
-            real(user=user, pin=pin)
+        def wrapper(club):
+            real(club)
             if not state["done"]:
                 state["done"] = True
                 action()
 
-        monkeypatch.setattr(services, "require_valid_pin", wrapper)
+        monkeypatch.setattr(services, "_precheck_ledger_writable", wrapper)
 
     def test_two_releases_of_a_stale_copy_debit_the_cash_once(self, ctx):
         expense = make_expense(ctx, amount="30")
         stale = Expense.all_objects.get(pk=expense.pk)
         release(ctx, expense, by=ctx.vice_president)
         with pytest.raises(services.TreasuryValidationError, match="plus en attente"):
-            services.release_expense(expense=stale, released_by=ctx.president.user, pin=PIN)
+            services.release_expense(expense=stale, released_by=ctx.president.user)
         assert Transaction.all_objects.filter(expense=expense).count() == 1
         assert services.get_available_cash(ctx.club) == Decimal("-30.00")
         assert AuditLog.objects.filter(action_type="treasury.expense.released").count() == 1
 
-    def test_release_loses_the_race_when_a_competitor_releases_the_same_expense_during_the_pin_check(
+    def test_release_loses_the_race_when_a_competitor_releases_the_same_expense_during_the_prechecks(
         self, ctx, monkeypatch
     ):
         expense = make_expense(ctx, amount="30")
         self._interleave(monkeypatch, lambda: release(ctx, expense, by=ctx.vice_president))
         with pytest.raises(services.TreasuryValidationError, match="plus en attente"):
-            services.release_expense(expense=expense, released_by=ctx.president.user, pin=PIN)
+            services.release_expense(expense=expense, released_by=ctx.president.user)
         assert Transaction.all_objects.filter(expense=expense).count() == 1
         assert Expense.all_objects.get(pk=expense.pk).released_by_id == ctx.vice_president.user_id
         assert services.get_available_cash(ctx.club) == Decimal("-30.00")
@@ -481,14 +448,14 @@ class TestConcurrencyInterleavings:
     ):
         target = make_expense(ctx, make_category(ctx, name="Cible"))
         rival = make_expense(ctx, make_category(ctx, name="Rivale"))
-        # La rivale est libérée pendant la vérification du PIN, avec une échéance déjà dépassée.
+        # La rivale est libérée entre les contrôles préalables et le verrou, échéance déjà dépassée.
         self._interleave(monkeypatch, lambda: release(ctx, rival, by=ctx.vice_president, now=days_ago(10)))
         with pytest.raises(services.ExpenseReleaseBlockedError):
-            services.release_expense(expense=target, released_by=ctx.president.user, pin=PIN)
+            services.release_expense(expense=target, released_by=ctx.president.user)
         assert Expense.all_objects.get(pk=target.pk).status == Expense.Status.PENDING
         assert Transaction.all_objects.filter(club=ctx.club).count() == 1  # seulement la rivale
 
-    def test_derogation_is_refused_if_the_blocking_expense_was_justified_during_the_pin_check(
+    def test_derogation_is_refused_if_the_blocking_expense_was_justified_during_the_prechecks(
         self, ctx, monkeypatch
     ):
         late = release(ctx, make_expense(ctx), now=days_ago(10))
@@ -499,7 +466,7 @@ class TestConcurrencyInterleavings:
         )
         with pytest.raises(services.TreasuryValidationError, match="sans dérogation"):
             services.release_expense_with_derogation(
-                expense=urgent, president=ctx.president.user, reason="Urgence", pin=PIN
+                expense=urgent, president=ctx.president.user, reason="Urgence"
             )
         assert not ExpenseDerogation.all_objects.exists()
         assert Expense.all_objects.get(pk=urgent.pk).status == Expense.Status.PENDING
@@ -511,7 +478,7 @@ class TestConcurrencyInterleavings:
             lambda: services.refuse_expense(expense=expense, refused_by=ctx.vice_president.user, reason="Non"),
         )
         with pytest.raises(services.TreasuryValidationError, match="plus en attente"):
-            services.release_expense(expense=expense, released_by=ctx.president.user, pin=PIN)
+            services.release_expense(expense=expense, released_by=ctx.president.user)
         assert Expense.all_objects.get(pk=expense.pk).status == Expense.Status.REFUSED
         assert not Transaction.all_objects.exists()
 
@@ -679,7 +646,7 @@ class TestJournal:
         services.refuse_expense(expense=e2, refused_by=ctx.president.user, reason="Non")
         late = release(ctx, e1, now=days_ago(10))
         urgent = make_expense(ctx, c1)
-        services.release_expense_with_derogation(expense=urgent, president=ctx.president.user, reason="U", pin=PIN)
+        services.release_expense_with_derogation(expense=urgent, president=ctx.president.user, reason="U")
         services.justify_expense(expense=late, uploaded_by=ctx.treasurer.user, file=pdf_file())
 
         def count(action):
@@ -697,8 +664,8 @@ class TestJournal:
         expense = make_expense(ctx)
         before = treasury_logs().count()
         attempts = [
-            lambda: services.release_expense(expense=expense, released_by=ctx.treasurer.user, pin=PIN),
-            lambda: services.release_expense(expense=expense, released_by=staff.coach.user, pin=PIN),
+            lambda: services.release_expense(expense=expense, released_by=ctx.treasurer.user),
+            lambda: services.release_expense(expense=expense, released_by=staff.coach.user),
             lambda: services.refuse_expense(expense=expense, refused_by=ctx.treasurer.user, reason="x"),
             lambda: services.refuse_expense(expense=expense, refused_by=ctx.president.user, reason=""),
             lambda: services.create_expense_category(club=ctx.club, created_by=ctx.vice_president.user, name="X"),

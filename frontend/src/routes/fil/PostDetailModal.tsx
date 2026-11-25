@@ -9,7 +9,20 @@ import {
   togglePostLike,
 } from "../../api/social";
 import { ApiError } from "../../api/client";
-import { Avatar, Button, ConfirmDialog, EmptyState, Modal, Skeleton, TextArea, useToast } from "../../design-system";
+import {
+  Avatar,
+  Button,
+  ConfirmDialog,
+  EmptyState,
+  IconButton,
+  IconDelete,
+  IconMore,
+  Modal,
+  Skeleton,
+  TextArea,
+  useToast,
+} from "../../design-system";
+import { useClosingState } from "../../hooks/useClosingState";
 import { PostImagesGrid } from "./PostImagesGrid";
 import { ReportPostModal } from "./ReportPostModal";
 
@@ -37,9 +50,13 @@ export function PostDetailModal({
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const [menuOpen, setMenuOpen] = useState(false);
+  const { mounted: menuMounted, dataState: menuDataState, onAnimationEnd: onMenuAnimationEnd } =
+    useClosingState(menuOpen, 200);
   const [reportOpen, setReportOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteCommentId, setDeleteCommentId] = useState<number | null>(null);
+  const [deletingComment, setDeletingComment] = useState(false);
   const [commentBody, setCommentBody] = useState("");
   const [commentLimit, setCommentLimit] = useState(COMMENT_PAGE_SIZE);
   const [commentError, setCommentError] = useState<string | null>(null);
@@ -99,13 +116,17 @@ export function PostDetailModal({
   }
 
   async function handleDeleteComment(commentId: number): Promise<void> {
+    setDeletingComment(true);
     try {
       await deleteComment(commentId);
       showToast("Commentaire supprimé.");
       await queryClient.invalidateQueries({ queryKey: ["social", "post", postId] });
       await queryClient.invalidateQueries({ queryKey: ["social", "post", postId, "comments"] });
+      setDeleteCommentId(null);
     } catch {
       showToast("Connexion impossible. Vérifiez votre réseau et réessayez.");
+    } finally {
+      setDeletingComment(false);
     }
   }
 
@@ -135,11 +156,18 @@ export function PostDetailModal({
                 <Avatar name={`${post.author.first_name} ${post.author.last_name}`} photoUrl={post.author.avatar_url} size={40} />
               </div>
               <div className="relative">
-                <button type="button" onClick={() => setMenuOpen((v) => !v)} className="rounded-sm p-2 text-text-muted hover:bg-surface-muted" aria-label="Plus d'actions">
-                  ⋯
-                </button>
-                {menuOpen ? (
-                  <div role="menu" className="absolute right-0 z-10 mt-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated">
+                <IconButton
+                  onClick={() => setMenuOpen((v) => !v)}
+                  aria-label="Plus d'actions"
+                  icon={<IconMore aria-hidden="true" className="h-5 w-5" />}
+                />
+                {menuMounted ? (
+                  <div
+                    role="menu"
+                    data-state={menuDataState}
+                    onAnimationEnd={onMenuAnimationEnd}
+                    className="vesta-anim-menu absolute right-0 z-10 mt-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated"
+                  >
                     <button
                       type="button"
                       role="menuitem"
@@ -208,14 +236,12 @@ export function PostDetailModal({
                         <p className="text-sm text-text">{comment.body}</p>
                         <p className="text-[13px] text-text-muted">{formatDateHeure(comment.created_at)}</p>
                       </div>
-                      <button
-                        type="button"
+                      <IconButton
                         aria-label="Supprimer le commentaire"
-                        className="shrink-0 text-xs text-text-muted hover:text-status-danger-fg"
-                        onClick={() => void handleDeleteComment(comment.id)}
-                      >
-                        ⋯
-                      </button>
+                        className="shrink-0 text-text-muted hover:text-status-danger-fg"
+                        icon={<IconDelete aria-hidden="true" className="h-4 w-4" />}
+                        onClick={() => setDeleteCommentId(comment.id)}
+                      />
                     </div>
                   ))}
                 </div>
@@ -262,6 +288,16 @@ export function PostDetailModal({
             loading={deleting}
             onConfirm={() => void handleDelete()}
             onCancel={() => setDeleteOpen(false)}
+          />
+          <ConfirmDialog
+            open={deleteCommentId !== null}
+            title="Supprimer ce commentaire ?"
+            confirmLabel="Supprimer"
+            loading={deletingComment}
+            onConfirm={() => {
+              if (deleteCommentId !== null) void handleDeleteComment(deleteCommentId);
+            }}
+            onCancel={() => setDeleteCommentId(null)}
           />
         </>
       ) : null}

@@ -14,12 +14,11 @@ import {
   downloadExpenseAttachment,
   type TreasuryCapabilities,
 } from "../../api/treasury";
-import { Banner, Button, Modal, PinPrompt, StatusBadge, TextArea, useToast } from "../../design-system";
+import { Banner, Button, ConfirmDialog, Modal, StatusBadge, TextArea, useToast } from "../../design-system";
 import { getMaterialAccess } from "../logistics/materielAccess";
 import { AttachmentLink } from "./AttachmentLink";
 import { expenseStatusKey } from "./expenseLabels";
 import { formatAmount, formatDateFr } from "./money";
-import { formatPinError } from "./pinErrors";
 import { ReceiptUploadModal } from "./ReceiptUploadModal";
 
 const EXPENSE_QUERY_KEY_PREFIX = ["treasury", "expense"] as const;
@@ -59,9 +58,8 @@ export function ExpenseDetailModal({ expenseId, capabilities, onClose, onChanged
   const [derogationReason, setDerogationReason] = useState("");
   const [derogationReasonError, setDerogationReasonError] = useState<string | undefined>(undefined);
 
-  const [pinAction, setPinAction] = useState<PendingAction>(null);
-  const [pinSubmitting, setPinSubmitting] = useState(false);
-  const [pinError, setPinError] = useState<string | undefined>(undefined);
+  const [confirmAction, setConfirmAction] = useState<PendingAction>(null);
+  const [confirmSubmitting, setConfirmSubmitting] = useState(false);
 
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [receiptSubmitting, setReceiptSubmitting] = useState(false);
@@ -77,8 +75,7 @@ export function ExpenseDetailModal({ expenseId, capabilities, onClose, onChanged
       setDerogationOpen(false);
       setDerogationReason("");
       setDerogationReasonError(undefined);
-      setPinAction(null);
-      setPinError(undefined);
+      setConfirmAction(null);
       setReceiptOpen(false);
       setReceiptError(undefined);
       setActionError(undefined);
@@ -147,8 +144,7 @@ export function ExpenseDetailModal({ expenseId, capabilities, onClose, onChanged
   }
 
   function openRelease(): void {
-    setPinError(undefined);
-    setPinAction("release");
+    setConfirmAction("release");
   }
 
   function openDerogation(): void {
@@ -163,41 +159,30 @@ export function ExpenseDetailModal({ expenseId, capabilities, onClose, onChanged
       return;
     }
     setDerogationOpen(false);
-    setPinError(undefined);
-    setPinAction("derogation");
+    setConfirmAction("derogation");
   }
 
-  async function submitPin(pin: string): Promise<void> {
+  async function submitConfirmed(): Promise<void> {
     if (!expense) return;
-    setPinSubmitting(true);
-    setPinError(undefined);
+    if (confirmSubmitting) return;
+    setConfirmSubmitting(true);
     try {
-      if (pinAction === "release") {
-        await releaseExpense(expense.id, pin);
-        setPinAction(null);
+      if (confirmAction === "release") {
+        await releaseExpense(expense.id);
+        setConfirmAction(null);
         afterAction();
         showToast("Dépense libérée. Le justificatif est attendu sous peu.");
-      } else if (pinAction === "derogation") {
-        await releaseExpenseWithDerogation(expense.id, derogationReason.trim(), pin);
-        setPinAction(null);
+      } else if (confirmAction === "derogation") {
+        await releaseExpenseWithDerogation(expense.id, derogationReason.trim());
+        setConfirmAction(null);
         afterAction();
         showToast("Dépense libérée par dérogation.");
       }
     } catch (error) {
-      if (
-        error instanceof ApiError &&
-        (error.status === 400 || error.status === 423) &&
-        error.raw &&
-        typeof error.raw === "object" &&
-        ("attempts_remaining" in (error.raw as object) || "locked_until" in (error.raw as object))
-      ) {
-        setPinError(formatPinError(error));
-      } else {
-        setPinAction(null);
-        setActionError(apiErrorMessage(error));
-      }
+      setConfirmAction(null);
+      setActionError(apiErrorMessage(error));
     } finally {
-      setPinSubmitting(false);
+      setConfirmSubmitting(false);
     }
   }
 
@@ -342,7 +327,7 @@ export function ExpenseDetailModal({ expenseId, capabilities, onClose, onChanged
             Refuser
           </Button>
           {blocked && canDerogate ? (
-            <Button variant="primary" size="md" onClick={openDerogation}>
+            <Button variant="danger" size="md" onClick={openDerogation}>
               Libérer par dérogation
             </Button>
           ) : null}
@@ -423,6 +408,11 @@ export function ExpenseDetailModal({ expenseId, capabilities, onClose, onChanged
         confirmLabel="Continuer"
         onConfirm={confirmDerogationReason}
       >
+        {expense ? (
+          <p className="mb-3 text-sm text-text">
+            Dépense de {formatAmount(expense.amount, expense.currency)} pour {expense.beneficiary_name}.
+          </p>
+        ) : null}
         <TextArea
           label="Motif de la dérogation"
           value={derogationReason}
@@ -432,18 +422,29 @@ export function ExpenseDetailModal({ expenseId, capabilities, onClose, onChanged
         />
       </Modal>
 
-      <PinPrompt
-        open={pinAction !== null}
-        title="Confirmer avec votre code PIN"
-        description={
-          pinAction === "derogation"
-            ? "Saisissez votre code PIN pour confirmer la dérogation."
-            : `Saisissez votre code PIN pour libérer cette dépense de ${expense ? formatAmount(expense.amount, expense.currency) : ""}.`
+      <ConfirmDialog
+        open={confirmAction !== null}
+        danger={confirmAction === "derogation"}
+        title={
+          confirmAction === "derogation"
+            ? `Libérer cette dépense de ${expense ? formatAmount(expense.amount, expense.currency) : ""} par dérogation ?`
+            : `Libérer cette dépense de ${expense ? formatAmount(expense.amount, expense.currency) : ""} ?`
         }
-        isSubmitting={pinSubmitting}
-        error={pinError}
-        onSubmit={(pin) => void submitPin(pin)}
-        onClose={() => setPinAction(null)}
+        description={
+          <>
+            {expense ? <p className="mb-2 text-text">Bénéficiaire : {expense.beneficiary_name}</p> : null}
+            <p>
+              {confirmAction === "derogation"
+                ? "La dérogation sera enregistrée avec votre nom et le motif indiqué dans le journal d'activité."
+                : "Les fonds seront décaissés et le justificatif sera attendu sous peu."}
+            </p>
+          </>
+        }
+        confirmLabel={confirmAction === "derogation" ? "Confirmer la dérogation" : "Libérer la dépense"}
+        loadingLabel="Libération…"
+        loading={confirmSubmitting}
+        onConfirm={() => void submitConfirmed()}
+        onCancel={() => setConfirmAction(null)}
       />
 
       <ReceiptUploadModal

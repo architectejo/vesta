@@ -251,6 +251,28 @@ class TestCaptainViews:
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data["role"] == MembershipRole.Role.CAPTAIN
 
+    def test_le_meme_joueur_ne_peut_pas_etre_capitaine_deux_fois(self):
+        from apps.clubs.tests.factories import ClubSettingsFactory
+
+        club = ClubFactory()
+        ClubSettingsFactory(club=club, board_seats_per_role=3)
+        coach = MembershipFactory(club=club)
+        MembershipRoleFactory(membership=coach, role=MembershipRole.Role.COACH)
+        target = MembershipFactory(club=club)
+        client = _authenticated_client(coach.user)
+        url = reverse("clubs:captain-appoint")
+
+        assert client.post(url, {"membership_id": target.id}, format="json").status_code == status.HTTP_201_CREATED
+        again = client.post(url, {"membership_id": target.id}, format="json")
+        assert again.status_code == status.HTTP_400_BAD_REQUEST
+        assert "déjà Capitaine" in again.data["detail"]
+        assert (
+            MembershipRole.all_objects.filter(
+                membership=target, role=MembershipRole.Role.CAPTAIN, revoked_at__isnull=True
+            ).count()
+            == 1
+        )
+
     def test_le_president_seul_ne_peut_pas_choisir_le_capitaine(self):
         """Matrice 2.4 : « Choix du Capitaine » est L pour le President, É pour le Coach."""
 

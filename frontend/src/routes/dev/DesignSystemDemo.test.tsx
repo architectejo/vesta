@@ -21,6 +21,13 @@ describe("DesignSystemDemoPage", () => {
     // Sidebar : nom de club fictif lu depuis le contexte, jamais en dur.
     expect(screen.getAllByText("Club fictif de démonstration").length).toBeGreaterThan(0);
 
+    // Graphiques : section présente, cartes et données fictives.
+    expect(
+      screen.getByRole("heading", { name: "Graphiques (SVG maison, données fictives)" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("figure", { name: "Taux de présence par séance" })).toBeInTheDocument();
+    expect(screen.getByRole("figure", { name: "Comparaison de deux joueurs fictifs" })).toBeInTheDocument();
+
     // Footer : texte exact et unique.
     expect(
       screen.getByText(

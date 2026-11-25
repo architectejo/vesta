@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { ClubBrandingProvider, Footer, Sidebar, type SidebarNavGroup } from "../../design-system";
+import { NotificationBellWidget } from "../../layouts/NotificationBellWidget";
 import { SupportSessionBanner } from "./SupportSessionBanner";
 
 const NAV_GROUPS: SidebarNavGroup[] = [
@@ -47,8 +48,12 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           profileHref="/admin"
           onNavigate={(href) => navigate(href)}
           onLogout={() => void handleLogout()}
+          topbarRight={<NotificationBellWidget variant="sidebar" />}
         />
         <div className="flex flex-1 flex-col">
+          <div className="hidden h-topbar items-center justify-end gap-2 border-b border-border px-4 lg:flex">
+            <NotificationBellWidget />
+          </div>
           <SupportSessionBanner />
           <main className="mx-auto w-full max-w-5xl flex-1 px-3 py-4 sm:px-4">{children}</main>
           <Footer />

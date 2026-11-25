@@ -32,10 +32,8 @@ export interface AssistanceRequestDetailModalProps {
  * Modale « Demande d'assistance de {nom} » (fiche
  * `tresorerie-depenses-assistance.md` §4.2 ; CDC 4.5.3 ; 10.2 n° 33 et 37).
  * L'éligibilité, le montant du barème et le délai viennent uniquement de
- * l'API : jamais recalculés ici. L'acceptation ne demande pas de code PIN à
- * cette étape (§9.1 de la fiche, résolu côté API par
- * `SocialAssistanceApproveView`) ; elle crée une dépense « En attente » qui
- * suit ensuite le circuit normal, PIN compris, de la page Dépenses.
+ * l'API : jamais recalculés ici. L'acceptation crée une dépense « En attente »
+ * qui suit ensuite le circuit normal de la page Dépenses.
  */
 export function AssistanceRequestDetailModal({
   requestId,

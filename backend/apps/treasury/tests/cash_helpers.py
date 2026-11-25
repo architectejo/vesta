@@ -14,7 +14,6 @@ import uuid
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from django.contrib.auth.hashers import make_password
 from django.utils import timezone
 
 from apps.accounts.tests.factories import UserFactory
@@ -22,7 +21,6 @@ from apps.clubs.models import Membership
 from apps.clubs.tests.factories import MembershipFactory
 from apps.treasury import services
 from apps.treasury.models import ContributionType, Due
-from apps.treasury.tests.conftest import PIN
 
 TYPE_CREATED_AT = datetime.datetime(2025, 1, 5, 12, 0, tzinfo=datetime.timezone.utc)
 
@@ -69,7 +67,7 @@ def free_type(ctx, *, name="Vestiaire"):
 
 
 def named_member(ctx, *, first_name, last_name, jersey_number=None, status=Membership.Status.ACTIVE, joined_on=None):
-    user = UserFactory(first_name=first_name, last_name=last_name, pin_hash=make_password(PIN))
+    user = UserFactory(first_name=first_name, last_name=last_name)
     return MembershipFactory(
         club=ctx.club,
         user=user,
@@ -100,7 +98,7 @@ def put_in_debt(ctx, membership, ctype, *, amount="10", months_ago=2):
 
 def open_session(ctx, member=None, *, now=None):
     session, _ = services.open_cash_session(
-        club=ctx.club, user=(member or ctx.treasurer).user, pin=PIN, now=now or timezone.now()
+        club=ctx.club, user=(member or ctx.treasurer).user, now=now or timezone.now()
     )
     return session
 

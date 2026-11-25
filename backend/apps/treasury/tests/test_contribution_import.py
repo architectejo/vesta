@@ -19,12 +19,11 @@ from decimal import Decimal
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 
-from apps.accounts.services import InvalidPinError
 from apps.audit.models import AuditLog
 from apps.clubs.models import ImportBatch, Membership
 from apps.treasury import services
 from apps.treasury.models import ContributionType, Due, Payment, PaymentAllocation, Transaction
-from apps.treasury.tests.conftest import PIN, WRONG_PIN
+from apps.treasury.tests.conftest import PIN, assert_logged_by
 from apps.treasury.tests.grid_helpers import (
     NOW,
     TODAY,
@@ -53,9 +52,9 @@ def preview(ctx, ctype, upload, *, year=YEAR, user=None, now=NOW):
     )
 
 
-def run_import(ctx, ctype, upload, *, year=YEAR, user=None, pin=PIN, now=NOW):
+def run_import(ctx, ctype, upload, *, year=YEAR, user=None, now=NOW):
     return services.import_contributions(
-        contribution_type=ctype, year=year, csv_file=upload, imported_by=(user or ctx.treasurer).user, pin=pin, now=now
+        contribution_type=ctype, year=year, csv_file=upload, imported_by=(user or ctx.treasurer).user, now=now
     )
 
 
@@ -82,7 +81,7 @@ def amounts(row):
 @pytest.fixture
 def setup(ctx):
     ctype = attached_type(ctx)
-    member = player(ctx, "Adolphe", "Abedi", email="adolphe.abedi@example.com")
+    member = player(ctx, "Adolphe", "Akeba", email="adolphe.akeba@example.com")
     attach(ctx, member, ctype)
     return ctype, member
 
@@ -91,7 +90,7 @@ class TestApercu:
     def test_apercu_n_ecrit_rien(self, ctx, setup):
         ctype, _ = setup
         before = counts()
-        report = preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "60", "ok", "ok")]))
+        report = preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "60", "ok", "ok")]))
         assert report.is_preview and report.import_batch is None
         assert counts() == before
         row = only_row(report)
@@ -100,7 +99,7 @@ class TestApercu:
 
     def test_ok_seul_est_un_paiement_au_montant_plein(self, ctx, setup):
         ctype, _ = setup
-        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "ok")])))
+        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "ok")])))
         assert amounts(row) == [(1, D("10.00"))]
         assert row.payments[0].origin == "ok" and row.payments[0].paid_on == datetime.date(2026, 1, 1)
 
@@ -109,7 +108,7 @@ class TestApercu:
         suivants » -- même moteur que le paiement normal."""
 
         ctype, _ = setup
-        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "60")])))
+        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "60")])))
         assert amounts(row) == [(1, D("60.00"))]
         cells = row.grid_row.cells
         assert [cell.state for cell in cells[:6]] == ["paid"] * 6
@@ -121,23 +120,23 @@ class TestApercu:
         versement de 60 $, pas 110 $."""
 
         ctype, _ = setup
-        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "60", "ok", "ok", "ok", "ok", "ok")])))
+        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "60", "ok", "ok", "ok", "ok", "ok")])))
         assert amounts(row) == [(1, D("60.00"))]
 
     def test_ok_au_dela_de_la_couverture_cree_le_complement(self, ctx, setup):
         ctype, _ = setup
-        line = csv_line("Adolphe Abedi", "50", "ok", "ok", "ok", "ok", "ok", "ok")
+        line = csv_line("Adolphe Akeba", "50", "ok", "ok", "ok", "ok", "ok", "ok")
         row = only_row(preview(ctx, ctype, csv_file([line])))
         assert amounts(row) == [(1, D("50.00")), (6, D("10.00")), (7, D("10.00"))]
 
     def test_ok_complete_un_mois_partiel(self, ctx, setup):
         ctype, _ = setup
-        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "15", "ok")])))
+        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "15", "ok")])))
         assert amounts(row) == [(1, D("15.00")), (2, D("5.00"))]
 
     def test_cellules_vides_rien_paye_mais_montants_dus(self, ctx, setup):
         ctype, _ = setup
-        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi")])))
+        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba")])))
         assert row.status == "ok" and row.payments == ()
         assert [line.period.month for line in row.dues] == list(range(1, 10))
         assert row.balance_after == D("-90.00")
@@ -145,26 +144,26 @@ class TestApercu:
 
     def test_montant_sur_un_mois_futur_date_du_jour(self, ctx, setup):
         ctype, _ = setup
-        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", *([""] * 10), "10")])))
+        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", *([""] * 10), "10")])))
         assert row.payments[0].period == period(11) and row.payments[0].paid_on == TODAY
 
     @pytest.mark.parametrize("value", ["-10", "abc", "10.555", "1,000", "10 EUR", "ok!", "1e3"])
     def test_valeur_illisible_fait_echouer_la_ligne(self, ctx, setup, value):
         ctype, _ = setup
-        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10", value)])))
+        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10", value)])))
         assert row.failed and row.payments == ()
         assert row.errors == (f"Valeur illisible en févr. 2026 : « {value} ».",)
 
     @pytest.mark.parametrize("value,expected", [("10$", "10.00"), ("$ 12,50", "12.50"), ("10 USD", "10.00"), ("OK", "10.00"), ("Ok", "10.00")])
     def test_valeurs_acceptees(self, ctx, setup, value, expected):
         ctype, _ = setup
-        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", value)])))
+        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", value)])))
         assert amounts(row) == [(1, D(expected))]
 
     @pytest.mark.parametrize("value", ["0", "-", "—", "   "])
     def test_valeurs_equivalentes_a_rien(self, ctx, setup, value):
         ctype, _ = setup
-        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", value)])))
+        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", value)])))
         assert row.status == "ok" and row.payments == ()
 
 
@@ -172,27 +171,27 @@ class TestRechercheDuJoueur:
     def test_email_prioritaire(self, ctx, setup):
         ctype, member = setup
         header = "email;nom;" + ";".join(["janv.", "févr."])
-        upload = csv_file(["ADOLPHE.ABEDI@example.com;Nom Different;10;"], header=header)
+        upload = csv_file(["ADOLPHE.AKEBA@example.com;Nom Different;10;"], header=header)
         row = only_row(preview(ctx, ctype, upload))
         assert row.membership.pk == member.pk
         assert "joueur trouvé par son email" in row.warnings[0]
 
     def test_nom_dans_n_importe_quel_ordre_sans_casse_ni_accents(self, ctx, setup):
         ctype, member = setup
-        for name in ("ABEDI ADOLPHE", "adolphe abédi", "  Abedi   Adolphe "):
+        for name in ("AKEBA ADOLPHE", "adolphe akéba", "  Akeba   Adolphe "):
             row = only_row(preview(ctx, ctype, csv_file([csv_line(name, "10")])))
             assert row.membership is not None and row.membership.pk == member.pk, name
 
     def test_email_inconnu_puis_nom(self, ctx, setup):
         ctype, member = setup
-        upload = csv_file(["inconnu@example.com;Adolphe Abedi;10"], header="email;nom;janv.")
+        upload = csv_file(["inconnu@example.com;Adolphe Akeba;10"], header="email;nom;janv.")
         row = only_row(preview(ctx, ctype, upload))
         assert row.membership.pk == member.pk
         assert row.warnings[0] == "Email inconnu dans ce club : joueur trouvé par son nom."
 
     def test_prenom_et_nom_en_deux_colonnes(self, ctx, setup):
         ctype, member = setup
-        row = only_row(preview(ctx, ctype, csv_file(["Adolphe;Abedi;10"], header="prénom;nom;janv.")))
+        row = only_row(preview(ctx, ctype, csv_file(["Adolphe;Akeba;10"], header="prénom;nom;janv.")))
         assert row.membership.pk == member.pk
 
     def test_joueur_introuvable(self, ctx, setup):
@@ -202,15 +201,15 @@ class TestRechercheDuJoueur:
 
     def test_nom_ambigu_echoue(self, ctx, setup):
         ctype, _ = setup
-        homonym = player(ctx, "Adolphe", "Abedi")
+        homonym = player(ctx, "Adolphe", "Akeba")
         attach(ctx, homonym, ctype)
-        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10")])))
+        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10")])))
         assert row.failed and "Plusieurs joueurs du club portent le nom" in row.errors[0]
 
     def test_email_et_nom_de_deux_joueurs_differents(self, ctx, setup):
         ctype, _ = setup
-        player(ctx, "Serge", "Kadiobo")
-        upload = csv_file(["adolphe.abedi@example.com;Serge Kadiobo;10"], header="email;nom;janv.")
+        player(ctx, "Serge", "Lokwa")
+        upload = csv_file(["adolphe.akeba@example.com;Serge Lokwa;10"], header="email;nom;janv.")
         row = only_row(preview(ctx, ctype, upload))
         assert row.failed and row.errors == ("L'email et le nom désignent deux joueurs différents du club : ligne ignorée.",)
 
@@ -234,7 +233,7 @@ class TestRechercheDuJoueur:
 
     def test_meme_joueur_sur_deux_lignes(self, ctx, setup):
         ctype, _ = setup
-        report = preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10"), csv_line("Abedi Adolphe", "10")]))
+        report = preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10"), csv_line("Akeba Adolphe", "10")]))
         assert not report.rows[0].failed
         assert report.rows[1].errors == ("Joueur déjà présent à la ligne 2 : ligne ignorée.",)
 
@@ -250,7 +249,7 @@ class TestFichier:
         text = (
             "COTISATIONS MENSUELLES 2026;;;\n"
             "N°S;NOMS;Jan-26;Feb-26;Total\n"
-            "01;ABEDI ADOLPHE;10;10;20\n"
+            "01;AKEBA ADOLPHE;10;10;20\n"
             ";;;;\n"
         )
         upload = SimpleUploadedFile("f.csv", text.encode("utf-8"), content_type="text/csv")
@@ -261,7 +260,7 @@ class TestFichier:
 
     def test_separateur_virgule(self, ctx, setup):
         ctype, _ = setup
-        upload = csv_file([csv_line("Adolphe Abedi", "10", '"12,5"', delimiter=",")], delimiter=",")
+        upload = csv_file([csv_line("Adolphe Akeba", "10", '"12,5"', delimiter=",")], delimiter=",")
         assert amounts(only_row(preview(ctx, ctype, upload))) == [(1, D("10.00")), (2, D("12.50"))]
 
     @pytest.mark.parametrize(
@@ -270,18 +269,18 @@ class TestFichier:
     )
     def test_formats_d_en_tete_des_mois(self, ctx, setup, header):
         ctype, _ = setup
-        upload = csv_file(["Adolphe Abedi;10;ok"], header=header)
+        upload = csv_file(["Adolphe Akeba;10;ok"], header=header)
         assert amounts(only_row(preview(ctx, ctype, upload))) == [(1, D("10.00")), (2, D("10.00"))]
 
     def test_annee_des_colonnes_differente(self, ctx, setup):
         ctype, _ = setup
         with pytest.raises(services.ContributionImportError, match="concerne l'année 2025"):
-            preview(ctx, ctype, csv_file(["Adolphe Abedi;10"], header="Nom;Jan-25"))
+            preview(ctx, ctype, csv_file(["Adolphe Akeba;10"], header="Nom;Jan-25"))
 
     def test_mois_en_double(self, ctx, setup):
         ctype, _ = setup
         with pytest.raises(services.ContributionImportError, match="plusieurs colonnes"):
-            preview(ctx, ctype, csv_file(["Adolphe Abedi;10;10"], header="Nom;janv.;janvier"))
+            preview(ctx, ctype, csv_file(["Adolphe Akeba;10;10"], header="Nom;janv.;janvier"))
 
     def test_en_tete_introuvable(self, ctx, setup):
         ctype, _ = setup
@@ -290,7 +289,7 @@ class TestFichier:
 
     def test_fichier_non_utf8(self, ctx, setup):
         ctype, _ = setup
-        upload = SimpleUploadedFile("f.csv", "Nom;févr.\nAbédi;10\n".encode("cp1252"), content_type="text/csv")
+        upload = SimpleUploadedFile("f.csv", "Nom;févr.\nAkéba;10\n".encode("cp1252"), content_type="text/csv")
         with pytest.raises(services.ContributionImportError, match="UTF-8"):
             preview(ctx, ctype, upload)
 
@@ -309,14 +308,14 @@ class TestFichier:
     def test_annee_future_refusee(self, ctx, setup):
         ctype, _ = setup
         with pytest.raises(services.TreasuryValidationError, match="Année invalide"):
-            preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10")]), year=2027)
+            preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10")]), year=2027)
 
     def test_type_archive_refuse(self, ctx, setup):
         ctype, _ = setup
         services.archive_contribution_type(contribution_type=ctype, archived_by=ctx.president.user)
         ctype.refresh_from_db()
         with pytest.raises(services.TreasuryValidationError, match="archivé"):
-            preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10")]))
+            preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10")]))
 
     def test_type_obligatoire_non_mensuel_refuse(self, ctx, fee_type):
         with pytest.raises(services.TreasuryValidationError, match="mensuels ou libres"):
@@ -328,20 +327,20 @@ class TestRoles:
     def test_seuls_tresorier_et_adjoint(self, ctx, setup, role):
         ctype, _ = setup
         with pytest.raises(services.TreasuryPermissionError):
-            preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10")]), user=getattr(ctx, role))
+            preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10")]), user=getattr(ctx, role))
         with pytest.raises(services.TreasuryPermissionError):
-            run_import(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10")]), user=getattr(ctx, role))
+            run_import(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10")]), user=getattr(ctx, role))
 
     def test_adjoint_autorise(self, ctx, setup):
         ctype, _ = setup
-        report = run_import(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10")]), user=ctx.assistant_treasurer)
+        report = run_import(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10")]), user=ctx.assistant_treasurer)
         assert report.success_count == 1
 
 
 class TestImportDefinitif:
     def test_paiements_normaux_consultables_dans_la_grille_et_le_solde(self, ctx, setup):
         ctype, member = setup
-        upload_lines = [csv_line("Adolphe Abedi", "60", "ok", "ok", "ok", "ok", "ok", "", "10")]
+        upload_lines = [csv_line("Adolphe Akeba", "60", "ok", "ok", "ok", "ok", "ok", "", "10")]
         expected = only_row(preview(ctx, ctype, csv_file(upload_lines)))
         report = run_import(ctx, ctype, csv_file(upload_lines))
         row = only_row(report)
@@ -371,7 +370,7 @@ class TestImportDefinitif:
 
     def test_journal_et_lot_d_import(self, ctx, setup):
         ctype, member = setup
-        report = run_import(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10"), csv_line("Inconnu Total", "10")]))
+        report = run_import(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10"), csv_line("Inconnu Total", "10")]))
         batch = report.import_batch
         assert batch.import_type == ImportBatch.ImportType.HISTORICAL_CONTRIBUTIONS
         assert (batch.row_count_success, batch.row_count_failed) == (1, 1)
@@ -389,11 +388,11 @@ class TestImportDefinitif:
 
     def test_rapport_lignes_reussies_et_en_echec(self, ctx, setup):
         ctype, _ = setup
-        player(ctx, "Serge", "Kadiobo")
+        player(ctx, "Serge", "Lokwa")
         lines = [
-            csv_line("Adolphe Abedi", "10"),
+            csv_line("Adolphe Akeba", "10"),
             csv_line("Personne Inconnue", "10"),
-            csv_line("Serge Kadiobo", "dix"),
+            csv_line("Serge Lokwa", "dix"),
         ]
         report = run_import(ctx, ctype, csv_file(lines))
         assert (report.success_count, report.failed_count) == (1, 2)
@@ -406,7 +405,7 @@ class TestImportDefinitif:
 
     def test_reimport_identique_sans_doublon(self, ctx, setup):
         ctype, member = setup
-        lines = [csv_line("Adolphe Abedi", "30", "ok", "ok", "ok", "10")]
+        lines = [csv_line("Adolphe Akeba", "30", "ok", "ok", "ok", "10")]
         run_import(ctx, ctype, csv_file(lines))
         before = (Payment.all_objects.count(), Due.all_objects.count())
         balance = services.get_balance(member, at_date=TODAY)
@@ -421,46 +420,50 @@ class TestImportDefinitif:
 
     def test_fichier_complete_le_mois_suivant(self, ctx, setup):
         ctype, _ = setup
-        run_import(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10", "10")]))
-        report = run_import(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10", "10", "10")]))
+        run_import(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10", "10")]))
+        report = run_import(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10", "10", "10")]))
         row = only_row(report)
         assert amounts(row) == [(3, D("10.00"))] and len(row.already_imported) == 2
         assert Payment.all_objects.count() == 3
 
     def test_montant_modifie_apres_import_fait_echouer_la_ligne(self, ctx, setup):
         ctype, _ = setup
-        run_import(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10")]))
-        row = only_row(run_import(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "20")])))
+        run_import(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10")]))
+        row = only_row(run_import(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "20")])))
         assert row.failed and "déjà été importé" in row.errors[0] and "annulation" in row.errors[0]
         assert Payment.all_objects.count() == 1
 
-    def test_pin_faux_rien_n_est_ecrit(self, ctx, setup):
+    def test_import_reussit_sans_pin_et_journalise_l_auteur(self, ctx, setup):
+        """Décision client du 11/10/2026 (CLAUDE.md règle 7) : plus de PIN ;
+        l'auteur de l'import est écrit dans le journal."""
+
+        ctype, _ = setup
+        report = run_import(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10")]), user=ctx.assistant_treasurer)
+        assert report.success_count == 1
+        assert_logged_by("treasury.contribution_import.completed", ctx.assistant_treasurer.user, club=ctx.club)
+
+    def test_fichier_invalide_rien_n_est_ecrit(self, ctx, setup):
         ctype, _ = setup
         before = counts()
-        with pytest.raises(InvalidPinError):
-            run_import(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10")]), pin=WRONG_PIN)
-        assert counts()[:5] == before[:5]
-
-    def test_fichier_invalide_ne_consomme_pas_d_essai_de_pin(self, ctx, setup):
-        ctype, _ = setup
         for _ in range(4):
             with pytest.raises(services.ContributionImportError):
-                run_import(ctx, ctype, csv_file(["x"], header="a;b"), pin=WRONG_PIN)
-        run_import(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10")]))  # PIN toujours utilisable
+                run_import(ctx, ctype, csv_file(["x"], header="a;b"))
+        assert counts()[:5] == before[:5]
+        run_import(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10")]))
 
     def test_registre_gele_refuse_tout(self, ctx, setup):
         ctype, _ = setup
         services.freeze_ledger(club=ctx.club, reason="test", actor=None, now=NOW)
         before = counts()
         with pytest.raises(services.LedgerFrozenError):
-            run_import(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "10")]))
+            run_import(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "10")]))
         assert counts()[:5] == before[:5]
 
     def test_paiement_existant_hors_import_signale(self, ctx, setup):
         ctype, member = setup
         make_dues(ctx, member, ctype, [1])
         pay(ctx, member, ctype, "10", datetime.date(2026, 1, 5))
-        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi", "ok", "ok")])))
+        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba", "ok", "ok")])))
         # janvier déjà couvert par le paiement existant : seul février est créé.
         assert amounts(row) == [(2, D("10.00"))]
         assert any("hors import" in warning for warning in row.warnings)
@@ -510,7 +513,7 @@ class TestMontantsDus:
     def test_montant_du_existant_jamais_recree(self, ctx, setup):
         ctype, member = setup
         make_dues(ctx, member, ctype, [1, 2])
-        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Abedi")])))
+        row = only_row(preview(ctx, ctype, csv_file([csv_line("Adolphe Akeba")])))
         assert [line.period.month for line in row.dues] == list(range(3, 10))
 
 

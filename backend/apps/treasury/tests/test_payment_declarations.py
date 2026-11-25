@@ -1,13 +1,14 @@
 """Paiement en ligne, phase 1 : lien externe et déclaration « J'ai payé »
-(tâche 2.5 ; CDC 4.6, 4.4.3, 4.4.4, 4.17, 5.3, 7.2 ; matrice 2.4).
+(tâche 2.5 ; CDC 4.6, 4.4.3, 4.4.4, 4.17, 5.3 ; matrice 2.4).
 
 - Le lien de paiement vient des paramètres du club (jamais en dur).
 - Le joueur déclare pour lui-même : `Payment` source ``player_declaration``
   + `Transaction` NON scellée ``pending`` (fournisseur ``link``) ; aucun
   effet sur le solde, la caisse, la chaîne ni les reçus.
-- Validation par le Trésorier ou l'adjoint avec PIN : paiement normal
-  (scellement, reçu, répartition 4.4.3, journal).
-- Refus motivé (sans PIN) : transaction ``failed`` scellée, joueur prévenu.
+- Validation par le Trésorier ou l'adjoint, sans PIN (décision client du
+  11/10/2026, CLAUDE.md règle 7 : l'auteur est journalisé) : paiement
+  normal (scellement, reçu, répartition 4.4.3, journal).
+- Refus motivé : transaction ``failed`` scellée, joueur prévenu.
 - Étanchéité entre clubs : 404 sur la déclaration d'un autre club.
 """
 
@@ -24,7 +25,6 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.accounts.services import InvalidPinError, PinError, PinLockedError
 from apps.audit.models import AuditLog
 from apps.clubs.models import Membership
 from apps.notifications.models import Notification
@@ -38,7 +38,7 @@ from apps.treasury.models import (
     Transaction,
 )
 from apps.treasury.tests.cash_helpers import club_today, free_type, monthly_type, named_member, put_in_debt
-from apps.treasury.tests.conftest import PIN, WRONG_PIN, past_day
+from apps.treasury.tests.conftest import PIN, WRONG_PIN, assert_logged_by, past_day
 
 pytestmark = pytest.mark.django_db
 
@@ -69,8 +69,8 @@ def declare(ctx, ctype, *, member=None, by=None, amount="10", reference="LAX-001
     )
 
 
-def validate(ctx, payment, *, by=None, pin=PIN):
-    return services.validate_declared_payment(payment=payment, validated_by=(by or ctx.treasurer).user, pin=pin)
+def validate(ctx, payment, *, by=None):
+    return services.validate_declared_payment(payment=payment, validated_by=(by or ctx.treasurer).user)
 
 
 def reject(ctx, payment, *, by=None, reason="Référence introuvable chez le fournisseur."):
@@ -217,7 +217,10 @@ class TestDeclare:
     def test_montant_arrondi_a_deux_decimales(self, ctx):
         set_link(ctx)
         ctype = monthly_type(ctx)
-        assert declare(ctx, ctype, amount="12.345").amount == Decimal("12.35")
+        # D7 : valeur Decimal arrondie ; une saisie texte à 3 décimales est refusée (D-A7).
+        assert declare(ctx, ctype, amount=Decimal("12.345")).amount == Decimal("12.35")
+        with pytest.raises(services.InvalidAmountError, match="2 chiffres après la virgule"):
+            declare(ctx, ctype, amount="12.345")
 
     @pytest.mark.parametrize("reference", ["", "   ", None])
     def test_reference_obligatoire(self, ctx, reference):
@@ -310,7 +313,7 @@ class TestDeclare:
         ctype = monthly_type(ctx)
         services.record_payment(
             membership=ctx.vice_president, contribution_type=ctype, amount="10", method="payment_link",
-            paid_on=past_day(), recorded_by=ctx.treasurer.user, pin=PIN, reference="LAX-6",
+            paid_on=past_day(), recorded_by=ctx.treasurer.user, reference="LAX-6",
         )
         declared = declare(ctx, ctype, reference="LAX-6")
         with pytest.raises(services.TreasuryValidationError, match="déjà été déclarée"):
@@ -322,7 +325,7 @@ class TestDeclare:
         ctype = monthly_type(ctx)
         services.record_payment(
             membership=ctx.player, contribution_type=ctype, amount="10", method="payment_link",
-            paid_on=past_day(), recorded_by=ctx.treasurer.user, pin=PIN, reference="LAX-5",
+            paid_on=past_day(), recorded_by=ctx.treasurer.user, reference="LAX-5",
         )
         with pytest.raises(services.TreasuryValidationError, match="déjà été déclarée"):
             declare(ctx, ctype, reference="LAX-5")
@@ -346,7 +349,7 @@ class TestDeclare:
 
 
 # ---------------------------------------------------------------------------
-# Validation par le Trésorier ou l'adjoint (PIN)
+# Validation par le Trésorier ou l'adjoint (sans PIN depuis le 11/10/2026)
 # ---------------------------------------------------------------------------
 
 
@@ -414,49 +417,31 @@ class TestValidate:
         status_entries = AuditLog.objects.filter(action_type="treasury.transaction.status_changed")
         assert status_entries.get().actor_id == ctx.treasurer.user.pk
 
-    def test_pin_faux_rien_ne_change(self, ctx):
+    def test_validation_reussit_sans_pin_et_journalise_l_auteur(self, ctx):
         set_link(ctx)
         ctype = monthly_type(ctx)
         payment = declare(ctx, ctype)
-        with pytest.raises(InvalidPinError):
-            validate(ctx, payment, pin=WRONG_PIN)
-        txn = txn_of(payment)
-        assert txn.status == Transaction.Status.PENDING and txn.sealed_at is None
-        payment.refresh_from_db()
-        assert payment.validated_by is None
-        ctx.treasurer.user.refresh_from_db()
-        assert ctx.treasurer.user.pin_failed_attempts == 1
+        validated = validate(ctx, payment, by=ctx.assistant_treasurer)
+        assert txn_of(validated).status == Transaction.Status.SUCCEEDED
+        assert validated.validated_by_id == ctx.assistant_treasurer.user_id
+        assert_logged_by("treasury.payment.validated", ctx.assistant_treasurer.user, club=ctx.club)
 
-    @pytest.mark.parametrize("pin", ["", None])
-    def test_pin_absent_refuse(self, ctx, pin):
+    def test_le_service_n_accepte_plus_de_pin(self, ctx):
         set_link(ctx)
         ctype = monthly_type(ctx)
         payment = declare(ctx, ctype)
-        with pytest.raises(PinError):
-            validate(ctx, payment, pin=pin)
-        assert txn_of(payment).status == Transaction.Status.PENDING
-
-    def test_pin_verrouille(self, ctx):
-        set_link(ctx)
-        ctype = monthly_type(ctx)
-        payment = declare(ctx, ctype)
-        for _ in range(3):
-            with pytest.raises((InvalidPinError, PinLockedError)):
-                validate(ctx, payment, pin=WRONG_PIN)
-        with pytest.raises(PinLockedError):
-            validate(ctx, payment)
+        with pytest.raises(TypeError):
+            services.validate_declared_payment(payment=payment, validated_by=ctx.treasurer.user, pin=WRONG_PIN)
         assert txn_of(payment).status == Transaction.Status.PENDING
 
     @pytest.mark.parametrize("role", ["president", "vice_president", "player"])
-    def test_role_non_autorise_verifie_avant_le_pin(self, ctx, role):
+    def test_role_non_autorise_refuse(self, ctx, role):
         set_link(ctx)
         ctype = monthly_type(ctx)
         payment = declare(ctx, ctype, member=ctx.pending_member if role == "player" else ctx.player)
         member = getattr(ctx, role)
         with pytest.raises(services.TreasuryPermissionError):
-            validate(ctx, payment, by=member, pin=WRONG_PIN)
-        member.user.refresh_from_db()
-        assert member.user.pin_failed_attempts == 0
+            validate(ctx, payment, by=member)
         assert txn_of(payment).status == Transaction.Status.PENDING
 
     def test_tresorier_d_un_autre_club_refuse(self, ctx, other_ctx):
@@ -464,7 +449,7 @@ class TestValidate:
         ctype = monthly_type(ctx)
         payment = declare(ctx, ctype)
         with pytest.raises(services.TreasuryPermissionError):
-            services.validate_declared_payment(payment=payment, validated_by=other_ctx.treasurer.user, pin=PIN)
+            services.validate_declared_payment(payment=payment, validated_by=other_ctx.treasurer.user)
         with pytest.raises(services.TreasuryPermissionError):
             services.reject_declared_payment(payment=payment, rejected_by=other_ctx.treasurer.user, reason="Non")
         assert txn_of(payment).status == Transaction.Status.PENDING
@@ -474,31 +459,28 @@ class TestValidate:
         ctype = monthly_type(ctx)
         payment = validate(ctx, declare(ctx, ctype))
         with pytest.raises(services.DeclarationAlreadyProcessedError):
-            validate(ctx, payment, pin=WRONG_PIN)
+            validate(ctx, payment)
         with pytest.raises(services.DeclarationAlreadyProcessedError):
             reject(ctx, payment)
-        ctx.treasurer.user.refresh_from_db()
-        assert ctx.treasurer.user.pin_failed_attempts == 0
+        assert Transaction.all_objects.filter(payment=payment).count() == 1
 
     def test_un_paiement_saisi_par_le_tresorier_n_est_pas_une_declaration(self, ctx):
         ctype = monthly_type(ctx)
         payment = services.record_payment(
             membership=ctx.player, contribution_type=ctype, amount="10", method="cash",
-            paid_on=past_day(), recorded_by=ctx.treasurer.user, pin=PIN,
+            paid_on=past_day(), recorded_by=ctx.treasurer.user,
         )
         with pytest.raises(services.TreasuryValidationError, match="n'est pas une déclaration"):
             validate(ctx, payment)
         assert txn_of(payment).provider == Transaction.Provider.MANUAL
 
-    def test_gel_verifie_avant_le_pin(self, ctx):
+    def test_gel_refuse_la_validation(self, ctx):
         set_link(ctx)
         ctype = monthly_type(ctx)
         payment = declare(ctx, ctype)
         services.freeze_ledger(club=ctx.club, reason="Rupture simulée", actor=None)
         with pytest.raises(services.LedgerFrozenError):
-            validate(ctx, payment, pin=WRONG_PIN)
-        ctx.treasurer.user.refresh_from_db()
-        assert ctx.treasurer.user.pin_failed_attempts == 0
+            validate(ctx, payment)
         assert txn_of(payment).status == Transaction.Status.PENDING
 
     def test_type_archive_entre_temps_refuse(self, ctx):
@@ -514,7 +496,7 @@ class TestValidate:
         ctype = monthly_type(ctx)
         payment = validate(ctx, declare(ctx, ctype, amount="10", reference="LAX-R"))
         reversal = services.request_payment_reversal(payment=payment, reason="Doublon", requested_by=ctx.treasurer.user)
-        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=PIN)
+        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user)
         assert services.get_balance(ctx.player) == Decimal("0.00")
         payment.refresh_from_db()
         assert services.payment_status_key(payment) == "cancelled"
@@ -548,7 +530,8 @@ class TestReject:
         assert services.payment_status_key(rejected) == "refused"
         entry = AuditLog.objects.get(action_type="treasury.payment.rejected")
         assert entry.actor_id == ctx.treasurer.user.pk
-        (notification,) = notifications(ctx.player.user, Notification.EventType.I_PAID_DECLARED)
+        (notification,) = notifications(ctx.player.user, Notification.EventType.I_PAID_REJECTED)
+        assert not notifications(ctx.player.user, Notification.EventType.I_PAID_DECLARED)
         assert "refusée" in notification.title
         assert "Aucun paiement reçu avec cette référence." in notification.body
 
@@ -740,7 +723,7 @@ class TestDeclarationApi:
         # Invisible et intraitable depuis l'autre club.
         assert client_for(ctx.treasurer).get(url("payment-declaration-list")).data["count"] == 0
         for name in ("payment-declaration-validate", "payment-declaration-reject", "payment-declaration-preview"):
-            response = client_for(ctx.treasurer).post(url(name, payment.pk), {"pin": PIN, "reason": "x"}, format="json")
+            response = client_for(ctx.treasurer).post(url(name, payment.pk), {"reason": "x"}, format="json")
             assert response.status_code == 404, name
         assert client_for(ctx.treasurer).get(url("payment-declaration-detail", payment.pk)).status_code == 404
         assert txn_of(payment).status == Transaction.Status.PENDING
@@ -790,10 +773,10 @@ class TestDeclarationApi:
         ctype = monthly_type(ctx)
         payment = services.record_payment(
             membership=ctx.player, contribution_type=ctype, amount="10", method="cash",
-            paid_on=past_day(), recorded_by=ctx.treasurer.user, pin=PIN,
+            paid_on=past_day(), recorded_by=ctx.treasurer.user,
         )
         assert client_for(ctx.treasurer).get(url("payment-declaration-detail", payment.pk)).status_code == 404
-        response = client_for(ctx.treasurer).post(url("payment-declaration-validate", payment.pk), {"pin": PIN}, format="json")
+        response = client_for(ctx.treasurer).post(url("payment-declaration-validate", payment.pk), {}, format="json")
         assert response.status_code == 404
 
 
@@ -806,7 +789,7 @@ class TestDecisionApi:
     def test_validation_200_recu_repartition_statut(self, ctx):
         payment = self._declared(ctx, amount="40", reference="LAX-V")
         response = client_for(ctx.treasurer).post(
-            url("payment-declaration-validate", payment.pk), {"pin": PIN}, format="json"
+            url("payment-declaration-validate", payment.pk), {}, format="json"
         )
         assert response.status_code == 200, response.data
         data = response.data
@@ -824,27 +807,28 @@ class TestDecisionApi:
         assert len(response.data["allocations"]) == 4
         assert txn_of(payment).status == Transaction.Status.PENDING
 
-    def test_pin_faux_400_puis_verrouille_423(self, ctx):
+    def test_pin_envoye_par_un_ancien_client_ignore(self, ctx):
         payment = self._declared(ctx)
-        client = client_for(ctx.treasurer)
-        path = url("payment-declaration-validate", payment.pk)
-        first = client.post(path, {"pin": WRONG_PIN}, format="json")
-        assert first.status_code == 400 and first.data["attempts_remaining"] == 2
-        client.post(path, {"pin": WRONG_PIN}, format="json")
-        assert client.post(path, {"pin": WRONG_PIN}, format="json").status_code == 423
-        assert client.post(path, {"pin": PIN}, format="json").status_code == 423
-        assert txn_of(payment).status == Transaction.Status.PENDING
+        response = client_for(ctx.treasurer).post(
+            url("payment-declaration-validate", payment.pk), {"pin": WRONG_PIN}, format="json"
+        )
+        assert response.status_code == 200, response.data
+        assert "attempts_remaining" not in response.data
+        assert txn_of(payment).status == Transaction.Status.SUCCEEDED
+        ctx.treasurer.user.refresh_from_db()
 
-    def test_pin_absent_400(self, ctx):
+    def test_validation_sans_pin_200_et_auteur_journalise(self, ctx):
         payment = self._declared(ctx)
-        response = client_for(ctx.treasurer).post(url("payment-declaration-validate", payment.pk), {}, format="json")
-        assert response.status_code == 400
-        assert txn_of(payment).status == Transaction.Status.PENDING
+        response = client_for(ctx.assistant_treasurer).post(
+            url("payment-declaration-validate", payment.pk), {}, format="json"
+        )
+        assert response.status_code == 200, response.data
+        assert_logged_by("treasury.payment.validated", ctx.assistant_treasurer.user, club=ctx.club)
 
     def test_deja_traitee_409(self, ctx):
         payment = self._declared(ctx)
         client = client_for(ctx.treasurer)
-        assert client.post(url("payment-declaration-validate", payment.pk), {"pin": PIN}, format="json").status_code == 200
+        assert client.post(url("payment-declaration-validate", payment.pk), {}, format="json").status_code == 200
         again = client.post(url("payment-declaration-reject", payment.pk), {"reason": "Trop tard"}, format="json")
         assert again.status_code == 409
         assert again.data["code"] == "declaration_already_processed"
@@ -864,7 +848,7 @@ class TestDecisionApi:
     @pytest.mark.parametrize("name", ["payment-declaration-validate", "payment-declaration-reject", "payment-declaration-preview"])
     def test_403_hors_tresorier_et_adjoint(self, ctx, role, name):
         payment = self._declared(ctx, member=ctx.vice_president if role == "player" else ctx.player)
-        response = client_for(getattr(ctx, role)).post(url(name, payment.pk), {"pin": PIN, "reason": "x"}, format="json")
+        response = client_for(getattr(ctx, role)).post(url(name, payment.pk), {"reason": "x"}, format="json")
         assert response.status_code == 403
         assert txn_of(payment).status == Transaction.Status.PENDING
 

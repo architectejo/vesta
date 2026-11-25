@@ -151,6 +151,13 @@ export function RoleModal({
             <p className="text-sm text-text-muted">Poste vacant.</p>
           )}
 
+          {roleKey === "secretary" ? (
+            <p className="text-[13px] text-text-muted">
+              Le Secrétaire publie les communiqués, prépare les assemblées générales et dépose les documents dans les
+              archives du club. Le nombre de titulaires dépend du réglage du club.
+            </p>
+          ) : null}
+
           {showSearch ? (
             <div>
               {replacing && holderName ? (

@@ -110,7 +110,7 @@ export function AccueilPage() {
             <MaSituationCard membershipId={profile.membership_id} />
           </div>
           <div className="order-4 lg:order-none lg:col-span-4 lg:col-start-9 lg:row-start-2">
-            <ProchainRendezVousCard membershipId={profile.membership_id} />
+            <ProchainRendezVousCard membershipId={profile.membership_id} isCoach={access.isCoach} />
           </div>
           <div className="order-5 lg:order-none lg:col-span-8 lg:col-start-1 lg:row-start-3">
             <DerniersResultatsCard />

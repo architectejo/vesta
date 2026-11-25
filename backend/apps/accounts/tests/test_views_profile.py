@@ -1,8 +1,8 @@
 """Tests HTTP des mutations d'identite de « Mon profil » (tache 1.9,
 slice Lot 1) : `MyPersonalInfoUpdateView`, `MyCredentialsUpdateView`,
-`MyPinUpdateView`, `MyProfilePhotoView`.
+`MyProfilePhotoView`.
 
-Sources : docs/ecrans/comptes-mon-profil.md §4.1 ; CDC 4.1, 4.2, 7.1, 7.2 ;
+Sources : docs/ecrans/comptes-mon-profil.md §4.1 ; CDC 4.1, 4.2, 7.1 ;
 CLAUDE.md regle n8 (etancheite -- ici : jamais un autre COMPTE que le
 sien, meme injecte dans le corps de la requete).
 
@@ -253,115 +253,21 @@ class TestMyCredentialsUpdateView:
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
-class TestMyPinUpdateView:
-    def test_defines_the_pin_of_the_authenticated_user_only(self):
+class TestPinEndpointRemoved:
+    """Decision du 11/10/2026 (CLAUDE.md regle 7) : plus aucun code PIN."""
+
+    def test_profile_pin_endpoint_no_longer_exists(self):
         user = UserFactory(password="MotDePasse123")
-        other = UserFactory(password="MotDePasse123")
         client = _authenticated_client(user)
 
         response = client.post(
-            reverse("accounts:profile-pin"),
+            "/api/v1/auth/profile/pin/",
             {"current_password": "MotDePasse123", "new_pin": "1234", "confirm_new_pin": "1234"},
             format="json",
         )
 
-        assert response.status_code == status.HTTP_200_OK
-        user.refresh_from_db()
-        other.refresh_from_db()
-        assert user.pin_hash != ""
-        assert other.pin_hash == ""
-
-    def test_wrong_password_returns_400(self):
-        user = UserFactory(password="MotDePasse123")
-        client = _authenticated_client(user)
-
-        response = client.post(
-            reverse("accounts:profile-pin"),
-            {"current_password": "FauxMotDePasse", "new_pin": "1234", "confirm_new_pin": "1234"},
-            format="json",
-        )
-
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        user.refresh_from_db()
-        assert user.pin_hash == ""
-
-    def test_mismatched_confirmation_returns_400(self):
-        user = UserFactory(password="MotDePasse123")
-        client = _authenticated_client(user)
-
-        response = client.post(
-            reverse("accounts:profile-pin"),
-            {"current_password": "MotDePasse123", "new_pin": "1234", "confirm_new_pin": "5678"},
-            format="json",
-        )
-
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-
-    def test_invalid_pin_format_returns_400(self):
-        user = UserFactory(password="MotDePasse123")
-        client = _authenticated_client(user)
-
-        response = client.post(
-            reverse("accounts:profile-pin"),
-            {"current_password": "MotDePasse123", "new_pin": "12", "confirm_new_pin": "12"},
-            format="json",
-        )
-
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-
-    def test_a_smuggled_user_id_never_targets_another_users_pin(self):
-        user = UserFactory(password="MotDePasse123")
-        other = UserFactory(password="MotDePasse123")
-        client = _authenticated_client(user)
-
-        response = client.post(
-            reverse("accounts:profile-pin"),
-            {"user_id": other.id, "current_password": "MotDePasse123", "new_pin": "4321", "confirm_new_pin": "4321"},
-            format="json",
-        )
-
-        assert response.status_code == status.HTTP_200_OK
-        other.refresh_from_db()
-        assert other.pin_hash == ""
-
-    def test_blocked_while_forced_password_change_is_pending(self):
-        """Meme garde-fou global que les trois autres mutations du profil
-        (`_CLUB_MEMBER_GATE` compose `HasCompletedPasswordSetup`) : absent
-        des `permission_classes` de cette vue -- comble le trou de
-        couverture signale au compte rendu du correctif de securite
-        (`MyPinUpdateView` n'avait pas son equivalent de
-        `TestMyCredentialsUpdateView.test_blocked_while_forced_password_change_is_pending`)."""
-
-        user = UserFactory(password="MotDePasse123", must_change_password=True)
-        client = _authenticated_client(user)
-
-        response = client.post(
-            reverse("accounts:profile-pin"),
-            {"current_password": "MotDePasse123", "new_pin": "1234", "confirm_new_pin": "1234"},
-            format="json",
-        )
-
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-        user.refresh_from_db()
-        assert user.pin_hash == ""
-
-    def test_blocked_while_latest_terms_are_not_yet_accepted(self):
-        """Meme principe pour `HasAcceptedLatestTerms` (CDC 7.5) : absent des
-        `permission_classes` de cette vue."""
-
-        TermsVersionFactory()
-        user = UserFactory(password="MotDePasse123")
-        client = _authenticated_client(user)
-
-        response = client.post(
-            reverse("accounts:profile-pin"),
-            {"current_password": "MotDePasse123", "new_pin": "1234", "confirm_new_pin": "1234"},
-            format="json",
-        )
-
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-        user.refresh_from_db()
-        assert user.pin_hash == ""
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert not hasattr(user, "pin_hash")
 
 
 class TestMyProfilePhotoView:

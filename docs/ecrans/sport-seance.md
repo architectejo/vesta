@@ -36,6 +36,8 @@ Trésorier, Trésorier adjoint et Intendant ont « — » sur la ligne « Séanc
 
 ### 3.1 Vue « Pointage » (4.7)
 
+> *Révision du 15/11/2026* : sélection multiple, « Tout cocher » / « Tout décocher » et actions groupées (arrivée, absence excusée), spécifiées dans `sport-pointage-selection-multiple.md` (demande nouvelle, circuit 9.4, à valider). Le pointage un par un ci-dessous reste inchangé. La vue « Bilan » (§3.3) est complétée par `sport-statistiques-seance.md`.
+
 1. **Compteurs** (une ligne) : « Présents {n} » (vert) · « En retard {n} » (rouge) · « Non pointés {n} » · « Excusés {n} » (gris). Heure actuelle affichée à droite (« 07:52 »), avec rappel « Limite 08:00 » qui passe en rouge après l'heure limite.
 2. **Recherche et filtres** : champ « Nom ou numéro » (36 px) ; puces « Non pointés » (par défaut), « Tous », « Présents », « En retard », « Excusés ».
 3. **Liste des joueurs** du club (tri : non pointés par ordre alphabétique ; pointés par ordre d'arrivée). Ligne de 56 px :

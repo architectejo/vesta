@@ -56,6 +56,12 @@ describe("PostCard", () => {
     vi.clearAllMocks();
   });
 
+  it("les boutons « J'aime » et « Commenter » ont une cible tactile d'au moins 36 px (règle 16)", () => {
+    renderCard(makePost());
+    expect(screen.getByRole("button", { name: /J'aime/ }).className).toContain("min-h-[36px]");
+    expect(screen.getByRole("button", { name: /Commenter/ }).className).toContain("min-h-[36px]");
+  });
+
   it("affiche l'auteur, le texte et la puce de visibilité « Club »", () => {
     renderCard(makePost());
     expect(screen.getByText("Amos Kanku")).toBeInTheDocument();

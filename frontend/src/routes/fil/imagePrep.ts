@@ -26,10 +26,10 @@ export function validateImageFile(file: File): void {
  * préparation échoue (navigateur sans support canvas, image déjà petite) :
  * on ne bloque jamais un envoi pour cette seule raison.
  */
-export async function prepareImageForUpload(file: File): Promise<File> {
+export async function prepareImageForUpload(file: File, maxSidePx: number = MAX_IMAGE_SIDE_PX): Promise<File> {
   try {
     const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, MAX_IMAGE_SIDE_PX / Math.max(bitmap.width, bitmap.height));
+    const scale = Math.min(1, maxSidePx / Math.max(bitmap.width, bitmap.height));
     if (scale >= 1) {
       bitmap.close?.();
       return file;

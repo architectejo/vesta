@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getMyProfile } from "../../api/clubs";
 import { getLockerRoom, type Formation, type MatchDetail, type SessionDetail, type TeamAssignmentItem } from "../../api/sport";
 import {
@@ -8,17 +8,22 @@ import {
   Banner,
   Button,
   EmptyState,
+  IconChevronDown,
   Loader,
   Modal,
   PitchBoard,
+  PitchPin,
   SegmentedControl,
   StatusBadge,
+  useToast,
 } from "../../design-system";
-import { pitchPinsForTeam } from "./pinLayout";
+import { CreateSessionModal } from "./CreateSessionModal";
+import { pitchPinsForTeam, shortLabel } from "./pinLayout";
+import { PlansLibrary } from "./PlansLibrary";
 import { PlayerCardModal } from "./PlayerCardModal";
 import { useTeamsPitchWidthStyle } from "./pitchSizing";
 import { getSportAccess } from "./sportAccess";
-import { formatTime } from "./sportTime";
+import { formatNextEventLabel, formatTime } from "./sportTime";
 import { TeamsBoard } from "./TeamsBoard";
 import { useTeamFieldActions } from "./useTeamFieldActions";
 
@@ -247,8 +252,24 @@ function PresentsSansEquipeCard({ session }: { session: SessionDetail }) {
           <ul className="space-y-1">
             {to_place_manually.map((p) => (
               <li key={p.membership_id} className="flex items-center gap-2">
-                <Avatar name={p.name} photoUrl={p.photo} size={32} />
-                <span className="text-sm text-text">{p.name}</span>
+                <PitchPin
+                  standalone
+                  draggable={false}
+                  interactive={false}
+                  vertical
+                  dragKind="pin"
+                  pin={{
+                    id: String(p.membership_id),
+                    membershipId: p.membership_id,
+                    label: shortLabel(p.name),
+                    fullName: p.name,
+                    number: p.jersey_number,
+                    photoUrl: p.photo,
+                    x: 0,
+                    y: 0,
+                  }}
+                />
+                <span className="min-w-0 break-words text-sm text-text">{p.name}</span>
                 <StatusBadge status="late" />
               </li>
             ))}
@@ -261,9 +282,26 @@ function PresentsSansEquipeCard({ session }: { session: SessionDetail }) {
           <ul className="space-y-1">
             {cannot_play.map((p) => (
               <li key={p.membership_id} className="flex items-center gap-2">
-                <Avatar name={p.name} photoUrl={p.photo} size={32} />
-                <span className="text-sm text-text">{p.name}</span>
-                <StatusBadge status="pending" />
+                <PitchPin
+                  standalone
+                  draggable={false}
+                  interactive={false}
+                  vertical
+                  dragKind="pin"
+                  pin={{
+                    id: String(p.membership_id),
+                    membershipId: p.membership_id,
+                    label: shortLabel(p.name),
+                    fullName: p.name,
+                    number: p.jersey_number,
+                    photoUrl: p.photo,
+                    locked: true,
+                    x: 0,
+                    y: 0,
+                  }}
+                />
+                <span className="min-w-0 break-words text-sm text-text">{p.name}</span>
+                <StatusBadge status="medical_unavailable" />
               </li>
             ))}
           </ul>
@@ -284,8 +322,16 @@ function PasEncorePointesCard({ session, canSee }: { session: SessionDetail; can
   if (count === 0) return null;
   return (
     <section className="rounded-md border border-border p-3">
-      <button type="button" className="text-sm text-text" onClick={() => setExpanded((v) => !v)}>
-        {count} joueurs pas encore pointés {expanded ? "▴" : "▾"}
+      <button
+        type="button"
+        className="flex items-center gap-1 text-sm text-text"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        {count} joueurs pas encore pointés
+        <IconChevronDown
+          aria-hidden="true"
+          className={["h-4 w-4 transition-transform motion-safe:duration-150", expanded ? "rotate-180" : ""].join(" ")}
+        />
       </button>
       {expanded ? (
         <Button size="sm" variant="ghost" className="mt-2" onClick={() => navigate(`/seances/${session.id}`)}>
@@ -296,12 +342,50 @@ function PasEncorePointesCard({ session, canSee }: { session: SessionDetail; can
   );
 }
 
-/** Page « Vestiaire du jour » (docs/ecrans/sport-vestiaire.md). */
+type VestiaireTab = "today" | "plans";
+
+/**
+ * Page « Vestiaire » (docs/ecrans/sport-vestiaire.md) : onglet « Aujourd'hui »
+ * (vestiaire du jour) et onglet « Plans » (bibliothèque de plans tactiques).
+ * L'onglet est mémorisé dans l'URL (`?onglet=plans`) et reste accessible les
+ * jours sans événement.
+ */
 export function VestiairePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab: VestiaireTab = searchParams.get("onglet") === "plans" ? "plans" : "today";
+
+  function handleTabChange(next: VestiaireTab): void {
+    const params = new URLSearchParams(searchParams);
+    if (next === "plans") params.set("onglet", "plans");
+    else params.delete("onglet");
+    setSearchParams(params, { replace: true });
+  }
+
+  return (
+    <div className="space-y-4">
+      <SegmentedControl
+        label="Section du vestiaire"
+        value={tab}
+        onChange={handleTabChange}
+        options={[
+          { value: "today", label: "Aujourd'hui" },
+          { value: "plans", label: "Plans" },
+        ]}
+      />
+      {tab === "plans" ? <PlansLibrary /> : <LockerRoomToday />}
+    </div>
+  );
+}
+
+/** Onglet « Aujourd'hui » : vestiaire du jour. */
+function LockerRoomToday() {
   const navigate = useNavigate();
   const [choice, setChoice] = useState<EventChoice | null>(null);
   const [consignesOpen, setConsignesOpen] = useState(false);
   const [cardMembershipId, setCardMembershipId] = useState<number | null>(null);
+  const [createSessionOpen, setCreateSessionOpen] = useState(false);
+  const { showToast } = useToast();
+  const queryClient = useQueryClient();
 
   const profileQuery = useQuery({ queryKey: ["profile", "me"], queryFn: getMyProfile, staleTime: 60_000 });
   const access = getSportAccess(profileQuery.data?.roles);
@@ -330,7 +414,21 @@ export function VestiairePage() {
     return (
       <div className="space-y-4">
         <h1 className="text-xl font-semibold text-text">Vestiaire du jour</h1>
-        <EmptyState message="Aucune séance ni aucun match aujourd'hui." />
+        <EmptyState
+          message="Aucune séance ni aucun match aujourd'hui."
+          description={data.next_event ? `Prochain rendez-vous : ${formatNextEventLabel(data.next_event)}` : undefined}
+          actionLabel={access.isCoach ? "Créer une séance" : undefined}
+          onAction={access.isCoach ? () => setCreateSessionOpen(true) : undefined}
+        />
+        <CreateSessionModal
+          open={createSessionOpen}
+          onClose={() => setCreateSessionOpen(false)}
+          onCreated={() => {
+            setCreateSessionOpen(false);
+            void queryClient.invalidateQueries({ queryKey: ["sport", "locker-room"] });
+            showToast("Séance créée. Les joueurs ont été prévenus.");
+          }}
+        />
       </div>
     );
   }

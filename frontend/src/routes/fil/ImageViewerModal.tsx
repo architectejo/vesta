@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { DownloadResult } from "../../api/client";
-import { AuthenticatedImage, IconButton } from "../../design-system";
+import { AuthenticatedImage, IconButton, IconChevronLeft, IconChevronRight, IconClose } from "../../design-system";
 
 export interface ViewerImage {
   id: string | number;
@@ -60,11 +60,7 @@ export function ImageViewerModal({
           aria-label="Fermer"
           onClick={onClose}
           className="text-white"
-          icon={
-            <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2}>
-              <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
-            </svg>
-          }
+          icon={<IconClose aria-hidden="true" className="h-5 w-5" />}
         />
       </div>
       <div className="relative flex flex-1 items-center justify-center overflow-hidden px-2">
@@ -73,11 +69,7 @@ export function ImageViewerModal({
             aria-label="Image précédente"
             onClick={() => setIndex((i) => Math.max(0, i - 1))}
             className="absolute left-2 text-white"
-            icon={
-              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth={2}>
-                <path d="M15 6l-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            }
+            icon={<IconChevronLeft aria-hidden="true" className="h-5 w-5" />}
           />
         ) : null}
         {image.url ? (
@@ -95,11 +87,7 @@ export function ImageViewerModal({
             aria-label="Image suivante"
             onClick={() => setIndex((i) => Math.min(images.length - 1, i + 1))}
             className="absolute right-2 text-white"
-            icon={
-              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth={2}>
-                <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            }
+            icon={<IconChevronRight aria-hidden="true" className="h-5 w-5" />}
           />
         ) : null}
       </div>

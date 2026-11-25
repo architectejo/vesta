@@ -12,7 +12,7 @@ from apps.audit.models import AuditLog
 from apps.core.tenant import active_club
 from apps.treasury import services
 from apps.treasury.models import ContributionType, ContributionTypeRate
-from apps.treasury.tests.conftest import PIN, past_day
+from apps.treasury.tests.conftest import past_day
 from apps.treasury.tests.factories import ContributionTypeFactory, MembershipFeeTypeFactory
 
 pytestmark = pytest.mark.django_db
@@ -126,7 +126,6 @@ class TestCreation:
             method="cash",
             paid_on=past_day(),
             validated_by=ctx.treasurer.user,
-            pin=PIN,
         )
 
         with pytest.raises(services.TreasuryValidationError, match="nature.*modifiée après un paiement"):
@@ -223,7 +222,6 @@ class TestArchivageEtSuppression:
             method="cash",
             paid_on=past_day(),
             validated_by=ctx.treasurer.user,
-            pin=PIN,
         )
         with active_club(ctx.club):
             with pytest.raises(services.TreasuryValidationError) as exc:

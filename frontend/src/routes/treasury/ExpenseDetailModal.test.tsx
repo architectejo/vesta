@@ -41,6 +41,7 @@ function makeCapabilities(overrides: Partial<TreasuryCapabilities> = {}): Treasu
     can_submit_expenses: false,
     can_validate_expenses: false,
     can_derogate: false,
+    can_decide_payment_reversal: false,
     can_upload_expense_receipts: false,
     can_manage_assistance_scales: false,
     can_process_assistance_requests: false,
@@ -139,7 +140,7 @@ describe("ExpenseDetailModal", () => {
     expect(await screen.findByText(/Dépense refusée\. Alice Trésorière a été prévenu\./)).toBeInTheDocument();
   });
 
-  it("demande le code PIN puis libère la dépense", async () => {
+  it("libère la dépense seulement après confirmation, sans champ PIN", async () => {
     vi.mocked(getExpense).mockResolvedValue(makeExpense());
     vi.mocked(getExpenseSummary).mockResolvedValue(makeSummary());
     vi.mocked(releaseExpense).mockResolvedValue(makeExpense({ status: "released" }));
@@ -147,11 +148,12 @@ describe("ExpenseDetailModal", () => {
     renderModal(makeCapabilities({ can_validate_expenses: true }));
 
     await user.click(await screen.findByRole("button", { name: "Valider et libérer" }));
-    const pinInput = await screen.findByLabelText("Votre code PIN");
-    await user.type(pinInput, "1234");
-    await user.click(screen.getByRole("button", { name: "Confirmer" }));
+    await screen.findByRole("dialog", { name: /Libérer cette dépense de/ });
+    expect(screen.queryByLabelText(/PIN/i)).not.toBeInTheDocument();
+    expect(releaseExpense).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Libérer la dépense" }));
 
-    await waitFor(() => expect(releaseExpense).toHaveBeenCalledWith(1, "1234"));
+    await waitFor(() => expect(releaseExpense).toHaveBeenCalledWith(1));
     expect(await screen.findByText("Dépense libérée. Le justificatif est attendu sous peu.")).toBeInTheDocument();
   });
 
@@ -173,17 +175,21 @@ describe("ExpenseDetailModal", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Valider et libérer" })).toBeDisabled();
 
-    await user.click(screen.getByRole("button", { name: "Libérer par dérogation" }));
+    const derogationButton = screen.getByRole("button", { name: "Libérer par dérogation" });
+    expect(derogationButton.className).toMatch(/danger/);
+    await user.click(derogationButton);
     const reasonDialog = await screen.findByRole("dialog", { name: "Libérer par dérogation" });
+    expect(within(reasonDialog).getByText(/Arbitre Kalala/)).toBeInTheDocument();
     await user.type(within(reasonDialog).getByLabelText("Motif de la dérogation"), "Urgence médicale");
     await user.click(within(reasonDialog).getByRole("button", { name: "Continuer" }));
 
-    const pinInput = await screen.findByLabelText("Votre code PIN");
-    await user.type(pinInput, "5678");
-    await user.click(screen.getByRole("button", { name: "Confirmer" }));
+    const confirmDialog = await screen.findByRole("dialog", { name: /par dérogation \?/ });
+    expect(within(confirmDialog).getByText(/Bénéficiaire : Arbitre Kalala/)).toBeInTheDocument();
+    expect(releaseExpenseWithDerogation).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Confirmer la dérogation" }));
 
     await waitFor(() =>
-      expect(releaseExpenseWithDerogation).toHaveBeenCalledWith(1, "Urgence médicale", "5678"),
+      expect(releaseExpenseWithDerogation).toHaveBeenCalledWith(1, "Urgence médicale"),
     );
     expect(await screen.findByText("Dépense libérée par dérogation.")).toBeInTheDocument();
   });
@@ -228,19 +234,18 @@ describe("ExpenseDetailModal", () => {
     expect(screen.getByRole("button", { name: "Fermer" })).toBeInTheDocument();
   });
 
-  it("affiche l'erreur PIN renvoyée par l'API sans fermer le formulaire", async () => {
+  it("affiche l'erreur renvoyée par l'API après la confirmation", async () => {
     vi.mocked(getExpense).mockResolvedValue(makeExpense());
     vi.mocked(getExpenseSummary).mockResolvedValue(makeSummary());
     vi.mocked(releaseExpense).mockRejectedValue(
-      new ApiError(400, { detail: "Code PIN incorrect.", attempts_remaining: 2 }),
+      new ApiError(400, { detail: "Cette dépense a déjà été libérée." }),
     );
     const user = userEvent.setup();
     renderModal(makeCapabilities({ can_validate_expenses: true }));
 
     await user.click(await screen.findByRole("button", { name: "Valider et libérer" }));
-    await user.type(await screen.findByLabelText("Votre code PIN"), "0000");
-    await user.click(screen.getByRole("button", { name: "Confirmer" }));
+    await user.click(await screen.findByRole("button", { name: "Libérer la dépense" }));
 
-    expect(await screen.findByText("Code PIN incorrect. Il vous reste 2 essais.")).toBeInTheDocument();
+    expect(await screen.findByText("Cette dépense a déjà été libérée.")).toBeInTheDocument();
   });
 });

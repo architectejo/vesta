@@ -87,6 +87,7 @@ def serialize_public_player(membership, *, request=None) -> dict:
 
 def serialize_market_row(membership, *, viewer_club) -> dict:
     data = serialize_public_player(membership)
+    data["city"] = membership.club.city
     data["is_own_club"] = membership.club_id == getattr(viewer_club, "id", None)
     return data
 
@@ -137,7 +138,7 @@ def _offer_status_for_viewer(offer: TransferOffer, *, viewer_club_id: int) -> st
 
 
 def serialize_offer(offer: TransferOffer, *, viewer, viewer_club) -> dict:
-    from apps.clubs.models import MembershipRole
+    from apps.clubs.models import COACHING_STAFF_ROLES, MembershipRole
     from apps.core.roles import has_any_role
 
     viewer_club_id = getattr(viewer_club, "id", None)
@@ -151,7 +152,7 @@ def serialize_offer(offer: TransferOffer, *, viewer, viewer_club) -> dict:
         and offer.status == TransferOffer.Status.BLOCKED_DEBT
         and not has_any_role(
             viewer,
-            {MembershipRole.Role.SPORTS_DIRECTOR, MembershipRole.Role.COACH},
+            {MembershipRole.Role.SPORTS_DIRECTOR, *COACHING_STAFF_ROLES},
             club=viewer_club,
         )
     )

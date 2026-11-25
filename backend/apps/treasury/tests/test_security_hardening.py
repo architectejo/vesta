@@ -1,5 +1,5 @@
 """Corrections de l'audit de securite de la tresorerie (A1 a A3 ; CDC 5.3,
-4.4.4, 7.2 ; CLAUDE.md regles n4, n8, n12).
+4.4.4 ; CLAUDE.md regles n4, n8, n12).
 
 - A1 : un ``key_id`` inconnu sur une ligne existante, alors que des cles
   valides sont configurees, est une **rupture** (gel + alerte + code 2) ;
@@ -7,7 +7,8 @@
 - A2 : contenu scelle complete (format canonique v2 versionne), les
   transactions scellees en v1 restent verifiables ; piece jointe figee ;
   concordance ``Payment.amount == Transaction.amount`` controlee.
-- A3 : piece jointe controlee avant le PIN (frais d'adhesion) ; club actif
+- A3 : piece jointe controlee avant toute ecriture (frais d'adhesion ; plus
+  de PIN depuis le 11/10/2026, CLAUDE.md regle 7) ; club actif
   controle en tete des services d'annulation et de remboursement.
 """
 
@@ -37,7 +38,7 @@ from apps.treasury.models import (
     PaymentReversal,
     Transaction,
 )
-from apps.treasury.tests.conftest import PIN, WRONG_PIN, make_member, past_day
+from apps.treasury.tests.conftest import make_member, past_day
 
 pytestmark = pytest.mark.django_db
 
@@ -52,14 +53,13 @@ V1_KEYS = {
 }
 
 
-def pay(ctx, *, membership=None, amount="5", pin=PIN, **extra):
+def pay(ctx, *, membership=None, amount="5", **extra):
     return services.record_membership_fee_payment(
         membership=membership or make_member(ctx.club, status=Membership.Status.PENDING),
         amount=amount,
         method="cash",
         paid_on=past_day(),
         validated_by=ctx.treasurer.user,
-        pin=pin,
         **extra,
     )
 
@@ -324,35 +324,31 @@ class TestPieceJointeFigee:
 
 
 # ---------------------------------------------------------------------------
-# A3 : ordre des controles avant le PIN, club actif
+# A3 : controles avant toute ecriture, club actif
 # ---------------------------------------------------------------------------
 
 
-class TestControlesAvantLePin:
-    def test_piece_jointe_invalide_refusee_avant_le_pin_frais_d_adhesion(self, ctx, fee_type):
+class TestControlesAvantEcriture:
+    def test_piece_jointe_invalide_refusee_frais_d_adhesion(self, ctx, fee_type):
         bogus = SimpleUploadedFile("x.pdf", b"pas un pdf", content_type="application/pdf")
         with pytest.raises(services.TreasuryValidationError):
-            pay(ctx, pin=WRONG_PIN, attachment=bogus)
-        ctx.treasurer.user.refresh_from_db()
-        assert ctx.treasurer.user.pin_failed_attempts == 0
+            pay(ctx, attachment=bogus)
         assert not Payment.all_objects.exists()
+        assert not Transaction.all_objects.exists()
 
     def test_frais_d_adhesion_refuses_dans_le_contexte_d_un_autre_club(self, ctx, fee_type, other_ctx):
         with active_club(other_ctx.club):
             with pytest.raises(TenantMismatchError):
-                pay(ctx, membership=ctx.pending_member, pin=WRONG_PIN)
-        ctx.treasurer.user.refresh_from_db()
-        assert ctx.treasurer.user.pin_failed_attempts == 0
+                pay(ctx, membership=ctx.pending_member)
+        assert not Payment.all_objects.exists()
 
     def test_remboursement_refuse_dans_le_contexte_d_un_autre_club(self, ctx, fee_type, other_ctx):
         pay(ctx, membership=ctx.pending_member)
         with active_club(other_ctx.club):
             with pytest.raises(TenantMismatchError):
                 services.refund_membership_fee(
-                    membership=ctx.pending_member, reason="Refus du parrain", president=ctx.president.user, pin=WRONG_PIN
+                    membership=ctx.pending_member, reason="Refus du parrain", president=ctx.president.user
                 )
-        ctx.president.user.refresh_from_db()
-        assert ctx.president.user.pin_failed_attempts == 0
         assert not PaymentReversal.all_objects.exists()
 
     def test_demande_d_annulation_refusee_dans_le_contexte_d_un_autre_club(self, ctx, fee_type, other_ctx):
@@ -367,11 +363,9 @@ class TestControlesAvantLePin:
         reversal = services.request_payment_reversal(payment=payment, reason="Erreur", requested_by=ctx.treasurer.user)
         with active_club(other_ctx.club):
             with pytest.raises(TenantMismatchError):
-                services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=WRONG_PIN)
+                services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user)
             with pytest.raises(TenantMismatchError):
                 services.reject_payment_reversal(
                     reversal=reversal, rejected_by=ctx.president.user, rejection_reason="Non"
                 )
-        ctx.president.user.refresh_from_db()
-        assert ctx.president.user.pin_failed_attempts == 0
         assert PaymentReversal.all_objects.get(pk=reversal.pk).status == PaymentReversal.Status.PENDING_APPROVAL

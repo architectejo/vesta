@@ -89,3 +89,45 @@ def test_same_evaluator_updates_existing_evaluation(ctx):
 
     assert Evaluation.all_objects.filter(club=ctx.club, event=session.event, membership=ctx.player, evaluator=ctx.coach.user).count() == 1
     assert services.get_average_evaluation(session.event, ctx.player) == Decimal("9.0")
+
+
+def test_evaluations_read_access_by_role(ctx):
+    """D9 : DS lit tout ; le joueur lit SES notes (commentaire seulement si visible) sans voir celles des autres."""
+    from django.urls import reverse
+    from rest_framework import status
+
+    from apps.sport.tests.conftest import client_for
+
+    session = _present_session(ctx, ctx.player)
+    services.mark_arrival(
+        session=session, membership=ctx.captain,
+        arrived_at=datetime.datetime.combine(
+            session.event.event_date, datetime.time(7, 40), tzinfo=services._club_tz(services._club_settings(ctx.club))
+        ),
+        marked_by=ctx.coach.user,
+    )
+    services.submit_evaluation(
+        event=session.event, membership=ctx.player, evaluator=ctx.coach.user, overall_score=Decimal("8.0"),
+        comment="secret coach", comment_visible_to_player=False,
+    )
+    services.submit_evaluation(
+        event=session.event, membership=ctx.captain, evaluator=ctx.coach.user, overall_score=Decimal("5.0"),
+    )
+    url = reverse("sport:event-evaluations", args=[session.event_id])
+
+    ds = client_for(ctx.sports_director.user).get(url)
+    assert ds.status_code == status.HTTP_200_OK and len(ds.data["results"]) == 2
+
+    mine = client_for(ctx.player.user).get(url)
+    assert mine.status_code == status.HTTP_200_OK
+    assert [r["membership_id"] for r in mine.data["results"]] == [ctx.player.pk]
+    assert mine.data["results"][0]["comment"] == ""
+    assert set(mine.data["averages"]) == {str(ctx.player.pk)}
+
+    # Un autre rôle sans droit de lecture élargie (Médecin) ne voit que ses propres notes (aucune ici).
+    doc = client_for(ctx.doctor.user).get(url)
+    assert doc.status_code == status.HTTP_200_OK and doc.data["results"] == []
+
+    # L'écriture reste réservée aux évaluateurs.
+    denied = client_for(ctx.player.user).post(url, {"membership_id": ctx.player.pk, "overall_score": "9"})
+    assert denied.status_code == status.HTTP_403_FORBIDDEN

@@ -88,7 +88,7 @@ describe("PlayerComparisonModal", () => {
     vi.mocked(searchActiveClubPlayers).mockResolvedValue([
       { id: 20, firstName: "Jean", lastName: "Kabila", number: 8, position: "Milieu" },
       { id: 21, firstName: "Marc", lastName: "Ilunga", number: 9, position: "Attaquant" },
-      { id: 22, firstName: "Paul", lastName: "Mwamba", number: 10, position: "Attaquant" },
+      { id: 22, firstName: "Paul", lastName: "Makasi", number: 10, position: "Attaquant" },
     ]);
     const user = userEvent.setup();
     renderModal();

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { login } from "../../api/auth";
 import { ApiError } from "../../api/client";
@@ -46,6 +46,9 @@ export function ConnexionPage() {
   const [forgotOpen, setForgotOpen] = useState(false);
   const [creatingClub, setCreatingClub] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
+  // Destination décidée à la connexion : lue par la redirection « déjà connecté »
+  // qui se déclenche dès que la session est ouverte (sinon elle enverrait « / »).
+  const destinationRef = useRef<string | null>(null);
 
   useEffect(() => {
     function handleOnline() {
@@ -63,7 +66,7 @@ export function ConnexionPage() {
   }, []);
 
   if (auth.status === "authenticated") {
-    return <Navigate to={auth.user?.is_superuser ? "/admin" : "/"} replace />;
+    return <Navigate to={destinationRef.current ?? (auth.user?.is_superuser ? "/admin" : "/")} replace />;
   }
 
   async function attemptLogin(clubSlug?: string): Promise<void> {
@@ -80,9 +83,14 @@ export function ConnexionPage() {
     setSubmitting(true);
     try {
       const result = await login({ email: email.trim(), password, club_slug: clubSlug ?? slug });
-      auth.applySession(result);
       const suite = sanitizeSuite(searchParams.get("suite"));
-      navigate(suite || (result.user.is_superuser ? "/admin" : "/"), { replace: true });
+      // Une adresse de suite l'emporte toujours ; sinon la destination d'arrivée
+      // est décidée par l'API (`default_landing`), jamais déduite d'un rôle ici.
+      const landing = result.default_landing === "board_dashboard" ? "/tableau-de-bord" : "/";
+      const destination = suite || (result.user.is_superuser ? "/admin" : landing);
+      destinationRef.current = destination;
+      auth.applySession(result);
+      navigate(destination, { replace: true });
     } catch (err) {
       setPassword("");
       if (err instanceof ApiError) {

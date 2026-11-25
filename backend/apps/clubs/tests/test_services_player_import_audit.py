@@ -106,6 +106,8 @@ class TestUserUpdateIsAuditedThroughImport:
         )
 
         assert summary.rows[0].outcome == "created_new_club_membership"
+        # Message neutre : ne révèle pas que l'email existait dans un autre club.
+        assert summary.rows[0].message == "Ligne 2 : adhésion créée."
         known_user.refresh_from_db()
         assert known_user.phone == "0833333333"
         assert known_user.birth_date == date(1985, 5, 17)

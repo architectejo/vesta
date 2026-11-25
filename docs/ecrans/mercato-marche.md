@@ -88,6 +88,5 @@ Même lecture et même chronologie que §4.3. *Reporté après le Lot 5, voir `d
 
 - **10.2 n° 11** appliquée : le club d'origine **ne peut pas s'opposer** au transfert d'un joueur sans dette (aucun bouton d'opposition) ; **frais d'adhésion dus** au nouveau club (mentionnés dans l'offre et à l'acceptation).
 - **Point ouvert — accès** : 1.2 range le mercato dans l'espace public, mais la matrice 2.4 ne donne aux simples joueurs (et à l'adjoint, l'intendant, le capitaine, le médecin) que leurs propres données. **Défaut appliqué : la matrice fait foi** — le tableau « Marché » n'est visible que par Pdt, VP, DS, Trés, Coach.
-- **Point ouvert** : le joueur doit-il confirmer l'acceptation par code PIN ? Non exigé par 7.2 ; confirmation simple retenue.
 - **Proposition par défaut non tranchée par le 10.2 (Q8 de `docs/lot0/analyse.md`)** : déblocage automatique d'un transfert bloqué pour dette dès que le solde repasse positif ou nul, sans nouvelle acceptation. Ce n'est pas un fait acquis du cahier des charges (le 4.14 ne le précise pas) ; à confirmer par le client.
 - **Reporté après le Lot 5, voir `docs/backlog-post-mvp.md` (entrée 8)** : retrait d'une offre en attente par le club qui l'a envoyée (non décrit au 4.14).

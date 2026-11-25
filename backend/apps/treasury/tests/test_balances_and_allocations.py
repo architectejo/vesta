@@ -23,7 +23,6 @@ from apps.treasury.models import (
     PaymentReversal,
     Transaction,
 )
-from apps.treasury.tests.conftest import PIN
 from apps.treasury.tests.factories import ContributionTypeFactory
 
 pytestmark = pytest.mark.django_db
@@ -242,7 +241,7 @@ class TestBalanceAndEligibility:
         reversal = services.request_payment_reversal(
             payment=payment, reason="Saisie incorrecte", requested_by=ctx.treasurer.user
         )
-        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=PIN)
+        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user)
 
         assert services.get_balance(ctx.player, at_date=datetime.date(2026, 2, 11)) == Decimal("-10.00")
         assert not PaymentAllocation.all_objects.filter(payment=payment).exists()
@@ -316,7 +315,7 @@ class TestPaymentAllocations:
         reversal = services.request_payment_reversal(
             payment=first, reason="Paiement saisi par erreur", requested_by=ctx.treasurer.user
         )
-        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=PIN)
+        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user)
 
         assert not PaymentAllocation.all_objects.filter(payment=first).exists()
         assert list(

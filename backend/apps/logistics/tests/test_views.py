@@ -159,4 +159,76 @@ def test_inventory_endpoints_full_cycle(ctx: LogisticsClubContext):
 
     overview = client.get(reverse("logistics:overview"))
     assert overview.status_code == status.HTTP_200_OK
-    assert overview.data["can_open"] is True
+    assert overview.data["can_open"] is False  # trimestre déjà clôturé (D6d)
+
+
+def test_open_inventory_refused_when_quarter_already_closed(ctx: LogisticsClubContext):
+    """D6d : un trimestre déjà clôturé ne peut pas être ré-ouvert (400, pas 500)."""
+    client = client_for(ctx.steward.user)
+    first = client.post(reverse("logistics:inventory-open"))
+    assert first.status_code == status.HTTP_201_CREATED
+    closed = client.post(reverse("logistics:inventory-close", args=[first.data["id"]]))
+    assert closed.status_code == status.HTTP_200_OK, closed.data
+
+    overview = client.get(reverse("logistics:overview")).data
+    assert overview["can_open"] is False
+    assert overview["openable_quarter_label"] is None
+
+    again = client.post(reverse("logistics:inventory-open"))
+    assert again.status_code == status.HTTP_400_BAD_REQUEST
+    assert "déjà" in again.data["detail"]
+
+
+def test_movement_rejects_unknown_references(ctx: LogisticsClubContext, other_ctx: LogisticsClubContext):
+    """D11 : membership d'un autre club, match/dépense inexistants -> 400."""
+    client = client_for(ctx.steward.user)
+    article = client.post(
+        reverse("logistics:article-list"), {"name": "Ballon", "category": Article.Category.MISC}, format="json"
+    ).data["id"]
+    base = {
+        "movement_type": StockMovement.MovementType.IN_PURCHASE,
+        "article_id": article,
+        "quantity": 2,
+        "movement_date": timezone.now().date().isoformat(),
+    }
+    for extra in (
+        {"membership_id": other_ctx.player.id},
+        {"match_id": 999999},
+        {"expense_id": 999999},
+    ):
+        resp = client.post(reverse("logistics:movement-list"), {**base, **extra}, format="json")
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, extra
+        assert resp.data["detail"]
+
+
+def test_duplicate_article_name_answers_400_case_insensitively(ctx: LogisticsClubContext):
+    client = client_for(ctx.steward.user)
+    first = client.post(
+        reverse("logistics:article-list"), {"name": "Maillot B2", "category": Article.Category.JERSEY}, format="json"
+    )
+    assert first.status_code == status.HTTP_201_CREATED
+
+    duplicate = client.post(
+        reverse("logistics:article-list"), {"name": "maillot b2", "category": Article.Category.JERSEY}, format="json"
+    )
+    assert duplicate.status_code == status.HTTP_400_BAD_REQUEST
+    assert duplicate.data["detail"] == "Un article porte déjà ce nom dans votre club."
+
+    other = client.post(
+        reverse("logistics:article-list"), {"name": "Ballon", "category": Article.Category.MISC}, format="json"
+    )
+    rename = client.patch(reverse("logistics:article-detail", args=[other.data["id"]]), {"name": "MAILLOT B2"}, format="json")
+    assert rename.status_code == status.HTTP_400_BAD_REQUEST
+    assert rename.data["detail"] == "Un article porte déjà ce nom dans votre club."
+
+    same_name_on_itself = client.patch(
+        reverse("logistics:article-detail", args=[other.data["id"]]), {"name": "BALLON"}, format="json"
+    )
+    assert same_name_on_itself.status_code == status.HTTP_200_OK
+    assert Article.all_objects.filter(club=ctx.club).count() == 2
+
+
+def test_same_article_name_is_allowed_in_another_club(ctx: LogisticsClubContext, other_ctx: LogisticsClubContext):
+    payload = {"name": "Maillot B2", "category": Article.Category.JERSEY}
+    assert client_for(ctx.steward.user).post(reverse("logistics:article-list"), payload, format="json").status_code == 201
+    assert client_for(other_ctx.steward.user).post(reverse("logistics:article-list"), payload, format="json").status_code == 201

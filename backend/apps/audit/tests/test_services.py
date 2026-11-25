@@ -184,3 +184,18 @@ class TestGardeFouContenuMedical:
         )
 
         assert entry.after == {"notes": "carton jaune pour contestation"}
+
+
+def test_clinical_keys_are_rejected_when_nested():
+    from apps.audit.services import assert_no_clinical_content
+
+    for payload in (
+        {"details": {"diagnosis": "x"}},
+        {"items": [{"ok": 1}, {"Notes": "x"}]},
+        {"a": {"b": {"c": [{"allergies": "x"}]}}},
+    ):
+        with pytest.raises(MedicalContentInLogError):
+            assert_no_clinical_content("medical.injury.updated", payload, field_label="after")
+    # Hors domaine medical, ou sans cle clinique, rien n'est rejete.
+    assert_no_clinical_content("treasury.expense.created", {"details": {"notes": "x"}}, field_label="after")
+    assert_no_clinical_content("medical.injury.updated", {"details": {"id": 1}}, field_label="after")

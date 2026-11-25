@@ -1,8 +1,8 @@
-"""API de l'import des cotisations historiques (tâche 2.6 ; CDC 4.4.8,
-7.2 ; matrice 2.4).
+"""API de l'import des cotisations historiques (tâche 2.6 ; CDC 4.4.8 ;
+matrice 2.4).
 
 Trésorier et adjoint uniquement (403 sinon, 401 sans jeton), multipart,
-aperçu sans aucune écriture, import définitif confirmé par code PIN, 404
+aperçu sans aucune écriture, import définitif sans PIN (décision client du 11/10/2026), 404
 pour un type d'un autre club, rapport détaillé des lignes en échec.
 """
 
@@ -19,7 +19,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from apps.audit.models import AuditLog
 from apps.treasury import services
 from apps.treasury.models import Due, Payment
-from apps.treasury.tests.conftest import PIN, WRONG_PIN
+from apps.treasury.tests.conftest import PIN, WRONG_PIN, assert_logged_by
 from apps.treasury.tests.grid_helpers import attach, attached_type, csv_file, csv_line, player
 
 pytestmark = pytest.mark.django_db
@@ -43,7 +43,7 @@ def setup(ctx):
     year = last_year(ctx)
     ctype = attached_type(ctx)
     # Entré l'année d'avant : aucun mois d'arrivée dans l'année importée (Q4).
-    member = player(ctx, "Adolphe", "Abedi", joined_on=datetime.date(year - 1, 6, 1))
+    member = player(ctx, "Adolphe", "Akeba", joined_on=datetime.date(year - 1, 6, 1))
     attach(ctx, member, ctype, starts_on=datetime.date(year, 1, 1))
     return ctype, member, year
 
@@ -66,7 +66,7 @@ class TestPermissions:
         ctype, _, year = setup
         client = client_for(getattr(ctx, role))
         for name in (PREVIEW, IMPORT):
-            data = body(ctype, year, [csv_line("Adolphe Abedi", "10")], pin=PIN)
+            data = body(ctype, year, [csv_line("Adolphe Akeba", "10")])
             assert client.post(reverse(name), data, format="multipart").status_code == 403
         assert Payment.all_objects.count() == 0
 
@@ -75,7 +75,7 @@ class TestPermissions:
         theirs = attached_type(other_ctx)
         client = client_for(ctx.treasurer)
         for name in (PREVIEW, IMPORT):
-            response = client.post(reverse(name), body(theirs, year, [], pin=PIN), format="multipart")
+            response = client.post(reverse(name), body(theirs, year, []), format="multipart")
             assert response.status_code == 404
             assert response.data["detail"] == "Type de cotisation introuvable dans ce club."
 
@@ -91,7 +91,7 @@ class TestApercu:
     def test_apercu_sans_ecriture(self, ctx, setup):
         ctype, member, year = setup
         before = (Payment.all_objects.count(), Due.all_objects.count(), AuditLog.objects.count())
-        lines = [csv_line("ABEDI Adolphe", "60", "ok", "ok"), csv_line("Personne Inconnue", "10")]
+        lines = [csv_line("AKEBA Adolphe", "60", "ok", "ok"), csv_line("Personne Inconnue", "10")]
         response = client_for(ctx.assistant_treasurer).post(reverse(PREVIEW), body(ctype, year, lines), format="multipart")
         assert response.status_code == 200, response.data
         assert (Payment.all_objects.count(), Due.all_objects.count(), AuditLog.objects.count()) == before
@@ -145,10 +145,10 @@ class TestApercu:
 
 
 class TestImport:
-    def test_import_definitif_avec_pin(self, ctx, setup):
+    def test_import_definitif_sans_pin(self, ctx, setup):
         ctype, member, year = setup
-        lines = [csv_line("Adolphe Abedi", "60", "ok", "ok", "ok", "ok", "ok", "ok")]
-        response = client_for(ctx.treasurer).post(reverse(IMPORT), body(ctype, year, lines, pin=PIN), format="multipart")
+        lines = [csv_line("Adolphe Akeba", "60", "ok", "ok", "ok", "ok", "ok", "ok")]
+        response = client_for(ctx.treasurer).post(reverse(IMPORT), body(ctype, year, lines), format="multipart")
         assert response.status_code == 201, response.data
         data = response.data
         assert data["is_preview"] is False and data["import_batch_id"] is not None
@@ -164,25 +164,28 @@ class TestImport:
         assert row["total"] == "70.00"
         assert row["player_status"]["balance"] == "-50.00"
 
-    def test_pin_obligatoire(self, ctx, setup):
+    def test_sans_pin_201_et_auteur_journalise(self, ctx, setup):
         ctype, _, year = setup
-        response = client_for(ctx.treasurer).post(
-            reverse(IMPORT), body(ctype, year, [csv_line("Adolphe Abedi", "10")]), format="multipart"
+        response = client_for(ctx.assistant_treasurer).post(
+            reverse(IMPORT), body(ctype, year, [csv_line("Adolphe Akeba", "10")]), format="multipart"
         )
-        assert response.status_code == 400 and "pin" in response.data
+        assert response.status_code == 201, response.data
+        assert_logged_by("treasury.contribution_import.completed", ctx.assistant_treasurer.user, club=ctx.club)
 
-    def test_pin_faux_rien_n_est_ecrit(self, ctx, setup):
+    def test_pin_envoye_par_un_ancien_client_ignore(self, ctx, setup):
         ctype, _, year = setup
         response = client_for(ctx.treasurer).post(
-            reverse(IMPORT), body(ctype, year, [csv_line("Adolphe Abedi", "10")], pin=WRONG_PIN), format="multipart"
+            reverse(IMPORT), body(ctype, year, [csv_line("Adolphe Akeba", "10")], pin=WRONG_PIN), format="multipart"
         )
-        assert response.status_code == 400 and response.data["attempts_remaining"] == 2
-        assert Payment.all_objects.count() == 0 and Due.all_objects.count() == 0
+        assert response.status_code == 201, response.data
+        assert "attempts_remaining" not in response.data
+        assert Payment.all_objects.count() == 1
+        ctx.treasurer.user.refresh_from_db()
 
     def test_registre_gele_409(self, ctx, setup):
         ctype, _, year = setup
         services.freeze_ledger(club=ctx.club, reason="test", actor=None)
         response = client_for(ctx.treasurer).post(
-            reverse(IMPORT), body(ctype, year, [csv_line("Adolphe Abedi", "10")], pin=PIN), format="multipart"
+            reverse(IMPORT), body(ctype, year, [csv_line("Adolphe Akeba", "10")]), format="multipart"
         )
         assert response.status_code == 409 and response.data["code"] == "ledger_frozen"

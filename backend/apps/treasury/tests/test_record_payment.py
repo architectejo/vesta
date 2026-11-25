@@ -1,8 +1,9 @@
-"""Enregistrement général d'un paiement (tâche 2.4 ; CDC 4.4.3, 4.4.4, 7.2).
+"""Enregistrement général d'un paiement (tâche 2.4 ; CDC 4.4.3, 4.4.4).
 
 Service ``preview_payment_allocation`` (aperçu sans écriture) et
-``record_payment`` (PIN vérifié par le serveur, rôle et données contrôlés
-avant le PIN), puis l'API correspondante (JSON et multipart), avec
+``record_payment`` (rôle et données contrôlés par le serveur ; plus de PIN
+depuis la décision client du 11/10/2026, CLAUDE.md règle 7 : l'auteur est
+journalisé), puis l'API correspondante (JSON et multipart), avec
 l'étanchéité entre clubs.
 """
 
@@ -17,13 +18,12 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.accounts.services import InvalidPinError, PinLockedError
 from apps.audit.models import AuditLog
 from apps.clubs.models import Membership
 from apps.treasury import services
 from apps.treasury.models import Payment, PaymentAllocation, Transaction
 from apps.treasury.tests.cash_helpers import club_today, free_type, monthly_type, named_member, put_in_debt
-from apps.treasury.tests.conftest import PIN, WRONG_PIN, past_day
+from apps.treasury.tests.conftest import PIN, WRONG_PIN, assert_logged_by, past_day
 
 pytestmark = pytest.mark.django_db
 
@@ -37,7 +37,7 @@ def march_player(ctx):
     return named_member(ctx, first_name="Mars", last_name="Quatremois", joined_on=datetime.date(2026, 3, 1))
 
 
-def record(ctx, membership, ctype, *, amount="10", method="cash", paid_on=MARCH, by=None, pin=PIN, **extra):
+def record(ctx, membership, ctype, *, amount="10", method="cash", paid_on=MARCH, by=None, **extra):
     return services.record_payment(
         membership=membership,
         contribution_type=ctype,
@@ -45,7 +45,6 @@ def record(ctx, membership, ctype, *, amount="10", method="cash", paid_on=MARCH,
         method=method,
         paid_on=paid_on,
         recorded_by=(by or ctx.treasurer).user,
-        pin=pin,
         **extra,
     )
 
@@ -183,42 +182,45 @@ class TestRecordPayment:
         record(ctx, ctx.player, ctype, paid_on=club_today(ctx))
         assert services.is_in_good_standing(ctx.player)[0] is True
 
-    def test_pin_faux_rien_ecrit(self, ctx):
-        ctype = monthly_type(ctx)
-        before = counts()
-        with pytest.raises(InvalidPinError):
-            record(ctx, ctx.player, ctype, paid_on=past_day(), pin=WRONG_PIN)
-        assert counts()[:3] == before[:3]
+    def test_reussit_sans_pin_et_journalise_l_auteur(self, ctx):
+        """Décision client du 11/10/2026 (CLAUDE.md règle 7) : plus de PIN ;
+        l'auteur de la validation est écrit dans le journal."""
 
-    def test_pin_bloque(self, ctx):
         ctype = monthly_type(ctx)
-        for _ in range(3):
-            with pytest.raises((InvalidPinError, PinLockedError)):
-                record(ctx, ctx.player, ctype, paid_on=past_day(), pin=WRONG_PIN)
-        with pytest.raises(PinLockedError):
-            record(ctx, ctx.player, ctype, paid_on=past_day())
+        payment = record(ctx, ctx.player, ctype, paid_on=past_day(), by=ctx.assistant_treasurer)
+        assert payment.transaction.status == Transaction.Status.SUCCEEDED
+        assert_logged_by("treasury.payment.validated", ctx.assistant_treasurer.user, club=ctx.club)
+
+    def test_le_parametre_pin_n_existe_plus(self, ctx):
+        """Le service n'accepte plus de ``pin`` (supprimé le 11/10/2026)."""
+
+        ctype = monthly_type(ctx)
+        with pytest.raises(TypeError):
+            record(ctx, ctx.player, ctype, paid_on=past_day(), pin=WRONG_PIN)
         assert Payment.all_objects.count() == 0
 
     @pytest.mark.parametrize("role", ["president", "vice_president", "player"])
-    def test_role_verifie_avant_le_pin(self, ctx, role):
+    def test_roles_non_autorises_refuses(self, ctx, role):
         ctype = monthly_type(ctx)
         member = getattr(ctx, role)
+        before = counts()
         with pytest.raises(services.TreasuryPermissionError):
-            record(ctx, ctx.player, ctype, paid_on=past_day(), by=member, pin=WRONG_PIN)
-        member.user.refresh_from_db()
-        assert member.user.pin_failed_attempts == 0
+            record(ctx, ctx.player, ctype, paid_on=past_day(), by=member)
+        assert counts() == before
 
     @pytest.mark.parametrize("amount", ["0", "-5", "abc", "", "1e30", 10.5, None])
     def test_montants_invalides(self, ctx, amount):
         ctype = monthly_type(ctx)
         with pytest.raises(services.InvalidAmountError):
             record(ctx, ctx.player, ctype, amount=amount, paid_on=past_day())
-        ctx.treasurer.user.refresh_from_db()
-        assert ctx.treasurer.user.pin_failed_attempts == 0
+        assert Payment.all_objects.count() == 0
 
     def test_montant_arrondi_a_deux_decimales(self, ctx):
         ctype = monthly_type(ctx)
-        assert record(ctx, ctx.player, ctype, amount="10.005", paid_on=past_day()).amount == Decimal("10.01")
+        # D7 : valeur Decimal arrondie ; une saisie texte à 3 décimales est refusée (D-A7).
+        assert record(ctx, ctx.player, ctype, amount=Decimal("10.005"), paid_on=past_day()).amount == Decimal("10.01")
+        with pytest.raises(services.InvalidAmountError, match="2 chiffres après la virgule"):
+            record(ctx, ctx.player, ctype, amount="10.005", paid_on=past_day())
 
     @pytest.mark.parametrize("method", ["mobile_money", "payment_link"])
     def test_reference_obligatoire_hors_especes(self, ctx, method):
@@ -258,21 +260,19 @@ class TestRecordPayment:
         with pytest.raises(services.TreasuryValidationError, match="quitté"):
             record(ctx, ctx.player, ctype, paid_on=past_day())
 
-    def test_piece_jointe_invalide_refusee_avant_le_pin(self, ctx):
+    def test_piece_jointe_invalide_refusee(self, ctx):
         ctype = monthly_type(ctx)
         fake = SimpleUploadedFile("faux.pdf", b"pas un pdf", content_type="application/pdf")
         with pytest.raises(services.TreasuryValidationError, match="Format"):
-            record(ctx, ctx.player, ctype, paid_on=past_day(), attachment=fake, pin=WRONG_PIN)
-        ctx.treasurer.user.refresh_from_db()
-        assert ctx.treasurer.user.pin_failed_attempts == 0
+            record(ctx, ctx.player, ctype, paid_on=past_day(), attachment=fake)
+        assert Payment.all_objects.count() == 0
 
     def test_ecritures_gelees(self, ctx):
         ctype = monthly_type(ctx)
         services.freeze_ledger(club=ctx.club, reason="Test de gel", actor=None)
         with pytest.raises(services.LedgerFrozenError):
-            record(ctx, ctx.player, ctype, paid_on=past_day(), pin=WRONG_PIN)
-        ctx.treasurer.user.refresh_from_db()
-        assert ctx.treasurer.user.pin_failed_attempts == 0
+            record(ctx, ctx.player, ctype, paid_on=past_day())
+        assert Payment.all_objects.count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +319,7 @@ class TestPaymentApi:
         response = client_for(ctx.treasurer).post(
             reverse("treasury:payment-create"),
             payload(
-                ctx.player, ctype, pin=PIN, method="mobile_money", reference="MM-1",
+                ctx.player, ctype, method="mobile_money", reference="MM-1",
                 attachment=SimpleUploadedFile("recu.pdf", PDF, content_type="application/pdf"),
             ),
             format="multipart",
@@ -334,25 +334,34 @@ class TestPaymentApi:
         ctype = monthly_type(ctx)
         response = client_for(ctx.treasurer).post(
             reverse("treasury:payment-create"),
-            payload(ctx.player, ctype, pin=PIN, attachment=SimpleUploadedFile("x.pdf", b"texte")),
+            payload(ctx.player, ctype, attachment=SimpleUploadedFile("x.pdf", b"texte")),
             format="multipart",
         )
         assert response.status_code == 400
         assert Payment.all_objects.count() == 0
 
-    def test_pin_faux_400_avec_essais_restants(self, ctx):
+    def test_sans_pin_201_et_auteur_journalise(self, ctx):
+        ctype = monthly_type(ctx)
+        response = client_for(ctx.treasurer).post(
+            reverse("treasury:payment-create"), payload(ctx.player, ctype, method="cash"), format="json"
+        )
+        assert response.status_code == 201, response.data
+        assert_logged_by("treasury.payment.validated", ctx.treasurer.user, club=ctx.club)
+
+    def test_pin_envoye_par_un_ancien_client_ignore(self, ctx):
         ctype = monthly_type(ctx)
         response = client_for(ctx.treasurer).post(
             reverse("treasury:payment-create"), payload(ctx.player, ctype, pin=WRONG_PIN, method="cash"), format="json"
         )
-        assert response.status_code == 400
-        assert response.data["attempts_remaining"] == 2
+        assert response.status_code == 201, response.data
+        assert "attempts_remaining" not in response.data
+        ctx.treasurer.user.refresh_from_db()
 
     def test_montant_illisible_400(self, ctx):
         ctype = monthly_type(ctx)
         response = client_for(ctx.treasurer).post(
             reverse("treasury:payment-create"),
-            payload(ctx.player, ctype, pin=PIN, method="cash", amount="dix"),
+            payload(ctx.player, ctype, method="cash", amount="dix"),
             format="json",
         )
         assert response.status_code == 400
@@ -363,7 +372,7 @@ class TestPaymentApi:
     def test_403_hors_tresorier_et_adjoint(self, ctx, role, name):
         ctype = monthly_type(ctx)
         response = client_for(getattr(ctx, role)).post(
-            reverse(f"treasury:{name}"), payload(ctx.player, ctype, pin=PIN, method="cash"), format="json"
+            reverse(f"treasury:{name}"), payload(ctx.player, ctype, method="cash"), format="json"
         )
         assert response.status_code == 403
 
@@ -375,7 +384,7 @@ class TestPaymentApi:
         ctype = monthly_type(ctx)
         response = client_for(ctx.treasurer).post(
             reverse("treasury:payment-create"),
-            payload(other_ctx.player, ctype, pin=PIN, method="cash"),
+            payload(other_ctx.player, ctype, method="cash"),
             format="json",
         )
         assert response.status_code == 404

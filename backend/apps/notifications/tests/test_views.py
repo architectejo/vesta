@@ -184,6 +184,14 @@ class TestNotificationMarkReadView:
         notification.refresh_from_db()
         assert notification.is_read is False
 
+    def test_notification_inexistante_repond_404_en_francais(self):
+        client = _authenticated_client(UserFactory())
+
+        response = client.post(reverse("notifications:mark-read", kwargs={"notification_id": 987654}))
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert response.data["detail"] == "Cette notification n'existe pas."
+
 
 class TestNotificationMarkAllReadView:
     def test_tout_marquer_comme_lu_ne_touche_pas_les_notifications_d_un_autre_utilisateur(self):

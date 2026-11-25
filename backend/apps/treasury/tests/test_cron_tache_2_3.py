@@ -39,7 +39,7 @@ from apps.treasury.models import (
     PaymentAllocation,
     Transaction,
 )
-from apps.treasury.tests.conftest import PIN, make_member, past_day
+from apps.treasury.tests.conftest import make_member, past_day
 from apps.treasury.tests.expense_helpers import days_ago, make_category, make_expense, release
 
 pytestmark = pytest.mark.django_db
@@ -382,7 +382,6 @@ def fee_payment(ctx):
         method="cash",
         paid_on=past_day(),
         validated_by=ctx.treasurer.user,
-        pin=PIN,
     )
 
 
@@ -479,6 +478,12 @@ class TestVerifyLedgerChain:
         before = financial_snapshot(ctx)
         assert before["standing"][ctx.player.pk][0] is True
         assert before["standing"][ctx.vice_president.pk][0] is False
+        # Les paiements de la mise en place notifient legitimement leurs
+        # joueurs (« Paiement valide », CDC 4.17) : on controle que la
+        # verification, elle, ne notifie aucun non-Superuser.
+        non_superuser_notifications = set(
+            Notification.objects.filter(recipient__is_superuser=False).values_list("pk", flat=True)
+        )
 
         error, _, err = run_failing("verify_ledger_chain")
 
@@ -498,7 +503,13 @@ class TestVerifyLedgerChain:
         assert sorted(recipients) == sorted(active_superusers)
         assert inactive_superuser.pk not in recipients
         assert set(alerts.values_list("club_id", flat=True)) == {ctx.club.pk}
-        assert Notification.objects.filter(recipient__is_superuser=False).count() == 0
+        assert (
+            set(Notification.objects.filter(recipient__is_superuser=False).values_list("pk", flat=True))
+            == non_superuser_notifications
+        )
+        assert not Notification.objects.filter(
+            recipient__is_superuser=False, event_type=Notification.EventType.LEDGER_CHAIN_BROKEN
+        ).exists()
         # Aucun joueur penalise : rien n'a bouge du cote des joueurs.
         assert financial_snapshot(ctx) == before
         # Convention cron : pas d'entree de journal sans acteur reel.

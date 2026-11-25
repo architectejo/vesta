@@ -139,3 +139,18 @@ class TestRejectedFiles:
             validate_upload_size(upload)
 
         assert exc_info.value.code == "file_too_large"
+
+
+class TestPdfDisguise:
+    def test_html_after_pdf_header_is_refused(self):
+        with pytest.raises(ValidationError):
+            validate_image_or_pdf(
+                SimpleUploadedFile("x.html", b"%PDF-1.4\n<html><script>1</script></html>", content_type="application/pdf")
+            )
+
+    def test_pdf_with_a_few_leading_bytes_is_accepted(self):
+        validate_image_or_pdf(SimpleUploadedFile("a.pdf", b"\xef\xbb\xbf\n" + PDF_BYTES, content_type="application/pdf"))
+
+    def test_pdf_header_far_from_the_start_is_refused(self):
+        with pytest.raises(ValidationError):
+            validate_image_or_pdf(SimpleUploadedFile("a.pdf", b"x" * 50 + PDF_BYTES, content_type="application/pdf"))

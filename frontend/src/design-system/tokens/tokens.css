@@ -44,6 +44,29 @@
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.06);
   --shadow-elevated: 0 8px 24px rgb(0 0 0 / 0.18);
 
+  /* Icônes (2.2, design-system-icones-animations.md §3.1) : une seule taille
+     dans un bouton texte ou un champ (16 px), une seule dans un IconButton
+     ou la navigation (20 px). 24 px réservé à EmptyState (hors token, classe
+     Tailwind directe). */
+  --icon-sm: 16px;
+  --icon-md: 20px;
+
+  /* Mouvement (design-system-icones-animations.md §2.1). Les fermetures sont
+     plus courtes que les ouvertures : on ne fait pas attendre quelqu'un qui
+     veut partir. */
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --duration-slow: 300ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0.2, 1);
+
+  /* Animations Tailwind nommées (§2.2) : génèrent `animate-skeleton`,
+     `animate-progress-indeterminate`, `animate-icon-spin`. */
+  --animate-skeleton: skeleton-pulse 1.2s ease-in-out infinite;
+  --animate-progress-indeterminate: progress-indeterminate 1.2s linear infinite;
+  --animate-icon-spin: icon-spin 0.8s linear infinite;
+
   /* Couleurs neutres (2.3) — valeurs par défaut = thème Clair / Classic sans logo */
   --color-bg: #e8ebef;
   --color-surface: #f6f7f9;
@@ -135,6 +158,17 @@
   --color-player-card-band-fg: #ffffff;
   --color-player-card-frame: #c7ced8;
   --color-player-card-frame-highlight: #f6f7f9;
+
+  /*
+   * Séries des graphiques (docs/ecrans/club-tableau-de-bord-bureau.md §6,
+   * club-carte-joueur.md B3.3) : distinctes des couleurs de statut, jamais
+   * issues du club, >= 3:1 sur --color-surface. L'information n'est jamais
+   * portée par la couleur seule (tracé ou motif + légende texte).
+   */
+  --color-series-1: #1d4ed8;
+  --color-series-2: #0f766e;
+  --color-series-3: #be185d;
+  --color-series-4: #854d0e;
 }
 
 /* Thème Sombre (2.3) */
@@ -183,6 +217,12 @@
   --color-player-card-band-fg: #f3f4f6;
   --color-player-card-frame: #6b7a94;
   --color-player-card-frame-highlight: #b8c1ce;
+
+  /* Séries des graphiques — Sombre */
+  --color-series-1: #60a5fa;
+  --color-series-2: #2dd4bf;
+  --color-series-3: #f472b6;
+  --color-series-4: #facc15;
 }
 
 /*
@@ -194,8 +234,113 @@
  * couleur de club codée en dur ici).
  */
 
+/*
+ * Animations nommées (design-system-icones-animations.md §2.1, §2.2).
+ * Chaque surface qui apparaît/disparaît porte une classe `vesta-anim-*` et
+ * un attribut `data-state="open" | "closing"` posé par le composant :
+ * l'animation d'entrée joue au montage, celle de sortie joue pendant
+ * `data-state="closing"` puis le composant se démonte (sur `animationend`,
+ * avec un délai de secours côté JS). `prefers-reduced-motion` reste géré
+ * globalement ci-dessous : aucune règle ici n'a besoin de s'en soucier.
+ */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+@keyframes progress-indeterminate {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(220%); }
+}
+@keyframes icon-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes modal-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-overlay-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes modal-panel-centered-in {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes modal-panel-centered-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.98); }
+}
+@keyframes modal-panel-full-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes modal-panel-full-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(16px); }
+}
+@keyframes sheet-in { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes sheet-out { from { transform: translateY(0); } to { transform: translateY(100%); } }
+@keyframes drawer-in { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+@keyframes drawer-out { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+@keyframes menu-in {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes menu-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.98); }
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes toast-out { from { opacity: 1; } to { opacity: 0; } }
+
+/* Voile de modale. */
+.vesta-anim-overlay { animation: modal-overlay-in var(--duration-base) var(--ease-out); }
+.vesta-anim-overlay[data-state="closing"] { animation: modal-overlay-out var(--duration-fast) var(--ease-in); }
+
+/* Modale `size="sm"` : panneau bas sur mobile, centrée à partir de 640 px. */
+.vesta-anim-panel-sm { animation: sheet-in var(--duration-base) var(--ease-out); }
+.vesta-anim-panel-sm[data-state="closing"] { animation: sheet-out var(--duration-fast) var(--ease-in); }
+@media (min-width: 640px) {
+  .vesta-anim-panel-sm { animation: modal-panel-centered-in var(--duration-base) var(--ease-out); }
+  .vesta-anim-panel-sm[data-state="closing"] { animation: modal-panel-centered-out var(--duration-fast) var(--ease-in); }
+}
+
+/* Modale `size="md|lg|xl"` : plein écran sur mobile, centrée à partir de 640 px. */
+.vesta-anim-panel-full { animation: modal-panel-full-in var(--duration-base) var(--ease-out); }
+.vesta-anim-panel-full[data-state="closing"] { animation: modal-panel-full-out var(--duration-fast) var(--ease-in); }
+@media (min-width: 640px) {
+  .vesta-anim-panel-full { animation: modal-panel-centered-in var(--duration-base) var(--ease-out); }
+  .vesta-anim-panel-full[data-state="closing"] { animation: modal-panel-centered-out var(--duration-fast) var(--ease-in); }
+}
+
+/* Tiroir de navigation mobile (Sidebar). */
+.vesta-anim-drawer { animation: drawer-in var(--duration-base) var(--ease-out); }
+.vesta-anim-drawer[data-state="closing"] { animation: drawer-out var(--duration-fast) var(--ease-in); }
+
+/* Menu « … » / menu déroulant / filtres (ordinateur), origine au bouton. */
+.vesta-anim-menu { animation: menu-in var(--duration-fast) var(--ease-out); transform-origin: top right; }
+.vesta-anim-menu[data-state="closing"] { animation: menu-out 100ms var(--ease-in); }
+.vesta-anim-menu--left { transform-origin: top left; }
+.vesta-anim-menu--bottom { transform-origin: bottom right; }
+.vesta-anim-menu--bottom-left { transform-origin: bottom left; }
+
+/* Toast. */
+.vesta-anim-toast { animation: toast-in var(--duration-base) var(--ease-out); }
+.vesta-anim-toast[data-state="closing"] { animation: toast-out var(--duration-fast) var(--ease-in); }
+
+/* Graphiques (design-system/charts) : entrée de 200 ms, zones tactiles et focus. */
+@keyframes chart-enter { from { opacity: 0; } to { opacity: 1; } }
+.vesta-chart-enter { animation: chart-enter var(--duration-base) var(--ease-out); }
+.vesta-chart-hit { cursor: pointer; outline: none; }
+.vesta-chart-hit__rect { fill: transparent; }
+.vesta-chart-hit:hover .vesta-chart-hit__rect { fill: var(--color-surface-muted); fill-opacity: 0.6; }
+.vesta-chart-hit:focus-visible .vesta-chart-hit__rect {
+  fill: var(--color-surface-muted);
+  fill-opacity: 0.6;
+  stroke: var(--color-focus);
+  stroke-width: 2px;
+}
+
 /* Mouvement (2.2) : coupé si l'utilisateur préfère moins d'animation */
 @media (prefers-reduced-motion: reduce) {
+  .vesta-chart-enter { animation: none; }
   *,
   *::before,
   *::after {

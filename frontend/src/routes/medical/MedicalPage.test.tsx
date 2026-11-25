@@ -77,6 +77,15 @@ describe("MedicalPage (medical.md §3)", () => {
     expect(screen.getByRole("button", { name: "Retour à l'accueil" })).toBeInTheDocument();
   });
 
+  it("joueur : écran d'accès refusé immédiat, sans appeler medical/page/unfit/", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(baseProfile([{ role: "member", label: "Joueur" }]) as never);
+
+    renderPage();
+
+    expect(await screen.findByText("Vous n'avez pas accès à cette page.")).toBeInTheDocument();
+    expect(listUnfitAndRestricted).not.toHaveBeenCalled();
+  });
+
   it("Médecin : affiche « Blessures à compléter », « Effectif » et « Dernières blessures »", async () => {
     vi.mocked(getMyProfile).mockResolvedValue(baseProfile([{ role: "doctor", label: "Médecin / référent santé" }]) as never);
     vi.mocked(listUnfitAndRestricted).mockResolvedValue({ results: [] });

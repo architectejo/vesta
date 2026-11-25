@@ -69,6 +69,7 @@ export interface TreasuryCapabilities {
   can_manage_assistance_scales: boolean;
   can_process_assistance_requests: boolean;
   can_request_assistance: boolean;
+  can_decide_payment_reversal: boolean;
 }
 
 export interface TreasuryCapabilitiesResponse {
@@ -199,7 +200,8 @@ export interface PaymentCreateInput extends PaymentPreviewInput {
   method: PaymentMethod;
   reference?: string;
   attachment?: File | null;
-  pin: string;
+  /** UUID v4 d'idempotence ; omis s'il est absent, jamais envoyé vide. */
+  client_uuid?: string;
 }
 
 function toPaymentFormData(input: PaymentCreateInput): FormData {
@@ -210,8 +212,8 @@ function toPaymentFormData(input: PaymentCreateInput): FormData {
   form.append("paid_on", input.paid_on);
   form.append("method", input.method);
   form.append("reference", input.reference ?? "");
-  form.append("pin", input.pin);
   if (input.attachment) form.append("attachment", input.attachment);
+  if (input.client_uuid) form.append("client_uuid", input.client_uuid);
   return form;
 }
 
@@ -240,8 +242,8 @@ export function getCurrentCashSession() {
   return apiGet<{ session: CashSession | null }>("/treasury/cash-sessions/current/");
 }
 
-export function openCashSession(pin: string) {
-  return apiPost<{ session: CashSession }>("/treasury/cash-sessions/", { pin });
+export function openCashSession() {
+  return apiPost<{ session: CashSession }>("/treasury/cash-sessions/", {});
 }
 
 export function closeCashSession(id: string) {
@@ -562,16 +564,11 @@ export interface ContributionImportPreviewInput {
   file: File;
 }
 
-export interface ContributionImportCreateInput extends ContributionImportPreviewInput {
-  pin: string;
-}
-
-function toContributionImportFormData(input: ContributionImportPreviewInput | ContributionImportCreateInput): FormData {
+function toContributionImportFormData(input: ContributionImportPreviewInput): FormData {
   const form = new FormData();
   form.append("contribution_type_id", String(input.contribution_type_id));
   form.append("year", String(input.year));
   form.append("file", input.file);
-  if ("pin" in input) form.append("pin", input.pin);
   return form;
 }
 
@@ -583,8 +580,8 @@ export function previewContributionImport(input: ContributionImportPreviewInput)
   );
 }
 
-/** Import définitif, confirmé par code PIN (CDC 7.2). */
-export function createContributionImport(input: ContributionImportCreateInput) {
+/** Import définitif, confirmé par modale de confirmation (CDC 7.2). */
+export function createContributionImport(input: ContributionImportPreviewInput) {
   return apiPost<ContributionImportReport>(
     "/treasury/contribution-imports/",
     toContributionImportFormData(input),
@@ -755,12 +752,12 @@ export function refuseExpense(id: number, reason: string) {
   return apiPost<Expense>(`/treasury/expenses/${id}/refuse/`, { reason });
 }
 
-export function releaseExpense(id: number, pin: string) {
-  return apiPost<Expense>(`/treasury/expenses/${id}/release/`, { pin });
+export function releaseExpense(id: number) {
+  return apiPost<Expense>(`/treasury/expenses/${id}/release/`, {});
 }
 
-export function releaseExpenseWithDerogation(id: number, reason: string, pin: string) {
-  return apiPost<Expense>(`/treasury/expenses/${id}/release-with-derogation/`, { reason, pin });
+export function releaseExpenseWithDerogation(id: number, reason: string) {
+  return apiPost<Expense>(`/treasury/expenses/${id}/release-with-derogation/`, { reason });
 }
 
 export function uploadExpenseReceipt(id: number, file: File) {
@@ -851,11 +848,8 @@ export function getSocialAssistanceRequest(id: number) {
 }
 
 /**
- * Approbation (Président, VP) : ne demande pas de code PIN à cette étape
- * (résolution du §9.1 de la fiche d'écran, confirmée dans
- * `SocialAssistanceApproveView`/`services.approve_social_assistance_request`) ;
- * elle crée une dépense « En attente » qui suit ensuite le circuit normal de
- * la page Dépenses, PIN compris, pour sa libération.
+ * Approbation (Président, VP) : elle crée une dépense « En attente » qui suit
+ * ensuite le circuit normal de la page Dépenses pour sa libération.
  */
 export function approveSocialAssistanceRequest(id: number) {
   return apiPost<SocialAssistanceRequest>(`/treasury/social-assistance/requests/${id}/approve/`, {});
@@ -871,4 +865,492 @@ export function downloadSocialAssistanceAttachment(requestId: number): Promise<D
     `/treasury/social-assistance/requests/${requestId}/attachment/`,
     `assistance-${requestId}-justificatif`,
   );
+}
+// ---------------------------------------------------------------------------
+// Tableau de bord Trésorerie (CDC 4.4.6), détail d'un paiement, circuit
+// d'annulation (CDC 4.4.4) et déclarations « J'ai payé » (CDC 4.6). Contrats
+// lus dans `backend/apps/treasury/{urls,views,serializers}.py`
+// (`TreasuryDashboardSummaryView`, `PaymentCreateView.get`,
+// `PaymentDetailView`, `PaymentReversal*View`, `PaymentDeclaration*View`).
+// Aucun indicateur, statut ou solde n'est recalculé ici : tout vient de l'API.
+// ---------------------------------------------------------------------------
+
+export interface DashboardSummary {
+  /** « YYYY-MM ». */
+  period: string;
+  currency: string;
+  collected: string;
+  collection_rate: string;
+  matured_due_total: string;
+  matured_due_covered: string;
+  total_debts: string;
+  members_in_debt: number;
+  available_cash: string;
+}
+
+export function getDashboardSummary(month?: string) {
+  const query = month ? `?month=${encodeURIComponent(month)}` : "";
+  return apiGet<DashboardSummary>(`/treasury/dashboard/summary/${query}`);
+}
+
+export type PaymentStatusKey = "to_validate" | "validated" | "refused" | "cancelled";
+
+export interface PaymentPlayer {
+  membership_id: number;
+  name: string;
+  jersey_number: number | null;
+  photo: string | null;
+}
+
+export interface PaymentListItem {
+  id: number;
+  player: PaymentPlayer;
+  contribution_type: { id: number; name: string };
+  amount: string;
+  currency: string;
+  paid_on: string;
+  method: string;
+  method_label: string;
+  source: string;
+  source_label: string;
+  status: PaymentStatusKey;
+  status_label: string;
+  reversal_pending: boolean;
+}
+
+export interface PaymentListResponse {
+  count: number;
+  next_offset: number | null;
+  results: PaymentListItem[];
+}
+
+export interface GetPaymentsParams {
+  /** Filtre d'état de l'API, ex. « to_validate » (séparés par des virgules). */
+  status?: string;
+  /** « pending_approval » : paiements dont l'annulation attend le Président. */
+  reversal?: "pending_approval";
+  /** Paiements d'un seul joueur (modale « Situation financière »). */
+  membershipId?: number;
+  /** « free » : cotisations libres ; « mandatory » : obligatoires. */
+  nature?: ContributionNature;
+  limit?: number;
+  offset?: number;
+}
+
+export function getPayments(params: GetPaymentsParams = {}) {
+  const query = new URLSearchParams();
+  if (params.membershipId !== undefined) query.set("membership_id", String(params.membershipId));
+  if (params.nature) query.set("nature", params.nature);
+  if (params.status) query.set("status", params.status);
+  if (params.reversal) query.set("reversal", params.reversal);
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.offset !== undefined) query.set("offset", String(params.offset));
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiGet<PaymentListResponse>(`/treasury/payments/${suffix}`);
+}
+
+export interface PaymentActor {
+  /** `null` pour « Système Vesta » (Ghost Mode). */
+  id: number | null;
+  name: string;
+}
+
+export type PaymentReversalStatus = "pending_approval" | "approved" | "rejected";
+
+export interface PaymentReversalInfo {
+  id: number;
+  status: PaymentReversalStatus;
+  status_label: string;
+  reason: string;
+  reason_kind: string;
+  requested_by: PaymentActor | null;
+  requested_at: string | null;
+  approved_by: PaymentActor | null;
+  approved_at: string | null;
+  rejected_by: PaymentActor | null;
+  rejected_at: string | null;
+  rejection_reason: string;
+}
+
+export type PaymentReversalReasonKind = "error" | "refund";
+
+/** Une demande d'annulation de l'historique (`reversal_history`, la plus récente d'abord). */
+export interface PaymentReversalHistoryItem {
+  id: number;
+  status: PaymentReversalStatus;
+  status_label: string;
+  reason: string;
+  reason_kind: PaymentReversalReasonKind;
+  requested_by: PaymentActor;
+  requested_at: string;
+  decided_by: PaymentActor | null;
+  decided_at: string | null;
+  rejection_reason: string;
+}
+
+export interface PaymentDetail extends Payment {
+  player: PaymentPlayer;
+  status: PaymentStatusKey;
+  status_label: string;
+  reversal_pending: boolean;
+  submitted_by: PaymentActor | null;
+  submitted_at: string | null;
+  validated_by: PaymentActor | null;
+  rejected_at: string | null;
+  rejection_reason: string;
+  reversal: PaymentReversalInfo | null;
+  reversal_history?: PaymentReversalHistoryItem[];
+}
+
+export function getPaymentDetail(id: number) {
+  return apiGet<PaymentDetail>(`/treasury/payments/${id}/`);
+}
+
+/** Demande d'annulation (Trésorier, adjoint) : motif obligatoire. */
+export function requestPaymentReversal(id: number, reason: string) {
+  return apiPost<PaymentDetail>(`/treasury/payments/${id}/reversal/`, { reason });
+}
+
+/** Validation de l'annulation (Président) : confirmation explicite côté écran. */
+export function approvePaymentReversal(id: number) {
+  return apiPost<PaymentDetail>(`/treasury/payments/${id}/reversal/approve/`, {});
+}
+
+export function rejectPaymentReversal(id: number, rejectionReason: string) {
+  return apiPost<PaymentDetail>(`/treasury/payments/${id}/reversal/reject/`, {
+    rejection_reason: rejectionReason,
+  });
+}
+
+export function downloadPaymentReceipt(id: number): Promise<DownloadResult> {
+  return apiDownload(`/treasury/payments/${id}/receipt/`, `paiement-${id}-recu.pdf`);
+}
+
+export function downloadPaymentAttachment(id: number): Promise<DownloadResult> {
+  return apiDownload(`/treasury/payments/${id}/attachment/`, `paiement-${id}-justificatif`);
+}
+
+// --- Déclarations « J'ai payé » (CDC 4.6) -----------------------------------
+
+export interface PaymentDeclaration extends Payment {
+  status: PaymentStatusKey;
+  status_label: string;
+  player: { membership_id: number; name: string };
+  submitted_at: string | null;
+  rejected_at: string | null;
+  rejection_reason: string;
+  transaction: { provider: string; status: string; external_ref: string };
+}
+
+export interface PaymentDeclarationListResponse {
+  count: number;
+  next_offset: number | null;
+  results: PaymentDeclaration[];
+}
+
+export interface GetPaymentDeclarationsParams {
+  status?: string;
+  mine?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export function getPaymentDeclarations(params: GetPaymentDeclarationsParams = {}) {
+  const query = new URLSearchParams();
+  if (params.status) query.set("status", params.status);
+  if (params.mine) query.set("mine", "1");
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.offset !== undefined) query.set("offset", String(params.offset));
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiGet<PaymentDeclarationListResponse>(`/treasury/payment-declarations/${suffix}`);
+}
+
+export function getPaymentDeclaration(id: number) {
+  return apiGet<PaymentDeclaration>(`/treasury/payment-declarations/${id}/`);
+}
+
+export interface PaymentDeclarationInput {
+  contribution_type_id: number;
+  /** Chaîne : jamais de flottant. */
+  amount: string;
+  reference?: string;
+  attachment?: File | null;
+}
+
+/** « J'ai payé » : le joueur déclare pour lui-même (le serveur déduit le joueur). */
+export function createPaymentDeclaration(input: PaymentDeclarationInput) {
+  const form = new FormData();
+  form.append("contribution_type_id", String(input.contribution_type_id));
+  form.append("amount", input.amount);
+  form.append("reference", input.reference ?? "");
+  if (input.attachment) form.append("attachment", input.attachment);
+  return apiPost<PaymentDeclaration>("/treasury/payment-declarations/", form);
+}
+
+/** Aperçu de la répartition et du nouveau solde, sans écriture. */
+export function previewPaymentDeclaration(id: number) {
+  return apiPost<PaymentPreview>(`/treasury/payment-declarations/${id}/preview/`, {});
+}
+
+export function validatePaymentDeclaration(id: number) {
+  return apiPost<PaymentDeclaration>(`/treasury/payment-declarations/${id}/validate/`, {});
+}
+
+export function rejectPaymentDeclaration(id: number, reason: string) {
+  return apiPost<PaymentDeclaration>(`/treasury/payment-declarations/${id}/reject/`, { reason });
+}
+
+// --- Assistance sociale côté joueur : barèmes, aperçu, envoi (CDC 4.5.3) -----
+// Contrats lus dans `SocialAssistanceScaleListView`,
+// `SocialAssistancePreviewView` et `SocialAssistanceRequestListView.post`.
+
+export interface SocialAssistanceScale {
+  id: number;
+  event_type: SocialAssistanceEventType;
+  event_type_label: string;
+  amount: string;
+  processing_days: number;
+  expense_category: { id: number; name: string };
+  status: string;
+  archived_at: string | null;
+}
+
+/** Barèmes actifs du club (lecture par tout membre actif). */
+export function getSocialAssistanceScales() {
+  return apiGet<SocialAssistanceScale[]>("/treasury/social-assistance/scales/");
+}
+
+export interface SocialAssistancePreview {
+  scale_configured: boolean;
+  planned_amount: string | null;
+  processing_days: number | null;
+  eligibility: SocialAssistanceEligibility;
+}
+
+/** Éligibilité, montant prévu et délai, calculés par l'API avant l'envoi. */
+export function getSocialAssistancePreview(eventType: SocialAssistanceEventType, eventDate: string) {
+  const query = new URLSearchParams({ event_type: eventType, event_date: eventDate });
+  return apiGet<SocialAssistancePreview>(`/treasury/social-assistance/preview/?${query.toString()}`);
+}
+
+export interface SocialAssistanceRequestInput {
+  event_type: SocialAssistanceEventType;
+  event_date: string;
+  description: string;
+  attachment: File;
+}
+
+/** Le joueur demande pour lui-même ; le serveur déduit le joueur de la session. */
+export function createSocialAssistanceRequest(input: SocialAssistanceRequestInput) {
+  const form = new FormData();
+  form.append("event_type", input.event_type);
+  form.append("event_date", input.event_date);
+  form.append("description", input.description);
+  form.append("attachment", input.attachment);
+  return apiPost<SocialAssistanceRequest>("/treasury/social-assistance/requests/", form);
+}
+
+// --- « Mon profil » : mes paiements et mes cotisations (CDC 4.4, 4.6) --------
+// (`MyPaymentListView`, `MyPaymentDetailView`, `MyContributionGridView`,
+// `MyContributionGridMonthView`). Lecture seule, aucune règle métier ici.
+
+export type MyPaymentStatus = "validated" | "cancelled";
+
+export interface MyPaymentItem {
+  id: number;
+  contribution_type: { id: number; name: string };
+  amount: string;
+  currency: string;
+  paid_on: string;
+  method: string;
+  method_label: string;
+  source: string;
+  source_label: string;
+  reference: string;
+  status: PaymentStatusKey;
+  status_label: string;
+  validated_at: string | null;
+  receipt_number: number | null;
+  receipt_available: boolean;
+  receipt_url: string | null;
+}
+
+export interface MyPaymentAllocation {
+  period: string;
+  period_label: string;
+  amount: string;
+}
+
+export interface MyPaymentDetail extends MyPaymentItem {
+  allocations: MyPaymentAllocation[];
+}
+
+export interface MyPaymentListResponse {
+  count: number;
+  next_offset: number | null;
+  results: MyPaymentItem[];
+}
+
+export interface GetMyPaymentsParams {
+  /** Validés par défaut côté API ; « cancelled » pour les paiements annulés. */
+  status?: MyPaymentStatus[];
+  limit?: number;
+  offset?: number;
+}
+
+export function getMyPayments(params: GetMyPaymentsParams = {}) {
+  const query = new URLSearchParams();
+  if (params.status && params.status.length > 0) query.set("status", params.status.join(","));
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.offset !== undefined) query.set("offset", String(params.offset));
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiGet<MyPaymentListResponse>(`/treasury/my-payments/${suffix}`);
+}
+
+export function getMyPayment(id: number) {
+  return apiGet<MyPaymentDetail>(`/treasury/my-payments/${id}/`);
+}
+
+export interface MyGridLine {
+  contribution_type: GridContributionType;
+  cells: GridCell[];
+  total: string;
+  overdue_amount: string;
+  has_unpaid: boolean;
+}
+
+export interface MyGridResponse {
+  year: number;
+  currency: string;
+  today: string;
+  months: GridMonth[];
+  states: Record<GridCellState, string>;
+  player_status: BalanceSummary;
+  lines: MyGridLine[];
+}
+
+export function getMyGrid(year: number) {
+  return apiGet<MyGridResponse>(`/treasury/my-grid/${year}/`);
+}
+
+export function getMyGridMonthDetail(typeId: number, year: number, month: number) {
+  return apiGet<GridMonthDetail>(`/treasury/my-grid/${typeId}/${year}/months/${month}/`);
+}
+
+// ---------------------------------------------------------------------------
+// Membres du club et « Situation financière » (CDC 4.4.6 ; fiche
+// tresorerie-tableau-de-bord §3 point 3, §4.3). Contrats lus dans
+// `backend/apps/treasury/{urls,views,serializers}.py` (`MemberListView`,
+// `MemberDetailView`, `MemberGridView`). Solde, statuts, impayés et échéances
+// sont calculés par l'API : jamais recalculés ici.
+// ---------------------------------------------------------------------------
+
+export type MemberStatusKey = "in_good_standing" | "in_debt" | "pending" | "suspended" | "left";
+
+export type MemberOrdering = "balance" | "-balance" | "name" | "-name" | "last_payment" | "-last_payment";
+
+export interface MemberStatusEntry {
+  key: MemberStatusKey;
+  label: string;
+}
+
+export interface MemberRow extends BalanceSummary {
+  membership_id: number;
+  first_name: string;
+  last_name: string;
+  name: string;
+  jersey_number: number | null;
+  photo: string | null;
+  membership_status: string;
+  membership_status_label: string;
+  financial_status: MemberStatusKey;
+  financial_status_label: string;
+  statuses: MemberStatusEntry[];
+  is_suspended: boolean;
+  suspension_matches_remaining: number | null;
+  monthly_type: { id: number; name: string } | null;
+  /** « YYYY-MM-DD » ou `null` si aucun paiement. */
+  last_payment_on: string | null;
+}
+
+export interface MemberListResponse {
+  currency: string;
+  today: string;
+  ordering: string;
+  count: number;
+  limit: number;
+  offset: number;
+  next_offset: number | null;
+  results: MemberRow[];
+}
+
+export interface GetMembersParams {
+  q?: string;
+  status?: MemberStatusKey[];
+  contributionTypeIds?: number[];
+  ordering?: MemberOrdering;
+  limit?: number;
+  offset?: number;
+}
+
+export function getMembers(params: GetMembersParams = {}) {
+  const query = new URLSearchParams();
+  if (params.q?.trim()) query.set("q", params.q.trim());
+  if (params.status?.length) query.set("status", params.status.join(","));
+  if (params.contributionTypeIds?.length) query.set("contribution_type", params.contributionTypeIds.join(","));
+  if (params.ordering) query.set("ordering", params.ordering);
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.offset !== undefined) query.set("offset", String(params.offset));
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiGet<MemberListResponse>(`/treasury/members/${suffix}`);
+}
+
+export interface MemberTypeRef {
+  id: number;
+  name: string;
+}
+
+export interface MemberNextDue {
+  contribution_type: MemberTypeRef | null;
+  period: string;
+  period_label: string;
+  due_date: string;
+  amount: string;
+}
+
+export interface MemberUnpaidMonth {
+  contribution_type: MemberTypeRef | null;
+  period: string;
+  period_label: string;
+  due_date: string;
+  amount_due: string;
+  allocated: string;
+  remaining: string;
+}
+
+export interface MemberFreeContribution {
+  contribution_type: MemberTypeRef | null;
+  total: string;
+  payments_count: number;
+  last_paid_on: string | null;
+}
+
+export interface MemberDetail extends MemberRow {
+  today: string;
+  next_due: MemberNextDue | null;
+  unpaid_months: MemberUnpaidMonth[];
+  free_contributions: MemberFreeContribution[];
+  can_record_payment: boolean;
+}
+
+export function getMemberDetail(membershipId: number) {
+  return apiGet<MemberDetail>(`/treasury/members/${membershipId}/`);
+}
+
+export interface MemberGridResponse extends MyGridResponse {
+  player: GridMonthPlayer;
+}
+
+export function getMemberGrid(membershipId: number, year: number) {
+  return apiGet<MemberGridResponse>(`/treasury/members/${membershipId}/grid/${year}/`);
 }

@@ -8,6 +8,15 @@ app_name = "treasury"
 
 urlpatterns = [
     path("my-balance/", views.MyBalanceView.as_view(), name="my-balance"),
+    # Donnees du joueur connecte, pour lui seul (« Mon profil » ; CDC 4.4.7)
+    path("my-payments/", views.MyPaymentListView.as_view(), name="my-payments"),
+    path("my-payments/<int:pk>/", views.MyPaymentDetailView.as_view(), name="my-payment-detail"),
+    path("my-grid/<int:year>/", views.MyContributionGridView.as_view(), name="my-grid"),
+    path(
+        "my-grid/<int:type_id>/<int:year>/months/<int:month>/",
+        views.MyContributionGridMonthView.as_view(),
+        name="my-grid-month",
+    ),
     path("contribution-types/", views.ContributionTypeListView.as_view(), name="contribution-type-list"),
     path(
         "contribution-types/<int:pk>/",
@@ -21,6 +30,10 @@ urlpatterns = [
     # paiement et circuit d'annulation (CDC 4.4.4). La liste des derniers
     # paiements est le GET de ``payments/``.
     path("dashboard/summary/", views.TreasuryDashboardSummaryView.as_view(), name="dashboard-summary"),
+    # Tableau « Membres du club » et modale « Situation financière » (CDC 4.4.6)
+    path("members/", views.MemberListView.as_view(), name="member-list"),
+    path("members/<int:membership_id>/", views.MemberDetailView.as_view(), name="member-detail"),
+    path("members/<int:membership_id>/grid/<int:year>/", views.MemberGridView.as_view(), name="member-grid"),
     path("payments/<int:pk>/", views.PaymentDetailView.as_view(), name="payment-detail"),
     path(
         "payments/<int:pk>/reversal/",

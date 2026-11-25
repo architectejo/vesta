@@ -6,7 +6,8 @@ import {
   markAnnouncementRead,
   setAnnouncementPinned,
 } from "../../../api/social";
-import { AuthenticatedImage, Button, EmptyState, Modal, Skeleton, useToast } from "../../../design-system";
+import { AuthenticatedImage, Button, EmptyState, IconButton, IconMore, Modal, Skeleton, useToast } from "../../../design-system";
+import { useClosingState } from "../../../hooks/useClosingState";
 import { ReadReceiptsModal } from "./ReadReceiptsModal";
 
 function formatDateShort(iso: string): string {
@@ -29,6 +30,8 @@ export function AnnouncementDetailModal({
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const [menuOpen, setMenuOpen] = useState(false);
+  const { mounted: menuMounted, dataState: menuDataState, onAnimationEnd: onMenuAnimationEnd } =
+    useClosingState(menuOpen, 200);
   const [receiptsOpen, setReceiptsOpen] = useState(false);
   const [markingRead, setMarkingRead] = useState(false);
 
@@ -106,11 +109,18 @@ export function AnnouncementDetailModal({
             ) : null}
             {announcement && canManage ? (
               <div className="relative">
-                <Button variant="secondary" size="sm" onClick={() => setMenuOpen((v) => !v)}>
-                  …
-                </Button>
-                {menuOpen ? (
-                  <div role="menu" className="absolute bottom-full right-0 z-10 mb-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated">
+                <IconButton
+                  aria-label="Plus d'actions"
+                  onClick={() => setMenuOpen((v) => !v)}
+                  icon={<IconMore aria-hidden="true" className="h-5 w-5" />}
+                />
+                {menuMounted ? (
+                  <div
+                    role="menu"
+                    data-state={menuDataState}
+                    onAnimationEnd={onMenuAnimationEnd}
+                    className="vesta-anim-menu vesta-anim-menu--bottom-left absolute bottom-full right-0 z-10 mb-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated"
+                  >
                     <button
                       type="button"
                       role="menuitem"

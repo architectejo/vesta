@@ -1,0 +1,581 @@
+"""Statistiques de séance et évolution d'une séance à l'autre (CDC 4.7, 4.10 ;
+docs/ecrans/sport-statistiques-seance.md, parties A et B). Lecture seule :
+aucune migration, aucune écriture, donc aucune entrée de journal.
+
+Toute valeur affichée est calculée ici, jamais par l'interface. Le filtrage
+par rôle est fait ici aussi (matrice 2.4, A3) : le bloc « Notes du Coach »
+n'est renvoyé qu'aux rôles autorisés (``evaluations: null`` pour les autres) ;
+le joueur reçoit seulement ``my_evaluation`` (sa note, ses critères, les
+commentaires que l'évaluateur a rendus visibles, jamais l'identité des
+évaluateurs).
+
+Positions par défaut appliquées (questions de la spec, à valider) :
+
+- C-Q1 : les coéquipiers ne voient ni moyenne d'équipe ni classement des
+  notes (provisoire, position prudente de la spec).
+- C-Q2 : un joueur « En attente d'adhésion » n'est pas « attendu ».
+- Joueur attendu à une date : adhésion commencée (``joined_on``) et non
+  terminée (``left_on``) à cette date. Un joueur parti après la séance était
+  donc attendu ce jour-là (même règle que le tableau de bord du bureau) ;
+  une adhésion annulée avant l'inscription n'est jamais comptée.
+- Une séance sans aucun pointage a un taux « null » (jamais 0 %) : elle ne
+  fausse ni les moyennes ni les courbes.
+- « Meilleures » et « plus faibles » notes : au plus 3 rangs, ex æquo tous
+  affichés (5 lignes au plus) ; un joueur déjà cité parmi les meilleures
+  n'est pas répété parmi les plus faibles. Moins de 2 joueurs évalués : pas
+  de classement.
+- Écart avec la moyenne : calculé sur les 10 séances précédentes, absent
+  (null) s'il y en a moins de 3 de comparables.
+"""
+
+from __future__ import annotations
+
+import math
+from collections import defaultdict
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Optional
+
+from django.utils import timezone
+
+from apps.clubs.models import Membership, Season
+from apps.core.roles import get_active_roles
+from apps.sport import performance, services
+from apps.sport.models import Attendance, Evaluation, Event, Session
+from apps.sport.permissions import (
+    EVALUATION_STATS_ROLES,
+    EVALUATOR_ROLES,
+    PERFORMANCE_MANAGER_ROLES,
+    PERFORMANCE_VIEW_ALL_ROLES,
+)
+from apps.sport.serializers import serialize_membership_brief
+from apps.sport.services import SportValidationError
+
+PERIODS = ("last10", "season")
+LAST_N = 10
+MIN_PRIOR_FOR_DELTA = 3
+RANKING_MAX_RANK = 3
+RANKING_MAX_LINES = 5
+
+_ONE = Decimal("1")
+_TENTH = Decimal("0.1")
+_CRITERIA = (
+    ("technical", "technical_score"),
+    ("physical", "physical_score"),
+    ("tactical", "tactical_score"),
+    ("mental", "mental_score"),
+    ("attitude", "attitude_score"),
+)
+_BUCKETS = (
+    ("0 à 2", Decimal("0"), Decimal("2")),
+    ("2 à 4", Decimal("2"), Decimal("4")),
+    ("4 à 6", Decimal("4"), Decimal("6")),
+    ("6 à 8", Decimal("6"), Decimal("8")),
+    ("8 à 10", Decimal("8"), Decimal("10")),
+)
+_EXCUSE_LABELS = ("Blessé", "Voyage", "Autre")
+
+
+# ---------------------------------------------------------------------------
+# Utilitaires
+# ---------------------------------------------------------------------------
+
+
+def parse_period(value) -> str:
+    value = value or "last10"
+    if value not in PERIODS:
+        raise SportValidationError("Période invalide : choisissez « 10 dernières séances » ou « Saison ».")
+    return value
+
+
+def _pct(numerator: int, denominator: int) -> Optional[int]:
+    if not denominator:
+        return None
+    return int((Decimal(numerator * 100) / Decimal(denominator)).quantize(_ONE, rounding=ROUND_HALF_UP))
+
+
+def _name(membership: Membership) -> str:
+    return f"{membership.user.first_name} {membership.user.last_name}".strip()
+
+
+def _mean(values, places: Decimal) -> Optional[Decimal]:
+    values = list(values)
+    if not values:
+        return None
+    return (sum(values, Decimal("0")) / Decimal(len(values))).quantize(places, rounding=ROUND_HALF_UP)
+
+
+def _roster(club) -> list[Membership]:
+    """Adhésions pouvant être « attendues » à une date : ni en attente (C-Q2),
+    ni parties sans date de départ, ni annulées avant l'inscription."""
+
+    return list(
+        Membership.all_objects.filter(club=club)
+        .exclude(status=Membership.Status.PENDING)
+        .exclude(status=Membership.Status.DEPARTED, left_on__isnull=True)
+        .exclude(status=Membership.Status.DEPARTED, left_reason=Membership.LeftReason.CANCELLED)
+        .select_related("user")
+    )
+
+
+def _expected_on(roster, day) -> list[Membership]:
+    return [m for m in roster if m.joined_on <= day and (m.left_on is None or m.left_on >= day)]
+
+
+def _attendance_rows(club, event_ids) -> dict[int, dict[int, tuple]]:
+    rows: dict[int, dict[int, tuple]] = defaultdict(dict)
+    queryset = Attendance.all_objects.filter(club=club, event_id__in=list(event_ids)).values_list(
+        "event_id", "membership_id", "status", "arrived_at", "excused_reason"
+    )
+    for event_id, membership_id, status, arrived_at, reason in queryset:
+        rows[event_id][membership_id] = (status, arrived_at, reason)
+    return rows
+
+
+def _event_counts(expected, rows_for_event: dict, counts_absent: bool) -> dict:
+    counts = {"expected": len(expected), "present": 0, "late": 0, "excused": 0, "absent": 0}
+    for membership in expected:
+        row = rows_for_event.get(membership.pk)
+        status = row[0] if row else None
+        if status == Attendance.Status.PRESENT:
+            counts["present"] += 1
+        elif status == Attendance.Status.LATE_ABSENT:
+            counts["late"] += 1
+        elif status == Attendance.Status.EXCUSED_ABSENT:
+            counts["excused"] += 1
+        else:
+            counts["absent"] += 1
+    counts["counted_present"] = counts["present"] + (0 if counts_absent else counts["late"])
+    counts["marked"] = bool(rows_for_event)
+    counts["rate"] = _pct(counts["counted_present"], counts["expected"]) if counts["marked"] else None
+    return counts
+
+
+def _retained_by_event(club, event_ids, *, membership_ids=None) -> dict[int, dict[int, dict]]:
+    """``{event_id: {membership_id: {...}}}`` : note retenue d'un joueur =
+    moyenne des notes globales de ses évaluateurs, arrondie à 0,1 (CDC 4.10).
+    Une seule requête ; les moyennes sont calculées en Decimal."""
+
+    queryset = Evaluation.all_objects.filter(club=club, event_id__in=list(event_ids))
+    if membership_ids is not None:
+        queryset = queryset.filter(membership_id__in=list(membership_ids))
+    grouped: dict[int, dict[int, list]] = defaultdict(lambda: defaultdict(list))
+    for evaluation in queryset.order_by("created_at", "pk"):
+        grouped[evaluation.event_id][evaluation.membership_id].append(evaluation)
+    result: dict[int, dict[int, dict]] = {}
+    for event_id, by_member in grouped.items():
+        result[event_id] = {}
+        for membership_id, items in by_member.items():
+            criteria = {}
+            for key, field in _CRITERIA:
+                values = [getattr(item, field) for item in items if getattr(item, field) is not None]
+                criteria[key] = _mean(values, _TENTH)
+            result[event_id][membership_id] = {
+                "overall": _mean([item.overall_score for item in items], _TENTH),
+                "criteria": criteria,
+                "evaluators_count": len(items),
+                "items": items,
+            }
+    return result
+
+
+def _event_average(retained_for_event: dict) -> Optional[Decimal]:
+    return _mean([row["overall"] for row in retained_for_event.values()], _TENTH)
+
+
+def _prior_events(club, event: Event) -> list[Event]:
+    from django.db.models import Q
+
+    return list(
+        Event.all_objects.filter(club=club, kind=Event.Kind.SESSION)
+        .filter(Q(event_date__lt=event.event_date) | Q(event_date=event.event_date, pk__lt=event.pk))
+        .order_by("-event_date", "-pk")[:LAST_N]
+    )
+
+
+def _viewer_membership(viewer, club) -> Optional[Membership]:
+    if getattr(viewer, "is_superuser", False):
+        return None
+    return Membership.all_objects.filter(club=club, user=viewer, status=Membership.Status.ACTIVE).first()
+
+
+def _sees_evaluations(viewer, roles) -> bool:
+    return bool(getattr(viewer, "is_superuser", False) or (roles & EVALUATION_STATS_ROLES))
+
+
+def _ranked(items, *, reverse: bool):
+    """Rang « compétition » (ex æquo : même rang, le suivant saute)."""
+
+    ordered = sorted(items, key=lambda pair: pair[1], reverse=reverse)
+    ranked, previous, rank = [], None, 0
+    for index, (membership, note) in enumerate(ordered, start=1):
+        if note != previous:
+            rank = index
+            previous = note
+        ranked.append((rank, membership, note))
+    return ranked
+
+
+# ---------------------------------------------------------------------------
+# A : statistiques d'une séance
+# ---------------------------------------------------------------------------
+
+
+def get_session_stats(session: Session, *, viewer, request=None) -> dict:
+    event = session.event
+    club = event.club
+    club_settings = services._club_settings(club)
+    counts_absent = club_settings.late_arrival_counts_absent
+    roles = get_active_roles(viewer, club=club)
+    sees_evaluations = _sees_evaluations(viewer, roles)
+    viewer_membership = _viewer_membership(viewer, club)
+
+    roster = _roster(club)
+    prior = _prior_events(club, event)
+    rows = _attendance_rows(club, [event.pk, *[p.pk for p in prior]])
+    members_by_id = {m.pk: m for m in roster}
+
+    def brief(membership):
+        return serialize_membership_brief(membership, request=request)
+
+    # ---- Présence -------------------------------------------------------
+    expected = _expected_on(roster, event.event_date)
+    rows_here = rows.get(event.pk, {})
+    counts = _event_counts(expected, rows_here, counts_absent)
+    prior_rates = [
+        _event_counts(_expected_on(roster, p.event_date), rows.get(p.pk, {}), counts_absent)["rate"] for p in prior
+    ]
+    prior_rates = [rate for rate in prior_rates if rate is not None]
+    attendance_delta = None
+    if counts["rate"] is not None and len(prior_rates) >= MIN_PRIOR_FOR_DELTA:
+        average = Decimal(sum(prior_rates)) / Decimal(len(prior_rates))
+        attendance_delta = int((Decimal(counts["rate"]) - average).quantize(_ONE, rounding=ROUND_HALF_UP))
+
+    late_list, excused_list, absent_list = [], [], []
+    for membership in sorted(expected, key=lambda m: (_name(m).lower(), m.pk)):
+        row = rows_here.get(membership.pk)
+        status = row[0] if row else None
+        if status == Attendance.Status.LATE_ABSENT:
+            late_list.append({**brief(membership), "arrived_at": row[1]})
+        elif status == Attendance.Status.EXCUSED_ABSENT:
+            label = (row[2] or "").split(" : ", 1)[0].strip()
+            # Jamais de détail (médical ou autre) : seulement le motif de la liste fermée.
+            excused_list.append({**brief(membership), "reason": label if label in _EXCUSE_LABELS else "Autre"})
+        elif status in (None, Attendance.Status.ABSENT):
+            absent_list.append(brief(membership))
+    late_list.sort(key=lambda item: (item["arrived_at"] is None, item["arrived_at"]))
+
+    attendance = {
+        "expected": counts["expected"],
+        "present": counts["present"],
+        "late": counts["late"],
+        "absent": counts["absent"],
+        "excused": counts["excused"],
+        "rate": counts["rate"],
+        "nobody_marked": not counts["marked"],
+        "late_counts_as_absent": counts_absent,
+        "late_label": "En retard, compté absent" if counts_absent else "En retard",
+        "late_family": "danger" if counts_absent else "warning",
+        "delta_vs_average": attendance_delta,
+        "late_list": late_list,
+        "excused_list": excused_list,
+        "absent_list": absent_list,
+    }
+
+    # ---- Évaluations ----------------------------------------------------
+    locked = services.is_evaluation_locked(event)
+    locks_at = services.evaluation_locks_at(event)
+    pointed_ids = {
+        membership_id
+        for membership_id, row in rows_here.items()
+        if row[0] in (Attendance.Status.PRESENT, Attendance.Status.LATE_ABSENT)
+    }
+    retained_event = _retained_by_event(
+        club, [event.pk], membership_ids=None if sees_evaluations else (
+            [viewer_membership.pk] if viewer_membership else []
+        )
+    ).get(event.pk, {})
+
+    evaluations = None
+    if sees_evaluations:
+        evaluations = _build_evaluations_block(
+            club=club,
+            event=event,
+            prior=prior,
+            retained_event=retained_event,
+            pointed_ids=pointed_ids,
+            members_by_id=members_by_id,
+            locked=locked,
+            locks_at=locks_at,
+            brief=brief,
+        )
+
+    my_evaluation = None
+    if viewer_membership is not None and viewer_membership.pk in retained_event:
+        mine = retained_event[viewer_membership.pk]
+        my_evaluation = {
+            "overall": str(mine["overall"]),
+            "criteria": {key: (str(value) if value is not None else None) for key, value in mine["criteria"].items()},
+            "comments": [item.comment for item in mine["items"] if item.comment and item.comment_visible_to_player],
+        }
+
+    return {
+        "session_id": session.pk,
+        "date": event.event_date,
+        "attendance": attendance,
+        "evaluations": evaluations,
+        "my_evaluation": my_evaluation,
+        "measures": performance.session_measures_summary(
+            event, sees_all=bool(getattr(viewer, "is_superuser", False) or roles & PERFORMANCE_VIEW_ALL_ROLES),
+            viewer_membership=viewer_membership,
+        ),
+        "capabilities": {
+            "can_evaluate": bool(roles & EVALUATOR_ROLES) and not locked,
+            "can_measure": bool(roles & PERFORMANCE_MANAGER_ROLES) and not locked,
+        },
+        "generated_at": timezone.now(),
+    }
+
+
+def _build_evaluations_block(
+    *, club, event, prior, retained_event, pointed_ids, members_by_id, locked, locks_at, brief
+) -> dict:
+    notes = {mid: row["overall"] for mid, row in retained_event.items()}
+    average = _mean(notes.values(), _TENTH)
+
+    prior_ids = [p.pk for p in prior]
+    prior_retained = _retained_by_event(club, prior_ids) if prior_ids else {}
+    prior_averages = [
+        avg for avg in (_event_average(prior_retained.get(pk, {})) for pk in prior_ids) if avg is not None
+    ]
+    delta = None
+    if average is not None and len(prior_averages) >= MIN_PRIOR_FOR_DELTA:
+        delta = (average - _mean(prior_averages, Decimal("0.01"))).quantize(_TENTH, rounding=ROUND_HALF_UP)
+
+    evaluated_members = [(members_by_id.get(mid), note) for mid, note in notes.items() if mid in members_by_id]
+    ranking_available = len(evaluated_members) >= 2
+    best, lowest = [], []
+    if ranking_available:
+        top_ranked = [r for r in _ranked(evaluated_members, reverse=True) if r[0] <= RANKING_MAX_RANK]
+        best_ranked = top_ranked[:RANKING_MAX_LINES]
+        best_ids = {m.pk for _rank, m, _note in top_ranked}
+        remaining = [(m, note) for m, note in evaluated_members if m.pk not in best_ids]
+        lowest_ranked = [r for r in _ranked(remaining, reverse=False) if r[0] <= RANKING_MAX_RANK][
+            :RANKING_MAX_LINES
+        ]
+        best = [{"rank": rank, "player": brief(m), "note": str(note)} for rank, m, note in best_ranked]
+        lowest = [{"rank": rank, "player": brief(m), "note": str(note)} for rank, m, note in lowest_ranked]
+
+    distribution = []
+    for index, (label, low, high) in enumerate(_BUCKETS):
+        last = index == len(_BUCKETS) - 1
+        count = sum(1 for note in notes.values() if low <= note < high or (last and note == high))
+        distribution.append({"label": label, "min": str(low), "max": str(high), "count": count})
+
+    players = []
+    for membership_id, row in retained_event.items():
+        membership = members_by_id.get(membership_id)
+        if membership is None:
+            continue
+        players.append(
+            {
+                "player": brief(membership),
+                "overall": str(row["overall"]),
+                **{key: (str(value) if value is not None else None) for key, value in row["criteria"].items()},
+                "evaluators_count": row["evaluators_count"],
+                "comments": [
+                    {"text": item.comment, "visible_to_player": item.comment_visible_to_player}
+                    for item in row["items"]
+                    if item.comment
+                ],
+            }
+        )
+    players.sort(key=lambda item: (-Decimal(item["overall"]), item["player"]["name"].lower()))
+    not_evaluated = [
+        brief(members_by_id[mid])
+        for mid in sorted(pointed_ids - set(notes), key=lambda i: (_name(members_by_id[i]).lower() if i in members_by_id else "", i))
+        if mid in members_by_id
+    ]
+    hours_left = None
+    if not locked:
+        hours_left = max(0, math.ceil((locks_at - timezone.now()).total_seconds() / 3600))
+
+    return {
+        "average": str(average) if average is not None else None,
+        "evaluated": len(notes),
+        "eligible": len(pointed_ids),
+        "remaining": len(not_evaluated),
+        "delta_vs_average": str(delta) if delta is not None else None,
+        "ranking_available": ranking_available,
+        "best": best,
+        "lowest": lowest,
+        "distribution": distribution,
+        "players": players,
+        "not_evaluated": not_evaluated,
+        "open_until": locks_at,
+        "locked": locked,
+        "hours_left": hours_left,
+    }
+
+
+# ---------------------------------------------------------------------------
+# B : évolution d'une séance à l'autre, assiduité
+# ---------------------------------------------------------------------------
+
+
+def _current_season(club) -> Optional[Season]:
+    return (
+        Season.all_objects.filter(club=club, is_current=True).order_by("-start_date").first()
+        or Season.all_objects.filter(club=club).order_by("-start_date").first()
+    )
+
+
+def _period_events(club, period: str) -> tuple[list[Event], Optional[Season]]:
+    today = services.get_club_today(club)
+    base = Event.all_objects.filter(club=club, kind=Event.Kind.SESSION, event_date__lte=today)
+    season = _current_season(club)
+    if period == "season":
+        if season is None:
+            return [], None
+        return list(base.filter(season=season).order_by("event_date", "pk")), season
+    events = list(base.order_by("-event_date", "-pk")[:LAST_N])
+    events.reverse()
+    return events, season
+
+
+def get_stats_history(club, *, viewer, period: str) -> dict:
+    period = parse_period(period)
+    events, season = _period_events(club, period)
+    roles = get_active_roles(viewer, club=club)
+    sees_evaluations = _sees_evaluations(viewer, roles)
+    viewer_membership = _viewer_membership(viewer, club)
+    counts_absent = services._club_settings(club).late_arrival_counts_absent
+    roster = _roster(club)
+    event_ids = [e.pk for e in events]
+    rows = _attendance_rows(club, event_ids)
+    retained = _retained_by_event(
+        club,
+        event_ids,
+        membership_ids=None if sees_evaluations else ([viewer_membership.pk] if viewer_membership else []),
+    )
+    locations = dict(Session.all_objects.filter(club=club, event_id__in=event_ids).values_list("event_id", "location"))
+
+    results, rates, averages = [], [], []
+    for event in events:
+        counts = _event_counts(_expected_on(roster, event.event_date), rows.get(event.pk, {}), counts_absent)
+        by_member = retained.get(event.pk, {})
+        average_rating = _event_average(by_member) if sees_evaluations else None
+        my_rating = None
+        if viewer_membership is not None and viewer_membership.pk in by_member:
+            my_rating = by_member[viewer_membership.pk]["overall"]
+        if counts["rate"] is not None:
+            rates.append(counts["rate"])
+        if average_rating is not None:
+            averages.append(average_rating)
+        results.append(
+            {
+                "session_id": event.pk,
+                "date": event.event_date,
+                "location": locations.get(event.pk, ""),
+                "expected": counts["expected"],
+                "present": counts["present"],
+                "attendance_rate": counts["rate"],
+                "average_rating": str(average_rating) if average_rating is not None else None,
+                "my_rating": str(my_rating) if my_rating is not None else None,
+                "locked": services.is_event_locked(event),
+            }
+        )
+    average_rate = None
+    if rates:
+        average_rate = int((Decimal(sum(rates)) / Decimal(len(rates))).quantize(_ONE, rounding=ROUND_HALF_UP))
+    my_ratings = [Decimal(r["my_rating"]) for r in results if r["my_rating"] is not None]
+    return {
+        "period": period,
+        "season": {"id": season.pk, "label": season.label} if season else None,
+        "average_attendance_rate": average_rate,
+        "average_rating": str(_mean(averages, _TENTH)) if averages else None,
+        "my_average_rating": str(_mean(my_ratings, _TENTH)) if my_ratings else None,
+        "results": results,
+    }
+
+
+def _player_totals(club, period: str):
+    events, season = _period_events(club, period)
+    counts_absent = services._club_settings(club).late_arrival_counts_absent
+    roster = _roster(club)
+    rows = _attendance_rows(club, [e.pk for e in events])
+    totals: dict[int, dict] = {}
+    sessions_counted = 0
+    for event in events:
+        rows_here = rows.get(event.pk, {})
+        if not rows_here:
+            continue  # séance sans aucun pointage : ignorée (jamais comptée comme 0 %)
+        sessions_counted += 1
+        for membership in _expected_on(roster, event.event_date):
+            entry = totals.setdefault(
+                membership.pk,
+                {"membership": membership, "sessions": 0, "present": 0, "late": 0, "excused": 0, "absent": 0},
+            )
+            entry["sessions"] += 1
+            status = (rows_here.get(membership.pk) or (None,))[0]
+            if status == Attendance.Status.PRESENT:
+                entry["present"] += 1
+            elif status == Attendance.Status.LATE_ABSENT:
+                entry["late"] += 1
+            elif status == Attendance.Status.EXCUSED_ABSENT:
+                entry["excused"] += 1
+            else:
+                entry["absent"] += 1
+    for entry in totals.values():
+        entry["attended"] = entry["present"] + (0 if counts_absent else entry["late"])
+        entry["rate"] = _pct(entry["attended"], entry["sessions"])
+    return totals, sessions_counted, counts_absent, season
+
+
+def get_attendance_ranking(club, *, period: str, request=None) -> dict:
+    period = parse_period(period)
+    totals, sessions_counted, counts_absent, _season = _player_totals(club, period)
+    entries = sorted(
+        totals.values(),
+        key=lambda e: (-(e["rate"] if e["rate"] is not None else -1), -e["sessions"], _name(e["membership"]).lower()),
+    )
+    results = [
+        {
+            "player": serialize_membership_brief(entry["membership"], request=request),
+            "sessions": entry["sessions"],
+            "attended": entry["attended"],
+            "present": entry["present"],
+            "late": entry["late"],
+            "excused": entry["excused"],
+            "absent": entry["absent"],
+            "rate": entry["rate"],
+        }
+        for entry in entries
+    ]
+    return {
+        "period": period,
+        "sessions_count": sessions_counted,
+        "late_counts_as_absent": counts_absent,
+        "results": results,
+    }
+
+
+def get_my_attendance(club, *, viewer, period: str) -> Optional[dict]:
+    period = parse_period(period)
+    membership = _viewer_membership(viewer, club)
+    if membership is None:
+        return None
+    totals, sessions_counted, counts_absent, _season = _player_totals(club, period)
+    entry = totals.get(membership.pk)
+    entry = entry or {"sessions": 0, "attended": 0, "present": 0, "late": 0, "excused": 0, "absent": 0, "rate": None}
+    return {
+        "period": period,
+        "sessions_count": sessions_counted,
+        "sessions": entry["sessions"],
+        "attended": entry["attended"],
+        "present": entry["present"],
+        "late": entry["late"],
+        "excused": entry["excused"],
+        "absent": entry["absent"],
+        "rate": entry["rate"],
+        "late_counts_as_absent": counts_absent,
+    }

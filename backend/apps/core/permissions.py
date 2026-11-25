@@ -26,7 +26,7 @@ class HasCompletedPasswordSetup(BasePermission):
     explicitement cette permission de leur ``permission_classes``.
     """
 
-    message = "Vous devez changer votre mot de passe avant de continuer (CDC 4.1)."
+    message = "Vous devez changer votre mot de passe avant de continuer."
 
     def has_permission(self, request, view) -> bool:
         user = request.user
@@ -46,7 +46,7 @@ class HasAcceptedLatestTerms(BasePermission):
     de « chaque joueur ») et n'est donc pas soumis a ce blocage ici.
     """
 
-    message = "Vous devez accepter la derniere version des CGU avant de continuer (CDC 7.5)."
+    message = "Vous devez accepter la dernière version des CGU avant de continuer."
 
     def has_permission(self, request, view) -> bool:
         user = request.user
@@ -65,7 +65,7 @@ class HasAcceptedLatestTerms(BasePermission):
 class IsSuperuser(BasePermission):
     """Reserve aux comptes Superuser (CDC 2.5, 4.18)."""
 
-    message = "Reserve au Superuser (CDC 2.5)."
+    message = "Réservé au Superuser."
 
     def has_permission(self, request, view) -> bool:
         user = request.user
@@ -110,8 +110,8 @@ class HasUsableLicence(BasePermission):
     manquante.
     """
 
-    message_blocked = "Cette licence est suspendue ou resiliee : l'acces a ce club est bloque (CDC 1.4, 10.2 n19)."
-    message_read_only = "Ce club est en lecture seule (licence expiree au-dela de la periode de grace, CDC 1.4)."
+    message_blocked = "Cette licence est suspendue ou résiliée : l'accès à ce club est bloqué."
+    message_read_only = "Ce club est en lecture seule (licence expirée au-delà de la période de grâce)."
 
     SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 

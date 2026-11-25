@@ -124,7 +124,7 @@ class TestLoginEndpoint:
             "supplementaire (`attempts_remaining`) selon que l'email "
             "correspond ou non a un compte reel : c'est un moyen de deviner "
             "quelles adresses sont inscrites sur la plateforme, meme sans "
-            "lire le message d'erreur (CDC 7.6)."
+            "lire le message d'erreur."
         )
         assert response_compte_existant.data["detail"] == response_email_inconnu.data["detail"]
 
@@ -540,3 +540,77 @@ class TestCguDepuisUneRequeteHttpReelle:
             reverse("accounts:terms-accept"), {"terms_version_id": version.pk}, format="json"
         )
         assert accept_response.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.django_db
+class TestThirdSeriesFixes:
+    """Corrections de la troisième série de tests (15/11/2026)."""
+
+    def test_terms_pending_sans_version_en_attente_renvoie_le_litteral_json_null(self, api_client):
+        membership = MembershipFactory(status="active")
+        version = TermsVersionFactory()
+        api_client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {RefreshToken.for_user(membership.user).access_token}"
+        )
+        accept = api_client.post(reverse("accounts:terms-accept"), {"terms_version_id": version.pk}, format="json")
+        assert accept.status_code == status.HTTP_200_OK
+
+        response = api_client.get(reverse("accounts:terms-pending"))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response["Content-Type"].startswith("application/json")
+        assert response.content == b"null"
+        assert response.json() is None
+
+
+@pytest.mark.django_db
+class TestSecondSeriesFixes:
+    """Corrections de la deuxieme serie de tests (15/11/2026)."""
+
+    def test_refresh_invalide_renvoie_un_message_francais(self, api_client):
+        response = api_client.post(reverse("accounts:token-refresh"), {"refresh": "n-importe-quoi"}, format="json")
+
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert "Token" not in str(response.data)
+        assert "invalide" in response.data["detail"]
+        assert "Reconnectez-vous" in response.data["detail"]
+
+    def test_acces_sans_jeton_renvoie_un_message_francais(self, api_client):
+        response = api_client.get(reverse("accounts:terms-pending"))
+
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert "credentials" not in str(response.data)
+        assert "Connectez-vous" in response.data["detail"]
+
+    def test_superuser_n_a_pas_de_cgu_en_attente_a_la_connexion(self, api_client):
+        superuser = SuperuserFactory()
+        TermsVersionFactory()
+
+        response = api_client.post(
+            reverse("accounts:login"), {"email": superuser.email, "password": RAW_PASSWORD}, format="json"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["terms_acceptance_required"] is False
+
+    def test_superuser_n_a_pas_de_cgu_en_attente_sur_la_route_dediee(self, api_client):
+        superuser = SuperuserFactory()
+        TermsVersionFactory()
+        api_client.force_authenticate(user=superuser)
+
+        response = api_client.get(reverse("accounts:terms-pending"))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json() is None
+
+    def test_joueur_reste_soumis_aux_cgu(self, api_client):
+        membership = MembershipFactory(status="active")
+        TermsVersionFactory()
+
+        response = api_client.post(
+            reverse("accounts:login"),
+            {"email": membership.user.email, "password": RAW_PASSWORD},
+            format="json",
+        )
+
+        assert response.data["terms_acceptance_required"] is True

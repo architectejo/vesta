@@ -22,6 +22,7 @@ octets pour le CSV importe, ou Pillow n'a rien a verifier.
 from __future__ import annotations
 
 import csv
+import re
 
 from django.core.exceptions import ValidationError
 
@@ -74,7 +75,7 @@ def validate_upload_size(file) -> None:
     size = getattr(file, "size", None)
     if size is not None and size > MAX_UPLOAD_SIZE_BYTES:
         raise ValidationError(
-            "Ce fichier depasse la taille maximale autorisee de 10 Mo.",
+            "Ce fichier dépasse la taille maximale autorisée de 10 Mo.",
             code="file_too_large",
         )
 
@@ -108,12 +109,24 @@ def validate_image_format(file) -> None:
     image_format = getattr(image, "format", None) if image is not None else None
     if image_format is None or image_format.upper() not in _ALLOWED_IMAGE_FORMATS:
         raise ValidationError(
-            "Seules les images JPEG, PNG ou WebP sont acceptees.",
+            "Seules les images JPEG, PNG ou WebP sont acceptées.",
             code="unsupported_image_format",
         )
 
 
-def _detect_image_or_pdf_kind(head: bytes) -> str | None:
+# Taille de l'en-tete lue pour reconnaitre le type reel.
+HEAD_SIZE = 1024
+
+# En-tete PDF : `%PDF-1.x` / `%PDF-2.x`. Quelques octets parasites (BOM UTF-8,
+# espaces, retours a la ligne, octets nuls) avant l'en-tete sont toleres ;
+# rien d'autre.
+_PDF_HEADER = re.compile(rb"\A(?:\xef\xbb\xbf|[\x00\t\n\x0c\r ]){0,8}%PDF-[12]\.\d")
+# Un vrai PDF ne contient pas de balisage web lisible dans son premier Ko
+# (flux compresses) : un fichier qui en contient se fait passer pour un PDF.
+_MARKUP_IN_HEAD = re.compile(rb"<\s*(?:!doctype|html|head|body|script|svg|iframe|\?xml)", re.IGNORECASE)
+
+
+def detect_image_or_pdf_kind(head: bytes) -> str | None:
     """Reconnait JPEG, PNG, WebP ou PDF d'apres les premiers octets
     (signatures), jamais d'apres le nom ni le content-type declares."""
 
@@ -123,9 +136,12 @@ def _detect_image_or_pdf_kind(head: bytes) -> str | None:
         return "PNG"
     if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
         return "WEBP"
-    if head.startswith(b"%PDF-"):
+    if _PDF_HEADER.match(head) and not _MARKUP_IN_HEAD.search(head):
         return "PDF"
     return None
+
+
+_detect_image_or_pdf_kind = detect_image_or_pdf_kind
 
 
 def validate_image_or_pdf(file) -> None:
@@ -149,7 +165,7 @@ def validate_image_or_pdf(file) -> None:
 
     try:
         file.seek(0)
-        head = file.read(16)
+        head = file.read(HEAD_SIZE)
     except (AttributeError, OSError, ValueError):
         raise ValidationError(
             "Ce fichier est illisible.",
@@ -224,7 +240,7 @@ def validate_csv_file(file, *, check_structure: bool = True) -> None:
 
     if any(sample.startswith(prefix) for prefix in _BINARY_MAGIC_PREFIXES) or b"\x00" in sample:
         raise ValidationError(
-            "Ce fichier n'est pas un fichier CSV valide (type reel incorrect).",
+            "Ce fichier n'est pas un fichier CSV valide (type réel incorrect).",
             code="invalid_csv_type",
         )
 

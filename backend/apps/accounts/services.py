@@ -20,7 +20,6 @@ from datetime import timedelta
 from typing import Any, NamedTuple, Optional, Sequence
 
 from django.apps import apps
-from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -28,9 +27,11 @@ from django.db.models import F, Q
 from django.utils import timezone
 
 from apps.accounts.models import PasswordResetRequest, TermsAcceptance, TermsVersion, User
+from apps.core.reserved_accounts import SYSTEM_ACTOR_EMAIL, validate_email_not_reserved
 from apps.core.services import log_action
 
 __all__ = [
+    "export_personal_data",
     "MAX_LOGIN_ATTEMPTS",
     "LOGIN_LOCKOUT_DURATION",
     "TEMP_PASSWORD_LENGTH",
@@ -71,22 +72,6 @@ __all__ = [
     "update_credentials",
     "update_profile_photo",
     "remove_profile_photo",
-    "MIN_PIN_DIGITS",
-    "MAX_PIN_DIGITS",
-    "MAX_PIN_ATTEMPTS",
-    "PIN_LOCKOUT_DURATION",
-    "PinError",
-    "PinNotSetError",
-    "InvalidPinFormatError",
-    "PinAlreadySetError",
-    "PinMismatchError",
-    "PinResetPasswordIncorrectError",
-    "InvalidPinError",
-    "PinLockedError",
-    "define_pin",
-    "redefine_pin",
-    "verify_pin",
-    "require_valid_pin",
 ]
 
 
@@ -126,7 +111,7 @@ class AccountLockedError(AuthenticationError):
 
     def __init__(self, locked_until):
         self.locked_until = locked_until
-        super().__init__("Compte bloque temporairement apres 5 echecs de connexion.")
+        super().__init__("Compte bloqué temporairement après 5 échecs de connexion.")
 
 
 class AccountDisabledError(AuthenticationError):
@@ -155,7 +140,7 @@ class ClubDisambiguationRequiredError(AuthenticationError):
     def __init__(self, candidates: Sequence):
         self.candidates = list(candidates)
         super().__init__(
-            "Plusieurs clubs sont associes a ce compte : precisez lequel (adresse /c/<slug>)."
+            "Plusieurs clubs sont associés à ce compte : précisez lequel (adresse /c/<slug>)."
         )
 
 
@@ -388,8 +373,8 @@ def change_forced_password(*, user: User, new_password: str, confirm_password: s
             after={"must_change_password": user.must_change_password},
         )
         raise PasswordChangeNotForcedError(
-            "Ce point d'acces est reserve au changement de mot de passe "
-            "force (mot de passe initial ou temporaire, CDC 4.1)."
+            "Ce point d'accès est réservé au changement de mot de passe "
+            "forcé (mot de passe initial ou temporaire)."
         )
 
     errors: list[str] = []
@@ -398,14 +383,14 @@ def change_forced_password(*, user: User, new_password: str, confirm_password: s
         errors.append("Les deux mots de passe ne correspondent pas.")
 
     if new_password and user.email and new_password == user.email:
-        errors.append("Le mot de passe doit etre different de votre email.")
+        errors.append("Le mot de passe doit être différent de votre email.")
 
     if new_password and user.password and user.check_password(new_password):
         # Couvre a la fois « different de l'email » (mot de passe
         # initial) et « different du mot de passe temporaire » (10.2
         # n°21, regle prudente appliquee a titre provisoire par
         # comptes-connexion.md §7).
-        errors.append("Choisissez un mot de passe different de votre mot de passe actuel.")
+        errors.append("Choisissez un mot de passe différent de votre mot de passe actuel.")
 
     try:
         validate_password(new_password, user=user)
@@ -454,7 +439,7 @@ def request_password_reset(*, email: str) -> None:
 
     normalized_email = (email or "").strip().lower()
     user = User.objects.filter(email=normalized_email).first()
-    if user is None:
+    if user is None or user.email == SYSTEM_ACTOR_EMAIL:
         return
 
     reset_request = PasswordResetRequest.objects.create(user=user, requested_at=timezone.now())
@@ -489,8 +474,8 @@ def reset_password_by_superuser(*, superuser: User, target_email: str) -> str:
 
     normalized_email = (target_email or "").strip().lower()
     target_user = User.objects.filter(email=normalized_email).first()
-    if target_user is None:
-        raise User.DoesNotExist("Aucun compte ne correspond a cette adresse email.")
+    if target_user is None or target_user.email == SYSTEM_ACTOR_EMAIL:
+        raise User.DoesNotExist("Aucun compte ne correspond à cette adresse e-mail.")
 
     temp_password = _generate_temp_password()
     now = timezone.now()
@@ -584,7 +569,8 @@ def search_accounts(*, query: str = "", club_id: Optional[int] = None, role: Opt
     Membership = apps.get_model("clubs", "Membership")
     MembershipRole = apps.get_model("clubs", "MembershipRole")
 
-    users_qs = User.objects.all().order_by("email")
+    # Le compte technique « Système » n'est jamais listé ni gérable (audit m-B).
+    users_qs = User.objects.exclude(email=SYSTEM_ACTOR_EMAIL).order_by("email")
 
     normalized_query = (query or "").strip()
     if normalized_query:
@@ -637,6 +623,10 @@ def search_accounts(*, query: str = "", club_id: Optional[int] = None, role: Opt
     return results
 
 
+class AccountDeactivationRefusedError(Exception):
+    """Désactivation refusée (soi-même, dernier Superuser actif) ; message en français."""
+
+
 def deactivate_account(*, superuser: User, target_user: User, reason: str = "") -> User:
     """Desactive un compte (CDC 4.18 : « desactivation d'un compte »).
 
@@ -658,10 +648,17 @@ def deactivate_account(*, superuser: User, target_user: User, reason: str = "") 
     """
 
     if not getattr(superuser, "is_superuser", False):
-        raise PermissionError("Seul un Superuser peut desactiver un compte (CDC 4.18).")
+        raise PermissionError("Seul un Superuser peut désactiver un compte.")
 
     if not target_user.is_active:
         return target_user
+
+    if target_user.pk == superuser.pk:
+        raise AccountDeactivationRefusedError("Vous ne pouvez pas désactiver votre propre compte.")
+    if target_user.is_superuser and not User.objects.filter(is_superuser=True, is_active=True).exclude(
+        pk=target_user.pk
+    ).exists():
+        raise AccountDeactivationRefusedError("Impossible de désactiver le dernier Superuser actif.")
 
     before = {"is_active": True}
     target_user.is_active = False
@@ -760,346 +757,19 @@ def logout_all_devices(*, user: User) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Code PIN (CDC 7.2) : mecanisme generique de securite de compte
-# ---------------------------------------------------------------------------
-#
-# Reutilisable tel quel par n'importe quelle app pour n'importe quelle
-# action sensible (CDC 7.2 : validation d'un paiement ou d'une depense --
-# `finance-engine` --, derogation, signature du parrain -- tache 1.4b,
-# juste apres celle-ci --, signature d'un PV, annulation d'un paiement, y
-# compris l'annulation d'une adhesion avec remboursement apres un refus de
-# parrain, 10.2 n°36). Construit une seule fois ici, exactement comme
-# `apps.core.roles` a ete construit en tache 1.5 pour les roles -- mais a
-# dessein dans `apps.accounts.services` (et non `apps.core`) : le PIN est
-# un champ du modele `User` (`pin_hash`/`pin_failed_attempts`/
-# `pin_locked_until`, tache 1.2), propre a cette app, au meme titre que le
-# mot de passe (`change_forced_password`, `reset_password_by_superuser`
-# ci-dessus) -- pas un mecanisme transverse de multi-tenant/permissions
-# comme les roles. N'importe quelle autre app l'importe simplement :
-#
-#     from apps.accounts.services import require_valid_pin, PinError
-#
-#     try:
-#         require_valid_pin(user=request.user, pin=pin)
-#     except PinError as exc:
-#         ...  # traduire chaque sous-classe en reponse HTTP/message clair
-#
-# Deux compteurs INDEPENDANTS a ne jamais confondre (audit de securite du
-# Lot 1, tache 1.3t) : `pin_failed_attempts`/`pin_locked_until` (ici) ne
-# sont jamais lus ni ecrits par `authenticate_login`/`failed_login_attempts`/
-# `login_locked_until` (connexion, CDC 7.1) -- deux mecanismes de blocage
-# distincts sur deux actions distinctes.
-
-MIN_PIN_DIGITS = 4
-MAX_PIN_DIGITS = 6
-MAX_PIN_ATTEMPTS = 3
-PIN_LOCKOUT_DURATION = timedelta(minutes=30)
-
-
-class PinError(Exception):
-    """Base commune de toutes les erreurs liees au code PIN (CDC 7.2).
-
-    Permet a un appelant qui ne distingue pas les cas de capturer large
-    (``except PinError``) ; les sous-classes ci-dessous permettent en
-    revanche a un appelant plus precis (une vue DRF, par exemple) de
-    traduire chaque cas en un message francais clair distinct
-    (CLAUDE.md chapitre 3, point 4 de la tache).
-    """
-
-
-class PinNotSetError(PinError):
-    """Le joueur n'a jamais defini de code PIN (CDC 7.2 : « defini par le
-    joueur a sa premiere action sensible »). Distinct d'un PIN incorrect :
-    il n'y a ici rien a comparer -- l'appelant doit d'abord proposer la
-    modale de definition du PIN (:func:`define_pin`) avant de rejouer
-    l'action sensible interrompue.
-    """
-
-    def __init__(self):
-        super().__init__("Vous devez definir votre code PIN avant de continuer.")
-
-
-class InvalidPinFormatError(PinError):
-    """Le PIN propose n'est pas une suite de 4 a 6 chiffres (CDC 7.2)."""
-
-    def __init__(self):
-        super().__init__(
-            f"Le code PIN doit comporter {MIN_PIN_DIGITS} a {MAX_PIN_DIGITS} chiffres."
-        )
-
-
-class PinAlreadySetError(PinError):
-    """:func:`define_pin` appele alors qu'un PIN existe deja pour ce compte.
-
-    La premiere definition (:func:`define_pin`) et la redefinition « code
-    oublie » (:func:`redefine_pin`, qui exige le mot de passe) sont deux
-    chemins distincts du CDC 7.2 -- ne jamais les fusionner : le premier
-    ne demande rien d'autre que le nouveau PIN (le joueur vient de
-    s'authentifier normalement), le second doit revalider l'identite.
-    """
-
-    def __init__(self):
-        super().__init__(
-            "Un code PIN est deja defini pour ce compte : utilisez la "
-            "redefinition (code oublie) pour le changer."
-        )
-
-
-class PinMismatchError(PinError):
-    """Les deux saisies du PIN (nouveau + confirmation) ne correspondent pas."""
-
-    def __init__(self):
-        super().__init__("Les deux codes PIN ne correspondent pas.")
-
-
-class PinResetPasswordIncorrectError(PinError):
-    """Mot de passe incorrect lors d'une redefinition de PIN oublie (CDC 7.2)."""
-
-    def __init__(self):
-        super().__init__("Mot de passe incorrect : le code PIN n'a pas ete redefini.")
-
-
-class InvalidPinError(PinError):
-    """Code PIN incorrect (CDC 7.2). ``attempts_remaining`` avant blocage
-    (identique dans l'esprit a ``InvalidCredentialsError.attempts_remaining``
-    ci-dessus pour la connexion)."""
-
-    def __init__(self, attempts_remaining: int):
-        self.attempts_remaining = attempts_remaining
-        super().__init__("Code PIN incorrect.")
-
-
-class PinLockedError(PinError):
-    """Blocage de 30 minutes apres 3 codes errones (CDC 7.2)."""
-
-    def __init__(self, locked_until):
-        self.locked_until = locked_until
-        super().__init__("Code PIN bloque temporairement apres 3 echecs.")
-
-
-def _validate_pin_format(pin: str) -> None:
-    if not isinstance(pin, str) or not pin.isascii() or not pin.isdigit():
-        raise InvalidPinFormatError()
-    if not (MIN_PIN_DIGITS <= len(pin) <= MAX_PIN_DIGITS):
-        raise InvalidPinFormatError()
-
-
-def define_pin(*, user: User, pin: str, confirm_pin: str) -> None:
-    """Definit le code PIN d'un joueur a sa toute premiere action sensible
-    (CDC 7.2). Reserve au cas ou aucun PIN n'existe encore -- leve
-    :class:`PinAlreadySetError` sinon ; toute redefinition ulterieure passe
-    par :func:`redefine_pin` (« code oublie »).
-
-    Hache le PIN avec le hasher de mot de passe par defaut de Django
-    (``django.contrib.auth.hashers.make_password``/``check_password`` --
-    fonctions generiques, independantes du champ ``User.password``, donc
-    utilisables ici sur ``User.pin_hash`` sans toucher au mot de passe de
-    connexion) plutot qu'un hachage rapide dedie : l'espace des valeurs
-    possibles d'un PIN a 4-6 chiffres est minuscule (10 000 a 1 000 000
-    combinaisons) -- un hachage deliberement LENT (PBKDF2/Argon2 selon
-    ``settings.PASSWORD_HASHERS``) est ici une protection essentielle
-    contre une attaque hors ligne si ``pin_hash`` venait a fuiter, alors
-    qu'un hachage rapide rendrait cet espace trivialement exhaustif.
-    """
-
-    if user.pin_hash:
-        raise PinAlreadySetError()
-
-    _validate_pin_format(pin)
-    if pin != confirm_pin:
-        raise PinMismatchError()
-
-    user.pin_hash = make_password(pin)
-    user.pin_failed_attempts = 0
-    user.pin_locked_until = None
-    user.save(update_fields=["pin_hash", "pin_failed_attempts", "pin_locked_until"])
-
-    log_action(
-        actor=user,
-        club=None,
-        action_type="accounts.pin.defined",
-        obj=user,
-        before={"pin_defined": False},
-        after={"pin_defined": True},
-    )
-
-
-def redefine_pin(*, user: User, password: str, new_pin: str, confirm_new_pin: str) -> None:
-    """Redefinit le code PIN apres un « code PIN oublie » (CDC 7.2 :
-    « redefinition apres saisie du mot de passe »).
-
-    Ne verifie jamais l'ancien PIN (par definition inconnu/oublie de
-    l'appelant) : verifie a la place le mot de passe de connexion, comme
-    le CDC le demande explicitement. Utilisable aussi bien si un PIN
-    existait deja que si aucun n'a jamais ete defini -- ce chemin n'est
-    pas reserve au seul cas « j'ai oublie mon PIN », un joueur peut tout
-    aussi bien s'en servir pour definir son PIN pour la premiere fois s'il
-    prefere reverifier son mot de passe au passage.
-
-    Reinitialise systematiquement ``pin_failed_attempts``/
-    ``pin_locked_until`` (une redefinition reussie leve tout blocage en
-    cours : le joueur vient de reprouver son identite par le mot de
-    passe, CDC 7.2).
-    """
-
-    if not user.check_password(password):
-        raise PinResetPasswordIncorrectError()
-
-    _validate_pin_format(new_pin)
-    if new_pin != confirm_new_pin:
-        raise PinMismatchError()
-
-    before = {"pin_defined": bool(user.pin_hash)}
-
-    user.pin_hash = make_password(new_pin)
-    user.pin_failed_attempts = 0
-    user.pin_locked_until = None
-    user.save(update_fields=["pin_hash", "pin_failed_attempts", "pin_locked_until"])
-
-    log_action(
-        actor=user,
-        club=None,
-        action_type="accounts.pin.reset",
-        obj=user,
-        before=before,
-        after={"pin_defined": True},
-    )
-
-
-def verify_pin(*, user: User, pin: str) -> bool:
-    """Verifie le code PIN de ``user`` (CDC 7.2). Fonction generique de bas
-    niveau, reutilisable par n'importe quelle app -- voir
-    :func:`require_valid_pin` pour le point d'entree recommande a la
-    plupart des appelants (leve des exceptions plutot qu'un simple
-    booleen).
-
-    Effets de bord, MEME PATTERN que ``authenticate_login``/CDC 7.1 -- y
-    compris la correction de la race condition sur l'incrementation
-    atomique apportee en tache 1.3t (``F()`` plutot qu'une lecture-
-    modification-ecriture Python) -- volontairement reproduit a
-    l'identique ici plutot que reinvente, mais sur un compteur totalement
-    INDEPENDANT (``pin_failed_attempts``/``pin_locked_until`` != ``failed
-    _login_attempts``/``login_locked_until``) :
-
-    - leve :class:`PinNotSetError` si ``user.pin_hash`` est vide -- ce
-      n'est pas "un PIN incorrect", rien n'existe encore a comparer ;
-    - leve :class:`PinLockedError` si un blocage de 30 minutes est deja en
-      cours -- verifie AVANT toute comparaison, exactement comme
-      ``AccountLockedError`` est leve par ``authenticate_login`` avant
-      toute comparaison du mot de passe ;
-    - incremente ``pin_failed_attempts`` de facon atomique sur un code
-      errone ; au 3e echec consecutif, pose ``pin_locked_until`` (30
-      minutes) et leve :class:`PinLockedError` pour CETTE tentative aussi
-      (encore une fois, meme pattern que ``authenticate_login``, qui leve
-      ``AccountLockedError`` -- pas ``InvalidCredentialsError`` -- sur le
-      5e echec) ;
-    - reinitialise le compteur a 0 sur succes.
-
-    Ne renvoie ``True``/``False`` que pour departager un code
-    effectivement compare : ``True`` s'il est correct, ``False`` s'il est
-    incorrect mais n'atteint pas encore le seuil de blocage.
-
-    Ne journalise jamais le PIN lui-meme, ni en clair ni sous forme de
-    hachage (CLAUDE.md regle n6 ; CDC 5.1) : uniquement le compteur et
-    l'horodatage de blocage, comme ``authenticate_login`` le fait deja
-    pour le mot de passe.
-    """
-
-    if not user.pin_hash:
-        raise PinNotSetError()
-
-    now = timezone.now()
-    if user.pin_locked_until and user.pin_locked_until > now:
-        raise PinLockedError(locked_until=user.pin_locked_until)
-
-    if check_password(pin, user.pin_hash):
-        if user.pin_failed_attempts or user.pin_locked_until:
-            user.pin_failed_attempts = 0
-            user.pin_locked_until = None
-            user.save(update_fields=["pin_failed_attempts", "pin_locked_until"])
-        return True
-
-    # Incrementation atomique au niveau de la ligne (voir
-    # ``authenticate_login`` ci-dessus pour la justification complete,
-    # tache 1.3t) : deux verifications concurrentes du meme PIN ne peuvent
-    # pas se marcher dessus et perdre un echec sous MySQL/MariaDB.
-    user.pin_failed_attempts = F("pin_failed_attempts") + 1
-    user.save(update_fields=["pin_failed_attempts"])
-    user.refresh_from_db(fields=["pin_failed_attempts"])
-
-    if user.pin_failed_attempts >= MAX_PIN_ATTEMPTS:
-        before = {"pin_failed_attempts": user.pin_failed_attempts - 1, "pin_locked_until": None}
-        user.pin_locked_until = now + PIN_LOCKOUT_DURATION
-        user.save(update_fields=["pin_locked_until"])
-        log_action(
-            actor=user,
-            club=None,
-            action_type="accounts.pin.locked",
-            obj=user,
-            before=before,
-            after={
-                "pin_failed_attempts": user.pin_failed_attempts,
-                "pin_locked_until": user.pin_locked_until,
-            },
-        )
-        raise PinLockedError(locked_until=user.pin_locked_until)
-
-    log_action(
-        actor=user,
-        club=None,
-        action_type="accounts.pin.verification_failed",
-        obj=user,
-        after={"pin_failed_attempts": user.pin_failed_attempts},
-    )
-    return False
-
-
-def require_valid_pin(*, user: User, pin: str) -> None:
-    """Point d'entree RECOMMANDE pour exiger un PIN valide avant de
-    poursuivre une action sensible (CDC 7.2 ; CLAUDE.md regle n7). A
-    importer ainsi par tout module hors ``accounts`` (signature du
-    parrain -- tache 1.4b --, validation d'un paiement/depense par
-    `finance-engine`, derogation, signature de PV, annulation...) :
-
-        from apps.accounts.services import (
-            require_valid_pin,
-            PinError,           # base -- capture large, si besoin
-            PinNotSetError,
-            InvalidPinError,
-            PinLockedError,
-        )
-
-        require_valid_pin(user=request.user, pin=pin)
-        # Aucune exception levee => PIN valide, l'action peut se
-        # poursuivre. Chaque sous-classe de PinError ci-dessus porte un
-        # message francais clair (CLAUDE.md chapitre 3) ; a l'appelant
-        # (vue) de la traduire en reponse HTTP adaptee.
-
-    Ne renvoie rien en cas de succes (meme contrat que
-    ``authenticate_login`` pour le mot de passe : "aucune exception =
-    valide"). Leve sinon :
-
-    - :class:`PinNotSetError` si le joueur n'a jamais defini de PIN ;
-    - :class:`InvalidPinError` (``attempts_remaining``) si le PIN est
-      incorrect mais que le seuil de blocage n'est pas encore atteint ;
-    - :class:`PinLockedError` (``locked_until``) si le blocage de 30
-      minutes est en cours (deja actif, ou qui vient de se declencher a
-      cette tentative).
-    """
-
-    if verify_pin(user=user, pin=pin):
-        return
-
-    raise InvalidPinError(attempts_remaining=MAX_PIN_ATTEMPTS - user.pin_failed_attempts)
-
-
-# ---------------------------------------------------------------------------
 # CGU versionnees (CDC 7.5 ; 10.2 n°27)
 # ---------------------------------------------------------------------------
 
 
 def get_pending_terms_version(user: User) -> Optional[TermsVersion]:
-    """Derniere version des CGU non encore acceptee par ``user`` (ou ``None``)."""
+    """Derniere version des CGU non encore acceptee par ``user`` (ou ``None``).
+
+    Un Superuser n'est jamais soumis a l'acceptation des CGU (CDC 7.5,
+    10.2 n°48) : renvoie toujours ``None`` pour lui.
+    """
+
+    if getattr(user, "is_superuser", False):
+        return None
 
     latest = TermsVersion.objects.order_by("-published_at", "-id").first()
     if latest is None:
@@ -1266,6 +936,7 @@ def get_or_create_platform_user(
     """
 
     normalized_email = (email or "").strip().lower()
+    validate_email_not_reserved(normalized_email)
     user = User.objects.filter(email=normalized_email).first()
 
     if user is None:
@@ -1343,14 +1014,8 @@ def log_terms_accepted(acceptance: TermsAcceptance) -> None:
 # ---------------------------------------------------------------------------
 # Mon profil -- onglets « Informations », « Identifiant et mot de passe »,
 # « Photo » (CDC 4.1, 4.2, 7.1 ; comptes-mon-profil.md §4.1 ; tache 1.9,
-# slice Lot 1)
+# slice Lot 1). Plus d'onglet « Code PIN » (decision du 11/10/2026).
 # ---------------------------------------------------------------------------
-#
-# L'onglet « Code PIN » de cette meme modale ne cree AUCUNE nouvelle
-# fonction : il reutilise directement :func:`redefine_pin` ci-dessus (ses
-# champs -- mot de passe actuel, nouveau code, confirmation -- sont
-# exactement ceux de comptes-mon-profil.md §4.1) ; seul le point d'entree
-# HTTP est nouveau (``apps.accounts.views.MyPinUpdateView``).
 
 
 class PersonalInfoError(Exception):
@@ -1431,7 +1096,7 @@ class EmailAlreadyUsedByAnotherAccountError(CredentialsUpdateError):
     authentifie, pas la creation d'un nouveau compte."""
 
     def __init__(self):
-        super().__init__("Cette adresse email est deja utilisee.")
+        super().__init__("Cette adresse email est déjà utilisée.")
 
 
 class NewPasswordMismatchError(CredentialsUpdateError):
@@ -1467,6 +1132,8 @@ def update_credentials(
 
     normalized_email = (new_email or "").strip().lower()
     email_changed = normalized_email != user.email
+    if email_changed:
+        validate_email_not_reserved(normalized_email)
     if email_changed and User.objects.filter(email=normalized_email).exclude(pk=user.pk).exists():
         raise EmailAlreadyUsedByAnotherAccountError()
 
@@ -1477,7 +1144,7 @@ def update_credentials(
 
         errors: list[str] = []
         if normalized_email and new_password == normalized_email:
-            errors.append("Le mot de passe doit etre different de votre email.")
+            errors.append("Le mot de passe doit être différent de votre email.")
         try:
             validate_password(new_password, user=user)
         except ValidationError as exc:
@@ -1554,3 +1221,99 @@ def remove_profile_photo(*, user: User) -> User:
         after={"had_photo": False},
     )
     return user
+
+
+# ---------------------------------------------------------------------------
+# « Telecharger mes donnees » (CDC 7.5 : « consulter et exporter ses donnees »)
+# ---------------------------------------------------------------------------
+
+PERSONAL_DATA_EXPORT_VERSION = 1
+
+
+def _iso(value):
+    return value.isoformat() if value is not None else None
+
+
+def _dec(value):
+    return str(value) if value is not None else None
+
+
+def export_personal_data(*, user: User) -> dict:
+    """Export des donnees personnelles de ``user`` et d'elles seules (CDC 7.5).
+
+    Le CDC ne detaille pas le perimetre ; position la plus restrictive
+    appliquee : identite du compte, adhesions (tous clubs, avec leurs
+    roles) et acceptations des CGU. Jamais : donnees medicales (CLAUDE.md
+    regle n11), ecritures financieres, donnees d'un autre joueur (le
+    parrain n'est signale que par un booleen), secrets (mot de passe,
+    compteurs de blocage), journal d'activite.
+
+    La demande est journalisee (regle n6) sans copier de contenu : seules
+    les sections exportees sont listees.
+    """
+
+    Membership = apps.get_model("clubs", "Membership")
+    MembershipRole = apps.get_model("clubs", "MembershipRole")
+
+    memberships = []
+    for membership in (
+        Membership.all_objects.filter(user=user).select_related("club").order_by("joined_on", "id")
+    ):
+        roles = MembershipRole.all_objects.filter(membership=membership).order_by("appointed_at", "id")
+        memberships.append(
+            {
+                "club": {"slug": membership.club.slug, "name": membership.club.name},
+                "status": membership.status,
+                "position": membership.position,
+                "position_detail": membership.position_detail,
+                "jersey_number": membership.jersey_number,
+                "joined_on": _iso(membership.joined_on),
+                "left_on": _iso(membership.left_on),
+                "left_reason": membership.left_reason,
+                "has_sponsor": membership.sponsor_id is not None,
+                "roles": [
+                    {
+                        "role": role.role,
+                        "appointed_at": _iso(role.appointed_at),
+                        "revoked_at": _iso(role.revoked_at),
+                    }
+                    for role in roles
+                ],
+            }
+        )
+
+    acceptances = [
+        {"terms_version": acceptance.terms_version.version_number, "accepted_at": _iso(acceptance.accepted_at)}
+        for acceptance in TermsAcceptance.objects.filter(user=user)
+        .select_related("terms_version")
+        .order_by("accepted_at", "id")
+    ]
+
+    data = {
+        "export_version": PERSONAL_DATA_EXPORT_VERSION,
+        "generated_at": _iso(timezone.now()),
+        "identity": {
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "phone": user.phone,
+            "birth_date": _iso(user.birth_date),
+            "weight_kg": _dec(user.weight_kg),
+            "height_cm": _dec(user.height_cm),
+            "has_photo": bool(user.photo),
+            "preferred_theme": user.preferred_theme,
+            "card_publication_consent_at": _iso(user.card_publication_consent_at),
+            "created_at": _iso(user.created_at),
+        },
+        "memberships": memberships,
+        "terms_acceptances": acceptances,
+    }
+
+    log_action(
+        actor=user,
+        club=None,
+        action_type="accounts.personal_data.exported",
+        obj=user,
+        after={"sections": ["identity", "memberships", "terms_acceptances"]},
+    )
+    return data

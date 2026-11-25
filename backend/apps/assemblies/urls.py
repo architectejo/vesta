@@ -23,5 +23,10 @@ urlpatterns = [
     path("<int:pk>/minutes/", views.AssemblyMinutesView.as_view(), name="assembly-minutes"),
     path("<int:pk>/minutes/sign/", views.AssemblyMinutesSignView.as_view(), name="assembly-minutes-sign"),
     path("<int:pk>/minutes/pdf/", views.AssemblyMinutesPdfDownloadView.as_view(), name="minutes-pdf-download"),
+    path("documents/", views.ArchivedDocumentListCreateView.as_view(), name="archive-list"),
+    path("documents/<int:pk>/", views.ArchivedDocumentDetailView.as_view(), name="archive-detail"),
+    path("documents/<int:pk>/file/", views.ArchivedDocumentFileView.as_view(), name="archive-file"),
+    path("documents/<int:pk>/replace/", views.ArchivedDocumentReplaceView.as_view(), name="archive-replace"),
+    path("documents/<int:pk>/withdraw/", views.ArchivedDocumentWithdrawView.as_view(), name="archive-withdraw"),
     path("quorum-threshold/", views.QuorumThresholdView.as_view(), name="quorum-threshold"),
 ]

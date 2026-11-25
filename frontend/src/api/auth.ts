@@ -4,7 +4,7 @@
  * aucune forme de réponse n'est devinée.
  */
 
-import { apiDelete, apiGet, apiPatch, apiPost } from "./client";
+import { apiDelete, apiDownload, apiGet, apiPatch, apiPost } from "./client";
 
 export interface UserSummary {
   id: number;
@@ -32,6 +32,8 @@ export interface LoginSuccess {
   club: ClubSummary | null;
   must_change_password: boolean;
   terms_acceptance_required: boolean;
+  /** Destination d'arrivée décidée par l'API (Président et VP actifs : tableau de bord). */
+  default_landing?: "board_dashboard" | "home";
 }
 
 export function login(params: { email: string; password: string; club_slug?: string }) {
@@ -40,6 +42,11 @@ export function login(params: { email: string; password: string; club_slug?: str
 
 export function logout(refresh: string) {
   return apiPost<void>("/auth/logout/", { refresh });
+}
+
+/** Export RGPD des données personnelles (CDC 7.5) : JSON en pièce jointe, authentifié. */
+export function downloadPersonalData() {
+  return apiDownload("/auth/profile/export/", "mes-donnees-vesta.json");
 }
 
 export function logoutAllDevices() {
@@ -141,16 +148,6 @@ export interface CredentialsUpdateInput {
 
 export function updateCredentials(input: CredentialsUpdateInput) {
   return apiPatch<{ detail: string }>("/auth/profile/credentials/", input);
-}
-
-export interface PinUpdateInput {
-  current_password: string;
-  new_pin: string;
-  confirm_new_pin: string;
-}
-
-export function updatePin(input: PinUpdateInput) {
-  return apiPost<{ detail: string }>("/auth/profile/pin/", input);
 }
 
 export function updateProfilePhoto(photo: File) {

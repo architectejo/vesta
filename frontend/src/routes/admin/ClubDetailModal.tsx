@@ -2,8 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { listLicenceEvents } from "../../api/licences";
 import type { Licence } from "../../api/licences";
-import { Button, EmptyState, IconButton, Loader, Modal, StatusBadge, Tabs } from "../../design-system";
+import { Button, EmptyState, IconButton, IconMore, Loader, Modal, StatusBadge, Tabs } from "../../design-system";
 import type { StatusKey } from "../../design-system";
+import { useClosingState } from "../../hooks/useClosingState";
 import { LicenceFormModal } from "./LicenceFormModal";
 import { StartSupportSessionModal } from "./StartSupportSessionModal";
 import { SuspendTerminateModal } from "./SuspendTerminateModal";
@@ -33,6 +34,8 @@ type Tab = "informations" | "licence" | "historique";
 export function ClubDetailModal({ licence, onClose, onChanged }: { licence: Licence; onClose: () => void; onChanged: () => void }) {
   const [tab, setTab] = useState<Tab>("informations");
   const [menuOpen, setMenuOpen] = useState(false);
+  const { mounted: menuMounted, dataState: menuDataState, onAnimationEnd: onMenuAnimationEnd } =
+    useClosingState(menuOpen, 200);
   const [formModal, setFormModal] = useState<"activate" | "extend" | null>(null);
   const [suspendTerminate, setSuspendTerminate] = useState<"suspend" | "terminate" | null>(null);
   const [supportOpen, setSupportOpen] = useState(false);
@@ -64,10 +67,14 @@ export function ClubDetailModal({ licence, onClose, onChanged }: { licence: Lice
               <IconButton
                 aria-label="Ouvrir le menu"
                 onClick={() => setMenuOpen((v) => !v)}
-                icon={<span aria-hidden="true">…</span>}
+                icon={<IconMore aria-hidden="true" className="h-5 w-5" />}
               />
-              {menuOpen ? (
-                <div className="absolute bottom-full left-0 mb-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated">
+              {menuMounted ? (
+                <div
+                  data-state={menuDataState}
+                  onAnimationEnd={onMenuAnimationEnd}
+                  className="vesta-anim-menu vesta-anim-menu--bottom-left absolute bottom-full left-0 mb-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated"
+                >
                   <button
                     type="button"
                     onClick={() => {

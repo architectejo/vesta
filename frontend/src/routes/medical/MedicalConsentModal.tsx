@@ -14,8 +14,8 @@ const QUERY_KEY = ["medical", "me", "president-access"] as const;
 
 /**
  * « Consentement médical » (accès du Président) — medical.md §4.11.
- * Accessible au seul joueur concerné, depuis « Mon profil ». Pas de code
- * PIN, pas de mise à jour optimiste : l'état affiché est toujours celui du
+ * Accessible au seul joueur concerné, depuis « Mon profil ». Pas de
+ * mise à jour optimiste : l'état affiché est toujours celui du
  * serveur (§4.11 en fin de section).
  *
  * Écart signalé au compte rendu : le troisième état (« accordée à un

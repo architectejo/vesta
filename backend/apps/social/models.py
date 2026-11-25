@@ -165,7 +165,7 @@ class PostImage(TenantModel):
 
     def clean(self):
         if self.post_id and self.club_id and self.post.club_id != self.club_id:
-            raise ValidationError("L'image doit porter le meme club que la publication.")
+            raise ValidationError("L'image doit porter le même club que la publication.")
 
     def save(self, *args, **kwargs):
         # Point de securite critique (voir docstring du module) : une
@@ -199,7 +199,7 @@ class Comment(TenantModel):
 
     def clean(self):
         if self.post_id and self.club_id and self.post.club_id != self.club_id:
-            raise ValidationError("Le commentaire doit porter le meme club que la publication.")
+            raise ValidationError("Le commentaire doit porter le même club que la publication.")
 
 
 class Like(TenantModel):
@@ -217,7 +217,7 @@ class Like(TenantModel):
 
     def clean(self):
         if self.post_id and self.club_id and self.post.club_id != self.club_id:
-            raise ValidationError("Le « J'aime » doit porter le meme club que la publication.")
+            raise ValidationError("Le « J'aime » doit porter le même club que la publication.")
 
 
 class PostReport(TenantModel):
@@ -240,7 +240,7 @@ class PostReport(TenantModel):
 
     def clean(self):
         if self.post_id and self.club_id and self.post.club_id != self.club_id:
-            raise ValidationError("Le signalement doit porter le meme club que la publication.")
+            raise ValidationError("Le signalement doit porter le même club que la publication.")
 
 
 class Announcement(TenantModel):
@@ -292,7 +292,7 @@ class AnnouncementImage(TenantModel):
 
     def clean(self):
         if self.announcement_id and self.club_id and self.announcement.club_id != self.club_id:
-            raise ValidationError("L'image doit porter le meme club que le communique.")
+            raise ValidationError("L'image doit porter le même club que le communiqué.")
 
 
 class AnnouncementRead(TenantModel):
@@ -312,9 +312,9 @@ class AnnouncementRead(TenantModel):
 
     def clean(self):
         if self.announcement_id and self.club_id and self.announcement.club_id != self.club_id:
-            raise ValidationError("L'accuse de lecture doit porter le meme club que le communique.")
+            raise ValidationError("L'accusé de lecture doit porter le même club que le communiqué.")
         if self.membership_id and self.club_id and self.membership.club_id != self.club_id:
-            raise ValidationError("L'accuse de lecture doit porter le meme club que l'adhesion.")
+            raise ValidationError("L'accusé de lecture doit porter le même club que l'adhésion.")
 
 
 class ChatChannel(TenantModel):
@@ -361,9 +361,9 @@ class ChatMessage(TenantModel):
 
     def clean(self):
         if self.channel_id and self.club_id and self.channel.club_id != self.club_id:
-            raise ValidationError("Le message doit porter le meme club que le canal.")
+            raise ValidationError("Le message doit porter le même club que le canal.")
         if not self.body and not self.image:
-            raise ValidationError("Ecrivez un message ou ajoutez une image.")
+            raise ValidationError("Écrivez un message ou ajoutez une image.")
 
 
 class ChatChannelRead(TenantModel):
@@ -390,6 +390,6 @@ class ChatChannelRead(TenantModel):
 
     def clean(self):
         if self.channel_id and self.club_id and self.channel.club_id != self.club_id:
-            raise ValidationError("La lecture doit porter le meme club que le canal.")
+            raise ValidationError("La lecture doit porter le même club que le canal.")
         if self.membership_id and self.club_id and self.membership.club_id != self.club_id:
-            raise ValidationError("La lecture doit porter le meme club que l'adhesion.")
+            raise ValidationError("La lecture doit porter le même club que l'adhésion.")

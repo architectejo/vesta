@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { logoutAllDevices } from "../../api/auth";
+import { downloadPersonalData, logoutAllDevices } from "../../api/auth";
+import { ApiError, triggerBlobDownload } from "../../api/client";
 import { getMyProfile } from "../../api/clubs";
 import { getMyPresidentAccess } from "../../api/medical";
 import {
@@ -8,12 +9,14 @@ import {
   setNotificationPreference,
 } from "../../api/notifications";
 import { useAuth } from "../../auth/AuthContext";
+import { useClosingState } from "../../hooks/useClosingState";
 import {
   Avatar,
   Button,
   ConfirmDialog,
   EmptyState,
   IconButton,
+  IconMore,
   Loader,
   StatusBadge,
   useToast,
@@ -21,7 +24,9 @@ import {
 import { PlayerCardModal } from "../club/PlayerCardModal";
 import { MedicalConsentModal } from "../medical/MedicalConsentModal";
 import { MyHealthRecordModal } from "../medical/MyHealthRecordModal";
+import { AssistanceCard } from "./AssistanceCard";
 import { EditProfileModal } from "./EditProfileModal";
+import { FinancialSituationCard } from "./FinancialSituationCard";
 
 function formatDate(value: string | null): string {
   if (!value) return "Non renseigné";
@@ -50,19 +55,24 @@ function InfoRow({ label, value }: { label: string; value: string }) {
  * `routes/medical/MedicalConsentModal.tsx`. Pas de badge d'aptitude/« Blessé »
  * sur la carte d'identité (voir compte rendu : aucun point d'accès léger
  * N1 sur soi-même n'existe encore côté API sans journaliser une
- * consultation du dossier complet). Les sections Situation financière,
- * Assistance sociale, Statistiques et Mercato sont hors périmètre (voir
- * compte rendu de la tâche) et ne sont pas affichées, même en lecture
- * seule.
+ * consultation du dossier complet). Situation financière (« J'ai payé »,
+ * reçus) et Assistance sociale (demande, barèmes) : voir
+ * `FinancialSituationCard` et `AssistanceCard`. Statistiques et Mercato
+ * restent hors périmètre. « Télécharger mes données » appelle l'export RGPD
+ * authentifié (GET /auth/profile/export/, CDC 7.5) ; « Demander la
+ * suppression » reste désactivée : aucun circuit de suppression n'est tranché.
  */
 export function ProfilPage() {
   const { showToast } = useToast();
   const queryClient = useQueryClient();
   const [editOpen, setEditOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const { mounted: menuMounted, dataState: menuDataState, onAnimationEnd: onMenuAnimationEnd } =
+    useClosingState(menuOpen, 200);
   const [cardOpen, setCardOpen] = useState(false);
   const [logoutAllOpen, setLogoutAllOpen] = useState(false);
   const [loggingOutAll, setLoggingOutAll] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [healthRecordOpen, setHealthRecordOpen] = useState(false);
   const [consentOpen, setConsentOpen] = useState(false);
   const auth = useAuth();
@@ -94,6 +104,23 @@ export function ProfilPage() {
       void queryClient.invalidateQueries({ queryKey: ["notification-preference"] });
     } catch {
       showToast("Une erreur est survenue de notre côté. Réessayez dans un instant.");
+    }
+  }
+
+  async function handleExportData(): Promise<void> {
+    setExporting(true);
+    try {
+      const { blob, filename } = await downloadPersonalData();
+      triggerBlobDownload(blob, filename);
+    } catch (error) {
+      showToast(
+        error instanceof ApiError
+          ? error.detail
+          : "Impossible de télécharger vos données. Réessayez dans un instant.",
+      );
+    } finally {
+      setExporting(false);
+      setMenuOpen(false);
     }
   }
 
@@ -142,16 +169,14 @@ export function ProfilPage() {
             <IconButton
               aria-label="Ouvrir le menu"
               onClick={() => setMenuOpen((v) => !v)}
-              icon={
-                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
-                  <circle cx="5" cy="12" r="1.5" />
-                  <circle cx="12" cy="12" r="1.5" />
-                  <circle cx="19" cy="12" r="1.5" />
-                </svg>
-              }
+              icon={<IconMore aria-hidden="true" className="h-5 w-5" />}
             />
-            {menuOpen ? (
-              <div className="absolute right-0 z-10 mt-1 w-64 rounded-md border border-border bg-surface py-1 shadow-elevated">
+            {menuMounted ? (
+              <div
+                data-state={menuDataState}
+                onAnimationEnd={onMenuAnimationEnd}
+                className="vesta-anim-menu absolute right-0 z-10 mt-1 w-64 rounded-md border border-border bg-surface py-1 shadow-elevated"
+              >
                 <button
                   type="button"
                   onClick={() => {
@@ -171,6 +196,23 @@ export function ProfilPage() {
                   className="flex w-full px-3 py-2 text-left text-sm text-text hover:bg-surface-muted"
                 >
                   Déconnecter tous mes appareils
+                </button>
+                <button
+                  type="button"
+                  disabled={exporting}
+                  onClick={() => void handleExportData()}
+                  className="flex w-full px-3 py-2 text-left text-sm text-text hover:bg-surface-muted disabled:cursor-not-allowed disabled:text-text-muted"
+                >
+                  {exporting ? "Téléchargement…" : "Télécharger mes données"}
+                </button>
+                {/* Aucun circuit de suppression tranché (CDC 7.5) : entrée désactivée. */}
+                <button
+                  type="button"
+                  disabled
+                  title="Bientôt disponible"
+                  className="flex w-full cursor-not-allowed px-3 py-2 text-left text-sm text-text-muted"
+                >
+                  Demander la suppression de mon compte (bientôt disponible)
                 </button>
               </div>
             ) : null}
@@ -205,6 +247,10 @@ export function ProfilPage() {
           Poste et numéro sont attribués par le Coach.
         </p>
       </section>
+
+      <FinancialSituationCard />
+
+      <AssistanceCard />
 
       <section className="rounded-lg bg-surface p-3 shadow-card sm:p-4">
         <h2 className="text-base font-semibold text-text">Informations personnelles</h2>

@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../../api/client";
 import { listClubPlayers, getMyProfile, type ClubPlayerListItem } from "../../api/clubs";
 import {
   getSession,
-  listEventEvaluations,
   listEventIncidents,
   markSessionAttendance,
   type Attendance,
@@ -31,8 +30,20 @@ import { useOfflineActionQueue } from "../../hooks/useOfflineActionQueue";
 import { reportInjury, type InjuryReportInput } from "../../api/medical";
 import { InjuryReportModal } from "../medical/InjuryReportModal";
 import { AttendanceDetailModal } from "./AttendanceDetailModal";
+import {
+  BulkActionBar,
+  BulkConfirmModal,
+  BulkExcuseModal,
+  BulkHeaderBar,
+  BulkResultModal,
+} from "./BulkAttendance";
+import { useBulkAttendance, type BulkAttendanceState } from "./useBulkAttendance";
 import { EvaluationModal } from "./EvaluationModal";
 import { IncidentModal } from "./IncidentModal";
+import { SessionStatsPanel, sessionStatsKey } from "./SessionStatsPanel";
+import { MeasureModal } from "./performance/MeasureModal";
+import { PendingMeasures } from "./performance/PendingMeasures";
+import { useMeasureOutbox } from "./performance/useMeasureOutbox";
 import { PlayerCardModal } from "./PlayerCardModal";
 import { shortLabel } from "./pinLayout";
 import { SessionEditModal } from "./SessionEditModal";
@@ -74,6 +85,7 @@ function PointageTab({
   pendingByMember,
   onMarkArrival,
   onOpenDetail,
+  bulk,
 }: {
   session: SessionDetail;
   roster: ClubPlayerListItem[];
@@ -81,9 +93,22 @@ function PointageTab({
   pendingByMember: Map<number, PendingAttendance>;
   onMarkArrival: (membershipId: number) => void;
   onOpenDetail: (attendance: Attendance) => void;
+  bulk: BulkAttendanceState;
 }) {
   const [filter, setFilter] = useState<PointageFilter>("not_marked");
   const [search, setSearch] = useState("");
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [excuseOpen, setExcuseOpen] = useState(false);
+  // Droits renvoyés par l'API (faux si la séance est verrouillée).
+  const canBulk = session.capabilities?.can_bulk_mark ?? false;
+  const canBulkExcuse = session.capabilities?.can_bulk_excuse ?? false;
+  const canSetTime = session.capabilities?.can_set_arrival_time ?? false;
+  const selecting = bulk.active && canBulk;
+  const stopBulk = bulk.stop;
+
+  useEffect(() => {
+    if (bulk.active && !canBulk) stopBulk();
+  }, [bulk.active, canBulk, stopBulk]);
 
   const attendanceByMember = useMemo(() => {
     const map = new Map<number, Attendance>();
@@ -138,6 +163,13 @@ function PointageTab({
     return aTime < bTime ? -1 : 1;
   });
 
+  const checkableIds = filtered.filter((r) => !r.attendance && !r.pending).map((r) => r.membership.membership_id);
+  const nameOf = (id: number) => {
+    const m = roster.find((r) => r.membership_id === id);
+    return m ? `${m.first_name} ${m.last_name}` : `Joueur n° ${id}`;
+  };
+  const selectedPlayers = bulk.selected.map((id) => ({ id, name: nameOf(id) }));
+
   const chips: Array<{ value: PointageFilter; label: string }> = [
     { value: "not_marked", label: "Non pointés" },
     { value: "all", label: "Tous" },
@@ -163,6 +195,18 @@ function PointageTab({
         className="h-9 w-full rounded-sm border border-border-strong bg-surface px-3 text-base text-text placeholder:text-text-muted"
       />
 
+      {selecting ? (
+        <BulkHeaderBar
+          checkableIds={checkableIds}
+          selected={bulk.selected}
+          onCheckAll={bulk.checkAll}
+          onUncheckAll={bulk.uncheckAll}
+          onStop={bulk.stop}
+          disabled={bulk.submitting}
+        />
+      ) : null}
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap gap-1">
         {chips.map((chip) => (
           <button
@@ -181,12 +225,49 @@ function PointageTab({
           </button>
         ))}
       </div>
+      {canBulk && !selecting ? (
+        <Button size="sm" variant="secondary" onClick={bulk.start}>
+          Sélectionner
+        </Button>
+      ) : null}
+      </div>
 
       {filtered.length === 0 ? (
         <EmptyState message={filter === "not_marked" ? "Tout le monde est pointé." : "Aucun joueur dans ce filtre."} />
       ) : (
         <ul className="divide-y divide-border">
           {filtered.map((row) => {
+            const id = row.membership.membership_id;
+            const fullName = `${row.membership.first_name} ${row.membership.last_name}`;
+            if (selecting && !row.attendance && !row.pending) {
+              const rank = bulk.selected.indexOf(id) + 1;
+              return (
+                <li key={id}>
+                  <label className="flex min-h-14 cursor-pointer items-center gap-3 py-2">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center">
+                      <input
+                        type="checkbox"
+                        aria-label={`Sélectionner ${fullName}`}
+                        className="h-5 w-5 rounded-sm border-border-strong text-primary"
+                        checked={rank > 0}
+                        disabled={bulk.submitting}
+                        onChange={() => bulk.toggle(id)}
+                      />
+                    </span>
+                    <Avatar name={fullName} photoUrl={row.membership.photo} size={40} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block break-words text-sm text-text">{fullName}</span>
+                      <span className="block break-words text-xs text-text-muted">
+                        {[row.membership.jersey_number != null ? `n° ${row.membership.jersey_number}` : null, row.membership.position_label]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    </span>
+                    {rank > 0 ? <span className="text-[13px] text-text-muted">{rank}</span> : null}
+                  </label>
+                </li>
+              );
+            }
             return (
               <li key={row.membership.membership_id} className="flex min-h-14 items-center gap-3 py-2">
                 <Avatar
@@ -200,10 +281,10 @@ function PointageTab({
                   disabled={!row.attendance}
                   onClick={() => row.attendance && onOpenDetail(row.attendance)}
                 >
-                  <p className="truncate text-sm text-text">
+                  <p className="break-words text-sm text-text">
                     {row.membership.first_name} {row.membership.last_name}
                   </p>
-                  <p className="truncate text-xs text-text-muted">
+                  <p className="break-words text-xs text-text-muted">
                     {[row.membership.jersey_number != null ? `n° ${row.membership.jersey_number}` : null, row.membership.position_label]
                       .filter(Boolean)
                       .join(" · ")}
@@ -230,6 +311,45 @@ function PointageTab({
           })}
         </ul>
       )}
+
+      {selecting ? (
+        <BulkActionBar
+          count={bulk.selected.length}
+          canExcuse={canBulkExcuse}
+          submitting={bulk.submitting}
+          onArrive={() => {
+            bulk.clearError();
+            setConfirmOpen(true);
+          }}
+          onExcuse={() => {
+            bulk.clearError();
+            setExcuseOpen(true);
+          }}
+        />
+      ) : null}
+
+      <BulkConfirmModal
+        open={confirmOpen}
+        players={selectedPlayers}
+        canSetTime={canSetTime}
+        eventDate={session.event_date}
+        lateCutoff={session.late_arrival_cutoff}
+        lateCountsAbsent={session.late_arrival_counts_absent}
+        blockedCount={bulk.selected.filter((id) => session.unassigned?.cannot_play.some((p) => p.membership_id === id)).length}
+        submitting={bulk.submitting}
+        error={bulk.error}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={(request) => void bulk.submit(request).then((ok) => ok && setConfirmOpen(false))}
+      />
+      <BulkExcuseModal
+        open={excuseOpen}
+        players={selectedPlayers}
+        submitting={bulk.submitting}
+        error={bulk.error}
+        onCancel={() => setExcuseOpen(false)}
+        onConfirm={(request) => void bulk.submit(request).then((ok) => ok && setExcuseOpen(false))}
+      />
+      <BulkResultModal summary={bulk.summary} nameOf={nameOf} onClose={bulk.clearSummary} />
     </div>
   );
 }
@@ -318,6 +438,8 @@ function EquipesTab({
                       membershipId: player.membership_id,
                       label: shortLabel(player.name),
                       number: player.jersey_number,
+                      photoUrl: player.photo,
+                      fullName: player.name,
                       x: 50,
                       y: 50,
                     }}
@@ -347,6 +469,8 @@ function EquipesTab({
                       membershipId: player.membership_id,
                       label: shortLabel(player.name),
                       number: player.jersey_number,
+                      photoUrl: player.photo,
+                      fullName: player.name,
                       x: 50,
                       y: 50,
                       locked: true,
@@ -398,7 +522,6 @@ function BilanTab({
   eventId,
   canRecordIncident,
   canEvaluate,
-  rosterCount,
   canReportInjury,
   canSeeMedicalFull,
   isCaptain,
@@ -408,7 +531,6 @@ function BilanTab({
   eventId: number;
   canRecordIncident: boolean;
   canEvaluate: boolean;
-  rosterCount: number;
   canReportInjury: boolean;
   canSeeMedicalFull: boolean;
   isCaptain: boolean;
@@ -417,39 +539,30 @@ function BilanTab({
   const [incidentOpen, setIncidentOpen] = useState(false);
   const [evalOpen, setEvalOpen] = useState(false);
   const [injuryOpen, setInjuryOpen] = useState(false);
+  const [measure, setMeasure] = useState<{ testId: number | null } | null>(null);
+  const outbox = useMeasureOutbox();
   const queryClient = useQueryClient();
 
   const incidentsQuery = useQuery({
     queryKey: ["sport", "incidents", eventId],
     queryFn: () => listEventIncidents(eventId, { limit: 20 }),
   });
-  const evaluationsQuery = useQuery({
-    queryKey: ["sport", "evaluations", eventId],
-    queryFn: () => listEventEvaluations(eventId),
-    enabled: canEvaluate,
-  });
-
-  const lateList = session.attendances.filter((a) => a.status === "late_absent");
-  const excusedList = session.attendances.filter((a) => a.status === "excused_absent");
-  const presentCount = session.counts.present + session.counts.late;
-  const rate = rosterCount > 0 ? Math.round((presentCount / rosterCount) * 100) : 0;
 
   return (
     <div className="space-y-4">
-      <section className="rounded-md border border-border p-3">
-        <h3 className="mb-2 text-sm font-semibold text-text">Présences</h3>
-        <p className="text-sm text-text">Taux de présence : {rate}%</p>
-        {lateList.length > 0 ? (
-          <p className="mt-1 text-xs text-text-muted">
-            Retards : {lateList.map((a) => `${a.player.name} (${formatTime(a.arrived_at)})`).join(", ")}
-          </p>
-        ) : null}
-        {excusedList.length > 0 ? (
-          <p className="mt-1 text-xs text-text-muted">
-            Absences excusées : {excusedList.map((a) => a.player.name).join(", ")}
-          </p>
-        ) : null}
-      </section>
+      <SessionStatsPanel
+        sessionId={eventId}
+        onEvaluate={canEvaluate ? () => setEvalOpen(true) : undefined}
+        onMeasure={(testId) => setMeasure({ testId: testId ?? null })}
+        measuresExtra={<PendingMeasures outbox={outbox} eventId={eventId} />}
+      />
+      <MeasureModal
+        open={measure !== null}
+        eventId={eventId}
+        outbox={outbox}
+        initialTestId={measure?.testId ?? null}
+        onClose={() => setMeasure(null)}
+      />
 
       <section className="rounded-md border border-border p-3">
         <div className="mb-2 flex items-center justify-between">
@@ -475,21 +588,6 @@ function BilanTab({
         )}
       </section>
 
-      {canEvaluate ? (
-        <section className="rounded-md border border-border p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-text">Évaluations</h3>
-            <Button size="sm" variant="primary" onClick={() => setEvalOpen(true)}>
-              Évaluer les joueurs
-            </Button>
-          </div>
-          <p className="text-sm text-text-muted">
-            {evaluationsQuery.data?.results.length ?? 0} évaluation(s) enregistrée(s)
-            {evaluationsQuery.data?.is_locked ? " · verrouillées (48 h passées)" : ""}
-          </p>
-        </section>
-      ) : null}
-
       {canReportInjury || canSeeMedicalFull ? (
         <section className="rounded-md border border-border p-3">
           <div className="mb-2 flex items-center justify-between">
@@ -504,8 +602,7 @@ function BilanTab({
             <p className="text-sm text-text-muted">Les blessures déclarées sont suivies par le Médecin.</p>
           ) : canSeeMedicalFull ? (
             <p className="text-sm text-text-muted">
-              La liste des blessures de cette séance nécessite un point d'accès API supplémentaire (à ajouter par
-              backend-dev) : elle n'est pas encore affichée ici.
+              Les blessures de la séance s'affichent ici dès qu'elles sont déclarées.
             </p>
           ) : null}
         </section>
@@ -542,6 +639,7 @@ function BilanTab({
         onCreated={() => {
           setEvalOpen(false);
           void queryClient.invalidateQueries({ queryKey: ["sport", "evaluations", eventId] });
+          void queryClient.invalidateQueries({ queryKey: sessionStatsKey(eventId) });
         }}
       />
     </div>
@@ -602,6 +700,17 @@ export function SeancePage() {
       void queryClient.invalidateQueries({ queryKey: ["sport", "session", sessionId] });
     },
     onRejected: (_payload, message) => showToast(message),
+  });
+
+  const refreshSession = useCallback(
+    () => void queryClient.invalidateQueries({ queryKey: ["sport", "session", sessionId] }),
+    [queryClient, sessionId],
+  );
+  const bulk = useBulkAttendance({
+    kind: "session",
+    eventId: sessionId,
+    onChanged: refreshSession,
+    enqueueOffline: (item) => pendingQueue.enqueue(item),
   });
 
   const pendingByMember = useMemo(() => {
@@ -771,6 +880,7 @@ export function SeancePage() {
           pendingByMember={pendingByMember}
           onMarkArrival={(id) => void handleMarkArrival(id)}
           onOpenDetail={setDetailAttendance}
+          bulk={bulk}
         />
       ) : tab === "equipes" ? (
         <EquipesTab
@@ -789,7 +899,6 @@ export function SeancePage() {
           eventId={session.id}
           canRecordIncident={access.canRecordIncident}
           canEvaluate={access.canEvaluate}
-          rosterCount={roster.length}
           canReportInjury={access.canReportInjury}
           canSeeMedicalFull={access.canSeeMedicalFull}
           isCaptain={access.isCaptain && !access.canSeeMedicalFull}

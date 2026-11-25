@@ -31,7 +31,7 @@ from apps.clubs.tests.factories import MembershipRoleFactory
 from apps.core.validators import MAX_UPLOAD_SIZE_BYTES
 from apps.treasury import services
 from apps.treasury.models import Payment, Transaction
-from apps.treasury.tests.conftest import PIN, ClubContext, make_member, past_day
+from apps.treasury.tests.conftest import ClubContext, make_member, past_day
 
 pytestmark = pytest.mark.django_db
 
@@ -61,7 +61,6 @@ def pay_with_attachment(ctx: ClubContext, *, membership=None, content=ATTACHMENT
         method="cash",
         paid_on=past_day(),
         validated_by=ctx.treasurer.user,
-        pin=PIN,
         attachment=SimpleUploadedFile("preuve.pdf", content, content_type="application/pdf"),
     )
 
@@ -166,7 +165,6 @@ class TestDownloadPermissions:
             method="cash",
             paid_on=past_day(),
             validated_by=ctx.treasurer.user,
-            pin=PIN,
         )
         client = client_for(ctx.treasurer.user)
 

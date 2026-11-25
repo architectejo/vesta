@@ -162,6 +162,8 @@ export function TeamFieldPanel({
     label: shortLabel(item.player.name),
     number: item.player.jersey_number,
     jerseyColor: color,
+    photoUrl: item.player.photo,
+    fullName: item.player.name,
     x: Number(item.x_coord),
     y: Number(item.y_coord),
   }));
@@ -333,6 +335,8 @@ export function TeamFieldPanel({
                       label: shortLabel(item.player.name),
                       number: item.player.jersey_number,
                       jerseyColor: color,
+                      photoUrl: item.player.photo,
+                      fullName: item.player.name,
                       x: 50,
                       y: 50,
                       highlighted: armed?.team === team && armed.membershipId === item.membership_id,

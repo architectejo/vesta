@@ -16,6 +16,8 @@ export function pitchPinsForTeam(items: TeamAssignmentItem[], color: string): Pi
       label: shortLabel(item.player.name),
       number: item.player.jersey_number,
       jerseyColor: color,
+      photoUrl: item.player.photo,
+      fullName: item.player.name,
       x: Number(item.x_coord),
       y: Number(item.y_coord),
     }));

@@ -2,8 +2,7 @@
 
 Chaque club de test dispose de ses parametres (`ClubSettings` : devise,
 fuseau), d'un President, d'un Tresorier, d'un Tresorier adjoint, d'un
-Vice-president et d'un simple joueur, tous avec un code PIN connu
-(`PIN`). Le nouveau joueur « En attente » (`pending_member`) a un parrain
+Vice-president et d'un simple joueur (plus aucun code PIN). Le nouveau joueur « En attente » (`pending_member`) a un parrain
 inscrit (CDC 4.3, etape 1).
 """
 
@@ -13,7 +12,6 @@ import datetime
 from dataclasses import dataclass
 
 import pytest
-from django.contrib.auth.hashers import make_password
 from django.utils import timezone
 
 from apps.accounts.tests.factories import UserFactory
@@ -21,8 +19,29 @@ from apps.clubs.models import Membership, MembershipRole
 from apps.clubs.tests.factories import ClubSettingsFactory, MembershipFactory, MembershipRoleFactory
 from apps.treasury.tests.factories import MembershipFeeTypeFactory
 
+# Valeurs « sentinelles » conservees : servent uniquement a verifier qu'un
+# champ ``pin`` encore transmis est ignore et n'apparait jamais dans une
+# reponse ni au journal. Depuis la decision client du 11/10/2026
+# (CLAUDE.md regle 7), aucun compte n'a de PIN.
 PIN = "2468"
 WRONG_PIN = "1357"
+
+
+def assert_logged_by(action_type: str, user, *, club=None, obj=None, count: int = 1):
+    """L'action sensible est journalisee avec son AUTEUR (CLAUDE.md regles 6
+    et 7) : c'est lui, et non plus un PIN, qui garantit la tracabilite.
+    ``obj`` restreint aux entrees de cet objet."""
+
+    from apps.audit.models import AuditLog
+
+    entries = AuditLog.objects.filter(action_type=action_type)
+    if club is not None:
+        entries = entries.filter(club=club)
+    if obj is not None:
+        entries = entries.filter(object_type=type(obj).__name__, object_id=str(obj.pk))
+    assert entries.count() == count, f"{action_type} : {entries.count()} entree(s) au lieu de {count}"
+    assert set(entries.values_list("actor_id", flat=True)) == {user.pk}
+    return entries
 
 
 def past_day(days: int = 2) -> datetime.date:
@@ -31,8 +50,8 @@ def past_day(days: int = 2) -> datetime.date:
     return timezone.now().date() - datetime.timedelta(days=days)
 
 
-def make_member(club, *, roles=(), status=Membership.Status.ACTIVE, sponsor=None, pin=PIN):
-    user = UserFactory(pin_hash=make_password(pin) if pin else "")
+def make_member(club, *, roles=(), status=Membership.Status.ACTIVE, sponsor=None):
+    user = UserFactory()
     membership = MembershipFactory(club=club, user=user, status=status, sponsor=sponsor)
     for role in roles:
         MembershipRoleFactory(membership=membership, club=club, role=role, appointed_at=timezone.now())

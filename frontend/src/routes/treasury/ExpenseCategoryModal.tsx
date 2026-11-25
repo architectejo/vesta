@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ExpenseCategory, ExpenseCategoryInput } from "../../api/treasury";
+import { toApiAmount } from "./money";
 import { Checkbox, MoneyField, Modal, TextField } from "../../design-system";
 
 export interface ExpenseCategoryModalProps {
@@ -52,7 +53,7 @@ export function ExpenseCategoryModal({
     setErrors({});
     onSubmit({
       name: trimmed,
-      ceiling: ceiling.trim() === "" ? null : ceiling.trim(),
+      ceiling: ceiling.trim() === "" ? null : toApiAmount(ceiling),
       receipt_required: receiptRequired,
       good_standing_only: goodStandingOnly,
     });

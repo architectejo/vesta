@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MyProfile } from "../../api/clubs";
@@ -24,6 +25,7 @@ vi.mock("../../api/sport", async () => {
     listSuspensions: vi.fn(),
     listMatches: vi.fn(),
     getMatch: vi.fn(),
+    createSession: vi.fn(),
   };
 });
 vi.mock("../../api/treasury", async () => {
@@ -39,7 +41,7 @@ vi.mock("../../api/treasury", async () => {
 
 import { getMyProfile } from "../../api/clubs";
 import { listAnnouncements } from "../../api/social";
-import { getLockerRoom, getMatch, listMatches, listSuspensions } from "../../api/sport";
+import { createSession, getLockerRoom, getMatch, listMatches, listSuspensions } from "../../api/sport";
 import { getContributeInfo, getExpenseSummary, getMyBalance, getTreasuryCapabilities } from "../../api/treasury";
 
 function makeProfile(roles: Array<{ role: string; label: string }> = []): MyProfile {
@@ -67,7 +69,7 @@ function makeProfile(roles: Array<{ role: string; label: string }> = []): MyProf
   };
 }
 
-const emptyLockerRoom: LockerRoom = { session: null, match: null, my_situation: null };
+const emptyLockerRoom: LockerRoom = { session: null, match: null, my_situation: null, next_event: null };
 
 const defaultCapabilities: TreasuryCapabilitiesResponse = {
   currency: "USD",
@@ -80,6 +82,7 @@ const defaultCapabilities: TreasuryCapabilitiesResponse = {
     can_submit_expenses: false,
     can_validate_expenses: false,
     can_derogate: false,
+    can_decide_payment_reversal: false,
     can_upload_expense_receipts: false,
     can_manage_assistance_scales: false,
     can_process_assistance_requests: false,
@@ -191,6 +194,81 @@ describe("AccueilPage", () => {
   it("affiche l'état vide du prochain rendez-vous quand rien n'est prévu aujourd'hui", async () => {
     renderPage();
     expect(await screen.findByText("Aucune séance ni aucun match prévu aujourd'hui.")).toBeInTheDocument();
+    expect(screen.queryByText(/Prochain rendez-vous :/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Créer une séance")).not.toBeInTheDocument();
+  });
+
+  it("précise le prochain rendez-vous (séance) sur la carte d'accueil quand rien n'est prévu aujourd'hui", async () => {
+    vi.mocked(getLockerRoom).mockResolvedValue({
+      session: null,
+      match: null,
+      my_situation: null,
+      next_event: { type: "session", id: 55, event_date: "2026-10-04", gathering_time: "07:30:00", location: "" },
+    });
+    renderPage();
+    expect(
+      await screen.findByText("Prochain rendez-vous : Séance · dimanche 4 octobre · 07:30"),
+    ).toBeInTheDocument();
+  });
+
+  it("précise le prochain rendez-vous (match) sur la carte d'accueil quand rien n'est prévu aujourd'hui", async () => {
+    vi.mocked(getLockerRoom).mockResolvedValue({
+      session: null,
+      match: null,
+      my_situation: null,
+      next_event: {
+        type: "match",
+        id: 56,
+        event_date: "2026-10-09",
+        kickoff_time: "15:00:00",
+        opponent: "FC Exemple",
+        location: "",
+      },
+    });
+    renderPage();
+    expect(
+      await screen.findByText("Prochain rendez-vous : Match contre FC Exemple · vendredi 9 octobre · 15:00"),
+    ).toBeInTheDocument();
+  });
+
+  it("propose « Créer une séance » au Coach quand rien n'est prévu aujourd'hui, et appelle createSession", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile([{ role: "coach", label: "Coach" }]));
+    vi.mocked(createSession).mockResolvedValue({
+      id: 321,
+      kind: "session",
+      event_date: "2026-10-12",
+      season_id: null,
+      is_locked: false,
+      unlocked_by: null,
+      unlocked_at: null,
+      unlock_reason: "",
+      gathering_time: "07:30:00",
+      late_arrival_cutoff: "08:00:00",
+      location: "",
+      team_a_color: "#1d4ed8",
+      team_b_color: "#dc2626",
+      team_a_formation: "",
+      team_b_formation: "",
+      instructions: "",
+      late_arrival_counts_absent: true,
+      counts: { present: 0, late: 0, excused: 0, not_marked: 0 },
+      attendances: [],
+      team_a: [],
+      team_b: [],
+      unassigned: { to_place_manually: [], cannot_play: [] },
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByText("Créer une séance"));
+    expect(await screen.findByRole("heading", { name: "Créer une séance" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Rassemblement"), { target: { value: "07:30" } });
+    fireEvent.change(screen.getByLabelText("Limite d'arrivée"), { target: { value: "08:00" } });
+    await user.click(screen.getByRole("button", { name: "Créer la séance" }));
+
+    expect(createSession).toHaveBeenCalled();
+    expect(await screen.findByText("Séance créée. Les joueurs ont été prévenus.")).toBeInTheDocument();
   });
 
   it("affiche l'état vide des derniers résultats quand aucun match n'est joué", async () => {

@@ -2,7 +2,7 @@
 
 Lot 0 (cadrage) · 25/09/2026 · Rédigé par `finance-engine`. Annexe B (cahier des charges 10.1), partie trésorerie. Ce document est intégré par référence dans `docs/lot0/schema-donnees.md` (§14) ; il suit les décisions de ce dernier pour les entités du socle (`Club`, `ClubSettings`, `Membership`), voir section 2.
 
-**Sources** : cahier des charges 0.4 (glossaire), 2.4 (permissions), 4.3 (adhésion), 4.4 (trésorerie et cotisations), 4.5 (dépenses et assistance sociale), 4.6 (paiement en ligne), 5.3 (inaltérabilité), 6.3 (multi-tenant), 6.5 (cron), 6.6 (hors connexion), 7.2 (code PIN), 7.5 (anonymisation), 10.2 n° 4, 5 et 22. Règles non négociables n° 2, 3, 4, 6, 7, 8 et 12 de `CLAUDE.md`.
+**Sources** : cahier des charges 0.4 (glossaire), 2.4 (permissions), 4.3 (adhésion), 4.4 (trésorerie et cotisations), 4.5 (dépenses et assistance sociale), 4.6 (paiement en ligne), 5.3 (inaltérabilité), 6.3 (multi-tenant), 6.5 (cron), 6.6 (hors connexion), 7.2 (confirmation des actions sensibles), 7.5 (anonymisation), 10.2 n° 4, 5 et 22. Règles non négociables n° 2, 3, 4, 6, 7, 8 et 12 de `CLAUDE.md`.
 
 Ce document décrit des structures de données. Il ne contient pas de code. Les noms des entités et des champs sont en anglais (convention `CLAUDE.md` 7), les descriptions en français.
 
@@ -39,11 +39,11 @@ Ce document décrit des structures de données. Il ne contient pas de code. Les 
 - Les seules suppressions permises sont listées explicitement (type de cotisation jamais utilisé, voir 4.1).
 - Toute création, modification ou changement d'état écrit une entrée dans le journal d'activité (règle n° 6, CDC 5.2 « Finances »). Le journal est porté par l'app `audit` et n'est pas redéfini ici.
 
-### 1.4 Code PIN (CDC 7.2, règle n° 7)
+### 1.4 Confirmation des actions sensibles (CDC 7.2, règle n° 7) — modifié le 11/10/2026 (10.3 n° 177)
 
-Aucun PIN n'est stocké dans les tables de ce domaine. Les actions qui l'exigent (validation d'un paiement, validation ou libération d'une dépense, dérogation, annulation d'un paiement) enregistrent l'acteur (`*_by`) et l'horodatage (`*_at`). La présence de ces deux champs atteste qu'une vérification PIN a réussi : le service refuse l'écriture sinon, et la vérification est tracée dans le journal.
+Le code PIN est supprimé. Les actions sensibles (validation d'un paiement, validation ou libération d'une dépense, dérogation, annulation d'un paiement) se valident par un bouton puis une modale de confirmation, et enregistrent l'acteur (`*_by`) et l'horodatage (`*_at`) ; l'action est tracée dans le journal (auteur, date, objet). Le service refuse l'écriture sans acteur autorisé.
 
-**Exception unique : la Caisse Terrain Express** (CDC 4.4.5, 10.2 n° 22). Le PIN n'y est pas vérifié à chaque encaissement mais **une seule fois, par le serveur, à l'ouverture d'une session de caisse** (`CashSession`, 5.4). Les paiements `field_cash` de cette session, y compris ceux saisis hors connexion puis synchronisés, ne redemandent pas le PIN : leur attestation est le rattachement à une session ouverte et non expirée (`Payment.cash_session`, dont `pin_verified_at` fait foi). **Aucun PIN, haché ou non, n'est stocké sur l'appareil.**
+**Caisse Terrain Express** (CDC 4.4.5, 10.2 n° 22). La session de caisse (`CashSession`, 5.4) est maintenue : ouverte **en ligne** par un bouton suivi d'une confirmation, valable jusqu'à minuit. Les paiements `field_cash` de cette session, y compris ceux saisis hors connexion puis synchronisés, ont pour attestation leur rattachement à une session ouverte et non expirée (`Payment.cash_session`). Aucun secret n'est stocké sur l'appareil. *Position provisoire, à poser au client (n° 177).*
 
 ---
 
@@ -199,7 +199,7 @@ Effet : aucun montant dû n'est généré pour les mois couverts. La suspension 
 
 ### 4.5 `Due` — Montant dû (échéance générée) (CDC 4.4.2)
 
-Une ligne par joueur, par type obligatoire et par période. Créée par la tâche cron du 1er du mois (mensuelles), ou lors du rattachement / de l'arrivée d'un joueur, ou par import CSV.
+Une ligne par joueur, par type obligatoire et par période. Créée par la tâche cron du 1er du mois (mensuelles), ou lors du rattachement / de l'arrivée d'un joueur, ou par import CSV, ou à l'ouverture d'une adhésion (frais d'adhésion, décision du client du 17/11/2026, voir ci-dessous).
 
 | Champ | Type | Contraintes | Description |
 | --- | --- | --- | --- |
@@ -210,7 +210,7 @@ Une ligne par joueur, par type obligatoire et par période. Créée par la tâch
 | `period` | Date | obligatoire | Mensuel : 1er du mois concerné. Annuel : 1er janvier de l'année. Ponctuel : la date limite du type. |
 | `amount` | Money | obligatoire, > 0 | **Copie figée** du tarif applicable à `period` au moment de la génération (4.2). |
 | `due_date` | Date | obligatoire | Échéance : `due_day` du mois (mensuel), `due_day`/`due_month` (annuel), `deadline` (ponctuel). |
-| `source` | Enum(`scheduler`, `arrival`, `assignment`, `import`) | obligatoire | Origine de la génération. |
+| `source` | Enum(`scheduler`, `arrival`, `assignment`, `import`, `membership`) | obligatoire | Origine de la génération. `membership` : frais d'adhésion (décision du 17/11/2026). |
 | `import_batch` | FK → ImportBatch | facultatif ; requis si `source = import` | |
 | `created_at` | DateTime | obligatoire | |
 
@@ -221,6 +221,20 @@ Contraintes :
 - **Pas de statut stocké** (« payé », « partiel », « impayé échu », « à venir ») : il est déduit des répartitions (5.2) et de la date.
 - **Échu** : un montant dû devient une dette le lendemain de `due_date + ClubSettings.debt_tolerance_days` (lu via `club.settings.debt_tolerance_days`). Autrement dit, il est pris en compte dans le solde à la date D si `due_date + tolérance < D`. Avec l'échéance au 10 et 0 jour de tolérance, il compte à partir du 11 : personne n'est bloqué le 1er.
 - **Joueur arrivé en cours de mois** : le mois entier est dû (10.2 n° 5) ; le montant dû du mois d'arrivée est créé immédiatement (`source = arrival`) avec le montant plein. Voir Q4 sur l'échéance appliquée.
+- **Frais d'adhésion** (décision du client du 17/11/2026 ; CDC 4.3, 4.4.2 ; 10.3 n° 100 confirmée) : un montant dû **unique par adhésion** (`source = membership`), créé à l'ouverture du dossier d'adhésion (`apps.clubs.services.add_player_with_sponsor`, même transaction) ou, s'il manque encore, au premier paiement validé d'un type « adhésion ». `period` = 1er du mois d'entrée ; `amount` = tarif « adhésion » en vigueur à la date d'entrée ; `due_date` = date d'entrée. Exigible **dès la date d'entrée, sans tolérance** (position provisoire : le joueur reste « En attente », jamais « En dette », et son paiement ramène le solde à 0 le jour même). Aucun dû si le club n'a pas de type « adhésion » actif, si ce type est libre (règle 3), ou si le club ne peut pas encaisser (10.2 n° 108 ; créé alors au premier paiement). Les joueurs importés (membres historiques, CDC 4.1) n'en reçoivent pas (position prudente provisoire). Données antérieures : commande `rebalance_membership_fee_dues --club ID` (simulation par défaut, `--apply` pour écrire).
+
+### 4.6 `DueCancellation` — Annulation d'un montant dû (décision du 17/11/2026)
+
+Écriture d'annulation append-only : un montant dû n'est jamais supprimé ni modifié. Un dû annulé ne compte plus ni dans le solde, ni dans la répartition 4.4.3, ni dans les indicateurs. Utilisée à l'annulation d'une adhésion après refus du parrain (CDC 4.3) : le dû d'adhésion est neutralisé si les frais sont remboursés ou s'ils ne sont pas entièrement payés (frais entièrement payés et conservés : le dû reste, couvert par le paiement).
+
+| Champ | Type | Contraintes | Description |
+| --- | --- | --- | --- |
+| `id` | id | PK | |
+| `club` | FK → Club | obligatoire, indexé ; = `due.club` | **Isolation multi-tenant.** |
+| `due` | FK 1-1 → Due | obligatoire, **unique** | Au plus une annulation par montant dû. |
+| `reason` | Text | obligatoire, non vide | Motif. |
+| `cancelled_by` | FK → User | obligatoire | Président (service `cancel_membership_fee_due`), journalisé `treasury.due.cancelled`. |
+| `cancelled_at` | DateTime | obligatoire | |
 
 ---
 
@@ -245,7 +259,7 @@ Objet métier d'un encaissement : qui, quel type, combien, par quel moyen, avec 
 | `attachment` | File | facultatif | Pièce jointe (CDC 4.4.4) ou capture (« J'ai payé », CDC 4.6). JPEG, PNG, WebP, PDF ; 10 Mo max. |
 | `submitted_by` | FK → User | obligatoire | Trésorier/adjoint qui saisit, ou joueur qui déclare. |
 | `submitted_at` | DateTime | obligatoire | |
-| `validated_by` | FK → User | requis quand la transaction passe à `succeeded`, sauf `source = gateway` | Trésorier ou adjoint (PIN). Pour `field_cash` : l'utilisateur de `cash_session.opened_by`, sans nouvelle saisie du PIN (1.4). |
+| `validated_by` | FK → User | requis quand la transaction passe à `succeeded`, sauf `source = gateway` | Trésorier ou adjoint (modale de confirmation). Pour `field_cash` : l'utilisateur de `cash_session.opened_by`, sans confirmation supplémentaire (1.4). |
 | `validated_at` | DateTime | idem | Pour `field_cash` : horodatage serveur de la réception (en ligne) ou de la synchronisation (hors connexion). |
 | `cash_session` | FK → CashSession | **requis si `source = field_cash`, vide sinon** ; même club ; `cash_session.opened_by.user` = `submitted_by` | Session de caisse sous laquelle l'encaissement a été fait (CDC 4.4.5, 10.2 n° 22). Figé à la création. |
 | `rejected_by`, `rejected_at` | FK → User, DateTime | facultatifs | Rejet d'une déclaration « J'ai payé ». |
@@ -253,8 +267,8 @@ Objet métier d'un encaissement : qui, quel type, combien, par quel moyen, avec 
 | `receipt_number` | Entier positif | attribué à la validation ; **unique par `(club, receipt_number)`** ; séquence continue par club | Reçu numéroté (CDC 4.4.4). |
 | `receipt_file` | File | facultatif jusqu'à génération | PDF aux couleurs du club, généré après validation. |
 | `receipt_issued_at` | DateTime | facultatif | |
-| `client_uuid` | UUID | facultatif ; **unique par `(club, client_uuid)`** | Identifiant généré sur le téléphone pour la Caisse Terrain Express hors connexion (CDC 6.6) : déduplication à la synchronisation. |
-| `client_recorded_at` | DateTime | facultatif ; requis si `client_uuid` | Heure réelle de la saisie hors connexion. Pour `field_cash`, doit tomber dans la fenêtre de validité de `cash_session` (5.4). |
+| `client_uuid` | UUID | facultatif ; **unique par `(club, client_uuid)`** | Identifiant généré côté client. Deux usages : (1) Caisse Terrain Express hors connexion (CDC 6.6), déduplication à la synchronisation ; (2) clé anti-doublon des saisies en ligne du Trésorier (« Enregistrer un paiement », CDC 4.4.4) et des frais d'adhésion (CDC 4.3), générée à l'ouverture de la modale (correctif de sécurité M4, audit du 12/10/2026 ; CDC 10.3 n° 178). Facultatif en saisie en ligne : sans `client_uuid`, aucune déduplication. |
+| `client_recorded_at` | DateTime | facultatif ; requis si `client_uuid` **et** `source = field_cash` | Heure réelle de la saisie hors connexion. Pour `field_cash`, doit tomber dans la fenêtre de validité de `cash_session` (5.4). |
 | `import_batch` | FK → ImportBatch | requis si `source = csv_import` | |
 
 Règles attachées :
@@ -263,9 +277,9 @@ Règles attachées :
 - Une fois la transaction scellée (`succeeded` ou `failed`), **aucun champ financier n'est modifiable** (`membership`, `contribution_type`, `amount`, `currency`, `method`, `reference`, `paid_on`). Seuls les champs du reçu (`receipt_file`, `receipt_issued_at`) peuvent être complétés.
 - **Jamais supprimé.** Une erreur se corrige par un `PaymentReversal` (5.3).
 - Circuit par source :
-  - `treasurer_entry`, `csv_import` : fournisseur `manual`, la transaction est créée directement `succeeded` à la validation par PIN.
-  - `field_cash` (Caisse Terrain Express) : fournisseur `manual`, la transaction est créée directement `succeeded` à la réception par le serveur (en ligne ou à la synchronisation), **sans redemander le PIN**, à condition qu'une `CashSession` valide couvre l'encaissement (5.4). Aucun PIN n'est vérifié ni stocké sur l'appareil.
-  - `player_declaration` (« J'ai payé ») : fournisseur `link`, transaction `pending` (« À valider » chez le Trésorier), puis `succeeded` (validation PIN) ou `failed` (rejet motivé).
+  - `treasurer_entry`, `csv_import` : fournisseur `manual`, la transaction est créée directement `succeeded` à la validation confirmée.
+  - `field_cash` (Caisse Terrain Express) : fournisseur `manual`, la transaction est créée directement `succeeded` à la réception par le serveur (en ligne ou à la synchronisation), **sans confirmation supplémentaire**, à condition qu'une `CashSession` valide couvre l'encaissement (5.4). Aucun secret n'est stocké sur l'appareil.
+  - `player_declaration` (« J'ai payé ») : fournisseur `link`, transaction `pending` (« À valider » chez le Trésorier), puis `succeeded` (validation confirmée) ou `failed` (rejet motivé).
   - `gateway` (phase 2) : fournisseur `flexpaie`, `initiated` → `pending` → `succeeded` ou `failed`, sur confirmation du fournisseur, sans intervention du Trésorier.
 
 ### 5.2 `PaymentAllocation` — Répartition d'un paiement par mois (CDC 4.4.3, 4.4.7)
@@ -311,7 +325,7 @@ Seul moyen de corriger un paiement validé.
 | `reason_kind` | Enum(`error`, `refund`) | obligatoire, défaut `error` | `refund` : remboursement des frais d'adhésion après refus du parrain (CDC 4.3, décision D9). |
 | `status` | Enum(`pending_approval`, `approved`, `rejected`) | obligatoire, défaut `pending_approval` | |
 | `requested_by`, `requested_at` | FK → User, DateTime | obligatoires | Trésorier, adjoint ou Président. |
-| `approved_by`, `approved_at` | FK → User, DateTime | requis si `approved` ; `approved_by` doit détenir le rôle **Président** (PIN) | |
+| `approved_by`, `approved_at` | FK → User, DateTime | requis si `approved` ; `approved_by` doit détenir le rôle **Président** (modale de confirmation) | |
 | `rejected_by`, `rejected_at`, `rejection_reason` | FK → User, DateTime, Text | requis si `rejected` | |
 
 Règles attachées :
@@ -322,14 +336,13 @@ Règles attachées :
 
 ### 5.4 `CashSession` — Session de caisse (CDC 4.4.5, 6.6, 7.2, 10.2 n° 22)
 
-Ouverte **en ligne** par le Trésorier ou l'adjoint avant les encaissements du dimanche. Le code PIN est vérifié **une seule fois**, par le serveur, à l'ouverture ; la session couvre ensuite tous les encaissements de la Caisse Terrain Express de son auteur, en ligne comme hors connexion, jusqu'à minuit (fuseau du club).
+Ouverte **en ligne** par le Trésorier ou l'adjoint avant les encaissements du dimanche. L'ouverture se fait par un bouton suivi d'une confirmation (plus de code PIN depuis le 11/10/2026, n° 177) ; la session couvre ensuite tous les encaissements de la Caisse Terrain Express de son auteur, en ligne comme hors connexion, jusqu'à minuit (fuseau du club).
 
 | Champ | Type | Contraintes | Description |
 | --- | --- | --- | --- |
 | `id` | id | PK | Identifiant de session, transmis à l'appareil à l'ouverture et joint à chaque encaissement (y compris dans la file hors connexion). |
 | `club` | FK → Club | obligatoire, indexé | **Isolation multi-tenant.** Club de l'adhésion en cours de l'auteur (règle n° 9). |
 | `opened_by` | FK → Membership | obligatoire ; même club ; doit détenir le rôle **Trésorier** ou **Trésorier adjoint** à l'ouverture | Auteur de la session. |
-| `pin_verified_at` | DateTime | obligatoire | Horodatage de la vérification **serveur** du PIN à l'ouverture. Une session ne peut être créée qu'après une vérification réussie. |
 | `opened_at` | DateTime | obligatoire | |
 | `expires_at` | DateTime | obligatoire ; **calculé à la création, non modifiable** | Minuit (00:00) suivant le jour d'ouverture, dans le fuseau `ClubSettings.timezone`, stocké en UTC. Ex. : ouverture dimanche 08:30 à Kinshasa → expiration lundi 00:00 heure de Kinshasa. |
 | `closed_at` | DateTime | facultatif ; `opened_at` ≤ `closed_at` < `expires_at` | Fermeture manuelle par l'auteur avant l'expiration. |
@@ -337,13 +350,13 @@ Ouverte **en ligne** par le Trésorier ou l'adjoint avant les encaissements du d
 
 Règles attachées :
 
-- **Aucun PIN sur l'appareil** : ni le PIN, ni son empreinte, ni aucun secret dérivé n'est transmis ou conservé côté téléphone. L'appareil ne garde que l'identifiant de session et son `expires_at`, pour l'affichage.
+- **Aucun secret sur l'appareil** : aucun secret n'est transmis ou conservé côté téléphone. L'appareil ne garde que l'identifiant de session et son `expires_at`, pour l'affichage.
 - **Validité effective** : une session est valide à l'instant T si `opened_at` ≤ T < `expires_at` **et** (`closed_at` vide ou T < `closed_at`). Cette validité est **évaluée à la volée** à partir des horodatages ; elle ne dépend pas du champ `status`, qui n'est qu'un reflet mis à jour par la fermeture manuelle ou par le cron (12). Passé minuit, la session est donc expirée même si le cron n'est pas encore passé.
-- **Condition de création d'un paiement `field_cash`** (en ligne ou synchronisé) : il existe une `CashSession` du **même club**, ouverte par **l'auteur de l'encaissement**, valide au **moment de l'encaissement** — l'heure de réception serveur pour une saisie en ligne, `client_recorded_at` pour une saisie hors connexion. À défaut, le serveur refuse l'encaissement : « Aucune session de caisse ouverte : ouvrez une session avec votre code PIN. »
+- **Condition de création d'un paiement `field_cash`** (en ligne ou synchronisé) : il existe une `CashSession` du **même club**, ouverte par **l'auteur de l'encaissement**, valide au **moment de l'encaissement** — l'heure de réception serveur pour une saisie en ligne, `client_recorded_at` pour une saisie hors connexion. À défaut, le serveur refuse l'encaissement : « Aucune session de caisse ouverte : ouvrez une session de caisse. »
 - **Synchronisation après minuit** : un encaissement saisi hors connexion pendant la validité de la session est accepté même si la synchronisation a lieu après `expires_at` ; il reste rattaché à cette session. En revanche, `client_recorded_at` doit être ≤ l'heure de réception serveur, et un encaissement dont `client_recorded_at` tombe hors de la fenêtre de validité est refusé et signalé à son auteur dans la file de synchronisation.
-- **Après expiration ou fermeture**, toute nouvelle session exige une **nouvelle vérification du PIN** en ligne. Une session fermée ou expirée n'est jamais rouverte.
+- **Après expiration ou fermeture**, toute nouvelle session doit être **rouverte en ligne** (bouton + confirmation). Une session fermée ou expirée n'est jamais rouverte.
 - **Unicité** : au plus une session valide à la fois par `(club, opened_by)`. Plusieurs trésoriers (Trésorier et adjoint) peuvent avoir chacun leur session le même jour.
-- **Journal** : l'ouverture (avec la vérification PIN), la fermeture et chaque encaissement de la session sont journalisés avec l'identifiant de la session (règle n° 6, CDC 4.4.5).
+- **Journal** : l'ouverture, la fermeture et chaque encaissement de la session sont journalisés avec l'identifiant de la session (règle n° 6, CDC 4.4.5).
 - **Gel du club** (6.2) : une session valide ne lève pas le gel ; aucun paiement `field_cash` n'est scellé tant que le gel dure (I14). Voir Q22 pour le sort des encaissements synchronisés pendant un gel.
 - Jamais supprimée (trace d'audit des encaissements qu'elle couvre).
 
@@ -466,7 +479,7 @@ Une catégorie ayant reçu au moins une dépense ne peut être qu'archivée (mê
 | `status` | Enum(`pending`, `refused`, `released`, `justified`, `unjustified`) | obligatoire, défaut `pending` | En attente, Refusée, Libérée, Justifiée, Non justifiée. |
 | `created_by`, `created_at` | FK → User, DateTime | obligatoires | Trésorier ou adjoint. |
 | `refused_by`, `refused_at`, `refusal_reason` | FK → User, DateTime, Text | requis si `refused` | Président ou VP ; motif obligatoire. |
-| `released_by`, `released_at` | FK → User, DateTime | requis à partir de `released` | Président ou VP (PIN). |
+| `released_by`, `released_at` | FK → User, DateTime | requis à partir de `released` | Président ou VP (modale de confirmation). |
 | `justification_deadline` | Date | requis à partir de `released` si `receipt_required` | Date de `released_at` (dans le fuseau `ClubSettings.timezone`) + `ClubSettings.expense_justification_days` (7 jours par défaut), figée à la libération : une modification ultérieure du paramètre ne s'applique qu'aux dépenses libérées après elle. |
 | `justified_by`, `justified_at` | FK → User, DateTime | requis si `justified` | |
 | `unjustified_at` | DateTime | renseigné au passage en `unjustified` | |
@@ -478,7 +491,7 @@ Machine à états (CDC 4.5.2) :
 stateDiagram-v2
     [*] --> pending: saisie (Trés ou Adj)
     pending --> refused: refus motivé (Pdt ou VP)
-    pending --> released: validation PIN (Pdt ou VP)
+    pending --> released: validation confirmée (Pdt ou VP)
     released --> justified: justificatif téléversé
     released --> unjustified: délai dépassé
     unjustified --> justified: justificatif téléversé
@@ -516,7 +529,7 @@ Jamais supprimé une fois la dépense libérée.
 | `club` | FK → Club | obligatoire, indexé | **Isolation multi-tenant.** |
 | `expense` | FK → Expense | obligatoire ; **unique** ; même club | Dépense libérée malgré le blocage. |
 | `reason` | Text | obligatoire, non vide | Motif (décès, blessé à soigner…). |
-| `granted_by` | FK → User | obligatoire ; doit détenir le rôle **Président** (PIN) | Le VP ne peut pas déroger. |
+| `granted_by` | FK → User | obligatoire ; doit détenir le rôle **Président** (modale de confirmation) | Le VP ne peut pas déroger. |
 | `granted_at` | DateTime | obligatoire | |
 | `blocking_expenses` | Liste d'identifiants de `Expense` (relation plusieurs-à-plusieurs) | obligatoire, au moins une | Dépenses non justifiées qui bloquaient au moment de la dérogation (instantané). |
 | `reported_assembly` | FK → Assembly | facultatif | AG où la dérogation a été signalée. |
@@ -582,17 +595,17 @@ Règles attachées :
 | I2 | **Les types libres ne créent jamais de dette** et n'entrent pas dans le solde. | `Due.contribution_type` restreint aux types `mandatory` ; filtre `nature = mandatory` dans l'agrégation. `nature` figée dès le premier usage. | CDC 4.4.1, 4.4.2, règle n° 3 |
 | I3 | Un montant dû ne devient dette qu'**après l'échéance + la tolérance** du club. | `Due.due_date` + `ClubSettings.debt_tolerance_days` (défaut 0). | CDC 4.4.2, 10.2 n° 4 |
 | I4 | **Répartition** : impayés les plus anciens → mois courant → mois futurs. | `PaymentAllocation`, recalculée par couple joueur/type. | CDC 4.4.3 |
-| I5 | **Un paiement validé n'est jamais supprimé ni modifié** ; correction par annulation motivée, validée par le Président (PIN). | `Payment` et `Transaction` immuables après scellement ; `PaymentReversal` unique par paiement, `approved_by` Président. | CDC 4.4.4, 7.2, règle n° 4 |
+| I5 | **Un paiement validé n'est jamais supprimé ni modifié** ; correction par annulation motivée, validée par le Président (modale de confirmation). | `Payment` et `Transaction` immuables après scellement ; `PaymentReversal` unique par paiement, `approved_by` Président. | CDC 4.4.4, 7.2, règle n° 4 |
 | I6 | **Chaînage** : empreinte = HMAC(contenu + empreinte précédente du club), clé hors base ; vérification quotidienne ; rupture = alerte + gel, sans pénalité. | `Transaction.sequence/previous_hash/hash/key_id`, `LedgerChainState`, `LedgerVerificationRun`. | CDC 5.3 |
 | I7 | Un changement de montant n'affecte **que les mois futurs** ; un type ayant reçu des paiements ne peut être **qu'archivé**. | `ContributionTypeRate.effective_from` ≥ mois suivant ; `Due.amount` figé ; suppression refusée si paiement (ou montant dû). | CDC 4.4.1 |
-| I8 | **Blocage des dépenses** : aucune libération tant qu'une dépense est non justifiée ; dérogation Président, motif, PIN, journalisée. | `can_release_expense(club)` = faux s'il existe une dépense `released` ou `unjustified` avec `justification_deadline` < aujourd'hui (évalué à la volée, sans attendre le cron) ; `ExpenseDerogation`. | CDC 4.5.2 |
+| I8 | **Blocage des dépenses** : aucune libération tant qu'une dépense est non justifiée ; dérogation Président, motif, modale de confirmation, journalisée. | `can_release_expense(club)` = faux s'il existe une dépense `released` ou `unjustified` avec `justification_deadline` < aujourd'hui (évalué à la volée, sans attendre le cron) ; `ExpenseDerogation`. | CDC 4.5.2 |
 | I9 | **Assistance sociale** réservée aux joueurs en ordre à la date de l'événement. | `ExpenseCategory.good_standing_only`, `SocialAssistanceRequest.event_date`, contrôle par les services à la décision et à la libération uniquement. **Aucune contrainte à la soumission** (demande envoyable avec avertissement, `analyse.md` Q14, voir 8.2). | CDC 4.5.3 |
 | I10 | Frais d'adhésion payés + signature du parrain → **Inscrit**. | `ContributionType.is_membership_fee` (un seul actif par club) ; la trésorerie expose `has_paid_membership_fee` ; le passage `Membership.status` `pending` → `active` appartient à l'app `clubs` (`schema-donnees.md` §3.3). | CDC 4.3 |
 | I11 | Chaque transaction porte `provider`, `external_ref`, `status` **dès le MVP**. | Champs obligatoires de `Transaction`. | CDC 4.6 |
 | I12 | Montants en `Decimal`, 2 décimales, devise du club. | Types `Money` / `SignedMoney` / `Currency` ; `currency` copiée depuis `ClubSettings.currency` et contrôlée à chaque écriture. | Règle `CLAUDE.md` 7 |
 | I13 | **Isolation par club**. | `club` obligatoire sur chaque entité ; cohérence inter-tables vérifiée par les services. | Règle n° 8, CDC 6.3 |
 | I14 | Gel du club : aucune écriture financière nouvelle. | `LedgerChainState.is_frozen` contrôlé avant tout scellement. | CDC 5.3 |
-| I15 | **Caisse Terrain Express : PIN vérifié une fois, à l'ouverture de la session de caisse**, pas à chaque encaissement ; aucun PIN stocké sur l'appareil. Un paiement `field_cash` (en ligne ou synchronisé) n'est créé que si une session du même club, ouverte par son auteur, était valide au moment de l'encaissement ; passé minuit (fuseau du club), la session expire et une nouvelle exige une nouvelle vérification du PIN. | `CashSession` (`pin_verified_at`, `expires_at` figé, `closed_at`) ; `Payment.cash_session` requis si et seulement si `source = field_cash` ; validité évaluée à la volée sur les horodatages (`client_recorded_at` hors connexion). | CDC 4.4.5, 6.6, 7.2, 10.2 n° 22 |
+| I15 | **Caisse Terrain Express : session de caisse ouverte en ligne (bouton + confirmation)** — plus de PIN depuis le 11/10/2026 (n° 177) ; aucun secret stocké sur l'appareil. Un paiement `field_cash` (en ligne ou synchronisé) n'est créé que si une session du même club, ouverte par son auteur, était valide au moment de l'encaissement ; passé minuit (fuseau du club), la session expire et une nouvelle doit être ouverte en ligne. | `CashSession` (`expires_at` figé, `closed_at`) ; `Payment.cash_session` requis si et seulement si `source = field_cash` ; validité évaluée à la volée sur les horodatages (`client_recorded_at` hors connexion). | CDC 4.4.5, 6.6, 7.2, 10.2 n° 22 |
 
 ---
 
@@ -607,7 +620,9 @@ Les autres apps (sport, mercato, médical, clubs) appellent ces services et **ne
 | `is_in_good_standing(membership, at_date=None)` | booléen + montant dû + raison lisible en français | Composition, plan tactique (partie financière seulement, voir 2), transfert, assistance sociale |
 | `allocate_payment(payment)` | liste (période, montant) | Aperçu avant validation, grille, reçu |
 | `can_release_expense(club)` | booléen + raison lisible | Circuit des dépenses |
-| `has_paid_membership_fee(membership)` | booléen | Passage « Inscrit » (app `clubs`) |
+| `has_paid_membership_fee(membership)` | booléen | Passage « Inscrit » (app `clubs`) ; référence = le dû d'adhésion actif s'il existe |
+| `ensure_membership_fee_due(membership, actor, now=None)` | `Due` ou `None` | Ouverture du dossier d'adhésion (app `clubs`), idempotent |
+| `cancel_membership_fee_due(membership, reason, cancelled_by, now=None)` | `DueCancellation` ou `None` | Annulation d'une adhésion (app `clubs`), Président |
 
 ---
 
@@ -645,7 +660,7 @@ Le calcul du solde doit rester rapide pour 500 joueurs : agrégations SQL unique
 | --- | --- | --- |
 | **10.2 n° 4** | Échéance le 10 du mois (`due_day` = 10 par défaut), tolérance 0 jour (`ClubSettings.debt_tolerance_days` = 0), configurable par club. | Proposition par défaut du 10.2 |
 | **10.2 n° 5** | Mois d'arrivée entièrement dû (montant dû plein créé à l'arrivée) ; suspension des cotisations uniquement sur décision tracée du Président (`ContributionSuspension`). | Proposition par défaut du 10.2 |
-| **10.2 n° 22** | **Décidé par le client le 25/09/2026 (Q16 résolue)** : aucun PIN stocké sur l'appareil ; session de caisse ouverte en ligne par le Trésorier ou l'adjoint, PIN vérifié une fois par le serveur, valable jusqu'à minuit (fuseau du club) ; les encaissements de la session, y compris hors connexion, ne redemandent pas le PIN et sont rattachés et journalisés avec l'identifiant de session (`CashSession`, `Payment.cash_session`, I15). | Décision du client (remplace la proposition par défaut « PIN haché mis en cache ») |
+| **10.2 n° 22** | **Décidé par le client le 25/09/2026 (Q16 résolue)** : session de caisse ouverte en ligne par le Trésorier ou l'adjoint, valable jusqu'à minuit (fuseau du club) ; les encaissements de la session, y compris hors connexion, sont rattachés et journalisés avec l'identifiant de session (`CashSession`, `Payment.cash_session`, I15). **Modifié le 11/10/2026 (10.3 n° 177) : le PIN est supprimé ; la session de caisse est maintenue (position provisoire, à poser au client).** | Décision du client (remplace la proposition par défaut « PIN haché mis en cache ») |
 | **10.2 n° 14** | Écritures financières conservées au moins 5 ans ; en pratique jamais supprimées (chaîne). | Proposition par défaut du 10.2 |
 | D6 | Un type (ou une catégorie) ayant généré un montant dû (ou une dépense) ne peut qu'être archivé, comme un type ayant reçu un paiement ; la nature d'un type est figée dès son premier usage. | Extension prudente du 4.4.1 pour ne pas effacer de dette ; à confirmer |
 | D7 | Arrondi `ROUND_HALF_UP` à 2 décimales. | Choix technique, pas de règle métier |
@@ -660,23 +675,23 @@ Le calcul du solde doit rester rapide pour 500 joueurs : agrégations SQL unique
 
 Ces ambiguïtés sont propres au domaine trésorerie et ne figurent pas au 10.2. Une proposition est indiquée quand c'est possible. Le schéma ci-dessus prévoit déjà les champs nécessaires (par exemple `due_month`), mais **aucune de ces propositions n'est une règle acquise** : chacune doit être validée par le client, selon le circuit du 9.4 si elle ajoute une règle métier.
 
-1. **Q1 — Frais d'adhésion et solde.** Si le type « adhésion » est obligatoire et que son paiement entre dans le solde sans montant dû correspondant, le nouveau joueur aurait un crédit de 5 $. Proposition : un montant dû unique est créé à l'ouverture de l'adhésion, avec échéance à la date d'entrée. Autre option : traiter l'adhésion hors solde. **À trancher.**
+1. **Q1 — Frais d'adhésion et solde.** **Tranchée le 17/11/2026 (décision du client, 10.3 n° 100 confirmée) : les frais d'adhésion sont une somme à payer** — montant dû unique créé à l'ouverture de l'adhésion, échéance à la date d'entrée (voir 4.5 et 4.6). Restent à confirmer : exigibilité sans tolérance, absence de dû pour les joueurs importés, sort du dû à l'annulation d'une adhésion.
 2. **Q2 — Une seule mensuelle obligatoire par joueur ?** Le 4.4.2 parle de « son type mensuel » (au singulier). Faut-il interdire qu'un joueur soit rattaché à deux mensuelles obligatoires en même temps ? Proposition : oui, un seul rattachement mensuel obligatoire actif.
 3. **Q3 — Échéance des cotisations annuelles.** Le 4.4.1 ne donne qu'un jour du mois. Proposition : ajouter le mois d'échéance (`due_month`) saisi par le club.
 4. **Q4 — Échéance du mois d'arrivée.** Avec « mois entier dû » et échéance le 10, un joueur arrivé le 20 serait en dette immédiatement. Proposition : échéance du mois d'arrivée = date d'arrivée + tolérance du club, ou le 10 du mois suivant. **À trancher.**
 5. **Q5 — Joueur « En attente » et mois de départ.** Les mensuelles courent-elles dès la date d'entrée (même avant « Inscrit ») ? Le mois de départ est-il dû en entier ? Que devient un crédit (paiement anticipé) au départ ou au transfert : remboursé, conservé ?
-6. **Q6 — Suspension rétroactive et montant dû généré par erreur.** Le schéma interdit de modifier ou supprimer un montant dû. Faut-il une écriture d'annulation de montant dû (motif + Président + PIN), comme pour les paiements ? Proposition : oui (voir aussi Q7).
+6. **Q6 — Suspension rétroactive et montant dû généré par erreur.** Le schéma interdit de modifier ou supprimer un montant dû. Faut-il une écriture d'annulation de montant dû (motif + Président + modale de confirmation), comme pour les paiements ? Proposition : oui (voir aussi Q7).
 7. **Q7 — Montants dus dans la chaîne cryptographique.** Le 5.3 chaîne les « transactions financières ». Les montants dus modifient le solde : une altération directe en base pourrait mettre un joueur en dette sans être détectée. Proposition : chaîner aussi `Due`.
 8. **Q8 — Gel de la chaîne.** Qui lève le gel (Superuser seul ?), et comment ? Pendant le gel, les joueurs ne peuvent plus payer : faut-il suspendre le passage en dette des montants dus échus après la date de gel, pour qu'aucun joueur ne soit pénalisé ? Proposition : oui, calcul de l'échéance plafonné à `frozen_at` pendant le gel.
 9. **Q9 — Changement de tarif après paiement anticipé.** Un joueur a payé 40 $ de mars à juin à 10 $ ; le tarif passe à 15 $ en mai. Selon la formule du solde, mai et juin sont dus à 15 $ et il devra compléter. Le club préfère-t-il figer le tarif des mois déjà payés d'avance ?
 10. **Q10 — Portée du plafond de catégorie.** Par dépense, par mois ou par saison ? Dépassement bloquant ou simple alerte ?
 11. **Q11 — Gestion du barème d'assistance sociale.** Le cahier des charges ne dit pas qui fixe les montants et délais du barème. Proposition : Président et Trésorier, comme les catégories de dépenses.
 12. **Q12 — Régularisation après l'événement.** Le 4.5.3 exige d'être en ordre « à la date de l'événement » tout en montrant « le montant à régulariser pour devenir éligible ». Un paiement fait après l'événement rend-il éligible ? Proposition : comparer les montants dus échus à la date de l'événement avec les paiements validés jusqu'à la décision.
-13. **Q13 — Double validation de l'assistance sociale.** L'approbation de la demande (Pdt ou VP) crée une dépense « En attente » qui doit ensuite être libérée (Pdt ou VP, PIN). Faut-il que l'approbation vaille libération directe ?
+13. **Q13 — Double validation de l'assistance sociale.** L'approbation de la demande (Pdt ou VP) crée une dépense « En attente » qui doit ensuite être libérée (Pdt ou VP, modale de confirmation). Faut-il que l'approbation vaille libération directe ?
 14. **Q14 — Paiement sur un type archivé.** Seuls les types actifs sont proposés. Comment un joueur règle-t-il une dette restante sur une mensuelle archivée ?
 15. **Q15 — Auto-validation.** Le Trésorier (lui-même joueur) peut-il valider son propre paiement, et le Président approuver l'annulation d'un paiement le concernant ?
-16. **Q16 — Caisse Terrain Express hors connexion et PIN. Résolue (10.2 n° 22, 25/09/2026).** Aucun PIN sur l'appareil ; le PIN est vérifié une fois par le serveur à l'ouverture d'une session de caisse valable jusqu'à minuit (fuseau du club) ; les encaissements de la session, en ligne ou synchronisés, ne redemandent pas le PIN et portent l'identifiant de session. Traduit par `CashSession` (5.4), `Payment.cash_session` (5.1) et l'invariant I15. Hors connexion, « immédiatement sélectionnable » (CDC 4.4.5) ne vaut que sur le téléphone qui encaisse jusqu'à la synchronisation (voir Q22).
-17. **Q17 — Import CSV historique.** Une cellule vide = rien payé : l'import doit-il aussi créer les montants dus des mois importés (sinon les paiements importés créent un crédit) ? Proposition : oui, depuis la date d'entrée du joueur ou janvier de l'année importée.
+16. **Q16 — Caisse Terrain Express hors connexion et PIN. Résolue (10.2 n° 22, 25/09/2026 ; PIN supprimé le 11/10/2026, n° 177).** Aucun secret sur l'appareil ; session de caisse ouverte en ligne (bouton + confirmation), valable jusqu'à minuit (fuseau du club) ; les encaissements de la session, en ligne ou synchronisés, portent l'identifiant de session. Traduit par `CashSession` (5.4), `Payment.cash_session` (5.1) et l'invariant I15. Hors connexion, « immédiatement sélectionnable » (CDC 4.4.5) ne vaut que sur le téléphone qui encaisse jusqu'à la synchronisation (voir Q22).
+17. **Q17 — Import CSV historique.** Une cellule vide = rien payé : l'import doit-il aussi créer les montants dus des mois importés (sinon les paiements importés créent un crédit) ? Proposition : oui, depuis la date d'entrée du joueur ou janvier de l'année importée. **Décidé le 17/11/2026 (10.3 n° 174) : une case vide du fichier historique = un montant dû non payé, donc une dette réelle ; le Trésorier valide la grille avant l'import définitif** (comportement du code inchangé).
 18. **Q18 — Changement de devise du club.** Modifier `ClubSettings.currency` est-il autorisé une fois des transactions enregistrées ? Proposition : interdit.
 19. **Q19 — Dépenses sans justificatif obligatoire.** Pour une catégorie `receipt_required = faux`, la dépense reste « Libérée » sans délai ni blocage : confirmer, ou prévoir un état de clôture distinct.
 20. **Q20 — Correction d'une dépense libérée.** Le cahier des charges ne prévoit pas d'annulation de dépense libérée (erreur de montant). Faut-il une écriture d'annulation symétrique à celle des paiements ?

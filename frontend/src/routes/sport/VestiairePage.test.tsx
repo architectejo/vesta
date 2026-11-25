@@ -15,11 +15,18 @@ vi.mock("../../api/clubs", async () => {
 
 vi.mock("../../api/sport", async () => {
   const actual = await vi.importActual<typeof import("../../api/sport")>("../../api/sport");
-  return { ...actual, getLockerRoom: vi.fn(), assignTeam: vi.fn(), setTeamFormation: vi.fn(), placeTeamPlayer: vi.fn() };
+  return {
+    ...actual,
+    getLockerRoom: vi.fn(),
+    assignTeam: vi.fn(),
+    setTeamFormation: vi.fn(),
+    placeTeamPlayer: vi.fn(),
+    createSession: vi.fn(),
+  };
 });
 
 import { getMyProfile } from "../../api/clubs";
-import { assignTeam, getLockerRoom, placeTeamPlayer, setTeamFormation } from "../../api/sport";
+import { assignTeam, createSession, getLockerRoom, placeTeamPlayer, setTeamFormation } from "../../api/sport";
 
 function makeProfile(...roles: string[]): MyProfile {
   return {
@@ -168,13 +175,55 @@ describe("VestiairePage", () => {
   });
 
   it("affiche l'état vide quand aucun événement n'a lieu aujourd'hui", async () => {
-    vi.mocked(getLockerRoom).mockResolvedValue({ session: null, match: null, my_situation: null });
+    vi.mocked(getLockerRoom).mockResolvedValue({ session: null, match: null, my_situation: null, next_event: null });
     renderPage();
     expect(await screen.findByText("Aucune séance ni aucun match aujourd'hui.")).toBeInTheDocument();
+    // Sans `next_event`, aucune précision n'est ajoutée (comportement
+    // inchangé avant l'ajout du champ).
+    expect(screen.queryByText(/Prochain rendez-vous/)).not.toBeInTheDocument();
+  });
+
+  it("précise le prochain rendez-vous (séance) quand rien n'a lieu aujourd'hui", async () => {
+    vi.mocked(getLockerRoom).mockResolvedValue({
+      session: null,
+      match: null,
+      my_situation: null,
+      next_event: { type: "session", id: 99, event_date: "2026-10-04", gathering_time: "07:30:00", location: "" },
+    });
+    renderPage();
+    expect(await screen.findByText("Aucune séance ni aucun match aujourd'hui.")).toBeInTheDocument();
+    expect(await screen.findByText("Prochain rendez-vous : Séance · dimanche 4 octobre · 07:30")).toBeInTheDocument();
+  });
+
+  it("précise le prochain rendez-vous (match) quand rien n'a lieu aujourd'hui", async () => {
+    vi.mocked(getLockerRoom).mockResolvedValue({
+      session: null,
+      match: null,
+      my_situation: null,
+      next_event: {
+        type: "match",
+        id: 77,
+        event_date: "2026-10-09",
+        kickoff_time: "15:00:00",
+        opponent: "FC Exemple",
+        location: "",
+      },
+    });
+    renderPage();
+    expect(
+      await screen.findByText("Prochain rendez-vous : Match contre FC Exemple · vendredi 9 octobre · 15:00"),
+    ).toBeInTheDocument();
+  });
+
+  it("n'affiche pas le bouton « Créer une séance » pour un simple joueur", async () => {
+    vi.mocked(getLockerRoom).mockResolvedValue({ session: null, match: null, my_situation: null, next_event: null });
+    renderPage();
+    await screen.findByText("Aucune séance ni aucun match aujourd'hui.");
+    expect(screen.queryByText("Créer une séance")).not.toBeInTheDocument();
   });
 
   it("vue Terrain : place le pion à la vraie position renvoyée par l'API, pas sur une grille décorative", async () => {
-    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null });
+    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null, next_event: null });
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Terrain" }));
@@ -186,7 +235,7 @@ describe("VestiairePage", () => {
   });
 
   it("vue Terrain : un joueur sur le banc n'est pas placé sur le terrain mais listé dans « Banc »", async () => {
-    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null });
+    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null, next_event: null });
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Terrain" }));
@@ -198,7 +247,7 @@ describe("VestiairePage", () => {
   });
 
   it("vue Terrain : un toucher sur un pion ouvre une info-bulle avec nom complet, numéro et poste", async () => {
-    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null });
+    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null, next_event: null });
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Terrain" }));
@@ -211,13 +260,72 @@ describe("VestiairePage", () => {
   });
 
   it("vue Terrain, rôle non autorisé (joueur simple) : aucun sélecteur de formation, le terrain reste en lecture seule", async () => {
-    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null });
+    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null, next_event: null });
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Terrain" }));
     await screen.findByRole("button", { name: "Jean K." });
 
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
+});
+
+describe("VestiairePage — « Créer une séance » depuis l'état vide (Coach)", () => {
+  beforeEach(() => {
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile("coach"));
+    vi.mocked(getLockerRoom).mockResolvedValue({ session: null, match: null, my_situation: null, next_event: null });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("affiche le bouton « Créer une séance » pour le Coach quand rien n'a lieu aujourd'hui", async () => {
+    renderPage();
+    expect(await screen.findByText("Créer une séance")).toBeInTheDocument();
+  });
+
+  it("ouvre la modale de création et appelle createSession, puis rafraîchit le vestiaire", async () => {
+    const user = userEvent.setup();
+    const created = {
+      id: 123,
+      kind: "session" as const,
+      event_date: "2026-10-12",
+      season_id: null,
+      is_locked: false,
+      unlocked_by: null,
+      unlocked_at: null,
+      unlock_reason: "",
+      gathering_time: "07:30:00",
+      late_arrival_cutoff: "08:00:00",
+      location: "Terrain municipal",
+      team_a_color: "#1d4ed8",
+      team_b_color: "#dc2626",
+      team_a_formation: "" as const,
+      team_b_formation: "" as const,
+      instructions: "",
+      late_arrival_counts_absent: true,
+      counts: { present: 0, late: 0, excused: 0, not_marked: 0 },
+      attendances: [],
+      team_a: [],
+      team_b: [],
+      unassigned: { to_place_manually: [], cannot_play: [] },
+    };
+    vi.mocked(createSession).mockResolvedValue(created);
+    renderPage();
+
+    await user.click(await screen.findByText("Créer une séance"));
+    expect(await screen.findByRole("heading", { name: "Créer une séance" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Rassemblement"), { target: { value: "07:30" } });
+    fireEvent.change(screen.getByLabelText("Limite d'arrivée"), { target: { value: "08:00" } });
+
+    await user.click(screen.getByRole("button", { name: "Créer la séance" }));
+
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ gathering_time: "07:30", late_arrival_cutoff: "08:00" }),
+    );
+    expect(await screen.findByText("Séance créée. Les joueurs ont été prévenus.")).toBeInTheDocument();
   });
 });
 
@@ -251,6 +359,7 @@ describe("VestiairePage — mode éditable du terrain (Coach)", () => {
       session: makeSessionWithTeams({ team_b_formation: "4-3-3" }),
       match: null,
       my_situation: null,
+      next_event: null,
     });
     renderPage();
     await openTerrain(user);
@@ -266,7 +375,7 @@ describe("VestiairePage — mode éditable du terrain (Coach)", () => {
 
   it("place un joueur du banc sur le terrain en l'échangeant avec un coéquipier déjà placé (toucher)", async () => {
     const user = userEvent.setup();
-    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null });
+    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null, next_event: null });
     renderPage();
     await openTerrain(user);
 
@@ -283,7 +392,7 @@ describe("VestiairePage — mode éditable du terrain (Coach)", () => {
 
   it("déplace un joueur du banc de l'équipe A vers le banc de l'équipe B via le menu « Passer en B »", async () => {
     const user = userEvent.setup();
-    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null });
+    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null, next_event: null });
     renderPage();
     await openTerrain(user);
 
@@ -299,6 +408,7 @@ describe("VestiairePage — mode éditable du terrain (Coach)", () => {
       session: makeSessionWithTeams({ team_a_formation: "4-3-3" }),
       match: null,
       my_situation: null,
+      next_event: null,
     });
     renderPage();
     await openTerrain(user);
@@ -334,6 +444,7 @@ describe("VestiairePage — mode éditable du terrain (Coach)", () => {
       }),
       match: null,
       my_situation: null,
+      next_event: null,
     });
     renderPage();
     await openTerrain(user);
@@ -354,7 +465,7 @@ describe("VestiairePage — mode éditable du terrain (Coach)", () => {
 
   it("le terrain tient sans défilement vertical sur un écran d'ordinateur (largeur plafonnée à partir de 768 px)", async () => {
     const user = userEvent.setup();
-    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null });
+    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null, next_event: null });
 
     mockMatchMedia(["(min-width: 768px)"]);
     renderPage();
@@ -366,7 +477,7 @@ describe("VestiairePage — mode éditable du terrain (Coach)", () => {
 
   it("ne plafonne pas la largeur du terrain sous 768 px (mobile)", async () => {
     const user = userEvent.setup();
-    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null });
+    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null, next_event: null });
 
     mockMatchMedia([]);
     renderPage();
@@ -374,5 +485,48 @@ describe("VestiairePage — mode éditable du terrain (Coach)", () => {
 
     const board = await screen.findByRole("group", { name: "Équipe A" });
     expect(board.parentElement?.style.maxWidth).toBe("");
+  });
+});
+
+describe("VestiairePage - joueurs non jouables (sport-vestiaire.md §4.4)", () => {
+  it("affiche un badge gris « Indisponible » sans motif, jamais « En attente »", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile("member"));
+    vi.mocked(getLockerRoom).mockResolvedValue({
+      session: makeSessionWithTeams({
+        unassigned: {
+          to_place_manually: [],
+          cannot_play: [{ membership_id: 55, name: "Luc Tshala", photo: null }] as never,
+        },
+      }),
+      match: null,
+      my_situation: null,
+      next_event: null,
+    });
+    renderPage();
+
+    expect(await screen.findByText("Luc Tshala")).toBeInTheDocument();
+    expect(screen.getByText("Indisponible")).toBeInTheDocument();
+    expect(screen.queryByText("En attente")).not.toBeInTheDocument();
+  });
+});
+
+describe("VestiairePage - présents sans équipe (sport-vestiaire.md §9.1)", () => {
+  it("affiche des pions de 40 px, grisés avec cadenas pour les joueurs bloqués", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile("member"));
+    vi.mocked(getLockerRoom).mockResolvedValue({
+      session: makeSessionWithTeams({
+        unassigned: {
+          to_place_manually: [{ membership_id: 54, name: "Anne Kasa", photo: null, jersey_number: 9, attendance_status: "present" }] as never,
+          cannot_play: [{ membership_id: 55, name: "Luc Tshala", photo: null }] as never,
+        },
+      }),
+      match: null,
+      my_situation: null,
+      next_event: null,
+    });
+    renderPage();
+    expect(await screen.findByText("Luc Tshala")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Luc T. : indisponible" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Anne K." })).toBeInTheDocument();
   });
 });

@@ -16,15 +16,16 @@ function hasAnyRole(roles: ProfileRole[] | undefined, required: readonly string[
   return roles.some((r) => required.includes(r.role));
 }
 
-const ATTENDANCE_RECORDER = ["coach", "captain", "president"] as const;
-const ATTENDANCE_TIME_CORRECTOR = ["coach"] as const;
-const TEAM_ASSIGNER = ["coach", "captain", "president"] as const;
-const MATCH_MANAGER = ["coach"] as const;
-const INCIDENT_RECORDER = ["coach", "captain"] as const;
-const EVALUATOR = ["coach", "president", "vice_president"] as const;
-const TACTICAL_PLAN_EDITOR = ["coach"] as const;
+const ATTENDANCE_RECORDER = ["coach", "assistant_coach", "captain", "president"] as const;
+const ATTENDANCE_TIME_CORRECTOR = ["coach", "assistant_coach"] as const;
+const TEAM_ASSIGNER = ["coach", "assistant_coach", "captain", "president"] as const;
+const MATCH_MANAGER = ["coach", "assistant_coach"] as const;
+const INCIDENT_RECORDER = ["coach", "assistant_coach", "captain"] as const;
+const EVALUATOR = ["coach", "assistant_coach", "president", "vice_president"] as const;
+const TACTICAL_PLAN_EDITOR = ["coach", "assistant_coach"] as const;
 const INCIDENT_FULL_VISIBILITY = [
   "coach",
+  "assistant_coach",
   "captain",
   "president",
   "vice_president",
@@ -35,9 +36,39 @@ const INCIDENT_FULL_VISIBILITY = [
 // complète (joueur, moment, aptitude en texte N1) visible du Médecin, du
 // Coach, du Président, du VP et du DS ; **pas** du Capitaine (qui ne garde
 // que le bouton « Déclarer une blessure », medical.md §10 écart 1).
-const MEDICAL_FULL_VISIBILITY = ["coach", "president", "vice_president", "sports_director", "doctor"] as const;
+const MEDICAL_FULL_VISIBILITY = ["coach", "assistant_coach", "president", "vice_president", "sports_director", "doctor"] as const;
 // Déclaration d'une blessure (medical.md §4.1 ; apps.medical.permissions.INJURY_REPORTER_ROLES).
-const INJURY_REPORTER = ["coach", "captain", "doctor"] as const;
+const INJURY_REPORTER = ["coach", "assistant_coach", "captain", "doctor"] as const;
+
+// Page Médical (apps.medical.permissions.MEDICAL_PAGE_ROLES) : Médecin, Coach, Président.
+const MEDICAL_PAGE_ACCESS = ["doctor", "coach", "assistant_coach", "president"] as const;
+
+// Statistiques d'entraînement nominatives (assiduité par joueur, notes moyennes) :
+// apps.sport.permissions.EVALUATION_STATS_ROLES. Simple indication d'affichage ;
+// l'API reste seule juge (403 sur le classement d'assiduité).
+const TRAINING_STATS_STAFF = ["coach", "assistant_coach", "president", "vice_president", "sports_director"] as const;
+const SESSION_CREATOR = ["coach", "assistant_coach"] as const;
+
+export function canViewTrainingStaffStats(roles: ProfileRole[] | undefined): boolean {
+  return hasAnyRole(roles, TRAINING_STATS_STAFF);
+}
+
+// Tests de performance (apps.sport.permissions.CanManagePerformanceTests) :
+// Coach et Assistant créent, mesurent et corrigent ; Président, VP et DS lisent.
+// Simple indication d'affichage : l'API reste seule juge.
+const PERFORMANCE_MANAGER = ["coach", "assistant_coach"] as const;
+
+export function canManagePerformanceTests(roles: ProfileRole[] | undefined): boolean {
+  return hasAnyRole(roles, PERFORMANCE_MANAGER);
+}
+
+export function canCreateSession(roles: ProfileRole[] | undefined): boolean {
+  return hasAnyRole(roles, SESSION_CREATOR);
+}
+
+export function canAccessMedicalPage(roles: ProfileRole[] | undefined): boolean {
+  return hasAnyRole(roles, MEDICAL_PAGE_ACCESS);
+}
 
 export interface SportAccess {
   canRecordAttendance: boolean;
@@ -68,7 +99,7 @@ export function getSportAccess(roles: ProfileRole[] | undefined): SportAccess {
     canSeeIncidentFull: hasAnyRole(roles, INCIDENT_FULL_VISIBILITY),
     canSeeMedicalFull: hasAnyRole(roles, MEDICAL_FULL_VISIBILITY),
     canReportInjury: hasAnyRole(roles, INJURY_REPORTER),
-    isCoach: hasAnyRole(roles, ["coach"]),
+    isCoach: hasAnyRole(roles, ["coach", "assistant_coach"]),
     isCaptain: hasAnyRole(roles, ["captain"]),
     isPresident: hasAnyRole(roles, ["president"]),
     isDoctor: hasAnyRole(roles, ["doctor"]),

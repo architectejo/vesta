@@ -2,6 +2,8 @@
 
 Sources : CDC 2.2, 2.3 (qui nomme qui), 2.4, 3.5 (identité du club en modale), 4.1 (ajout et import de joueurs), 4.3 (parrain), 4.6 (lien de paiement du club). Composants : `PlayerSearch`, `DataTable`, `docs/lot0/design-system.md`.
 
+> **Révision du 11/10/2026 — rôle Secrétaire** (décision client du 11/10/2026, pas encore inscrite au CDC : circuit 9.4, voir §7). Le Secrétaire est un membre du Bureau, **un seul titulaire**, nommé et révoqué par le Président comme le Vice-président. Il publie les communiqués (`fil-public-communication.md` B2), prépare l'AG (`assemblees-page-ag.md` §2) et tient les archives (`club-archives.md`). Les ajouts sont signalés « (révision 11/10) ».
+
 ## 1. Objectif
 
 Montrer à tous qui dirige le club, et permettre au Président (et au Coach pour le Capitaine) de gérer l'identité du club, les nominations et l'effectif, sans quitter la page.
@@ -13,7 +15,7 @@ Route `/club/comite`. Entrée « Club › Comité et bureau ». Tous les joueurs
 | Action | Qui |
 | --- | --- |
 | Modifier l'identité du club (nom, logo, couleurs, lien de paiement) | Président |
-| Nommer / révoquer VP, DS, Trésorier, Trésorier adjoint, Intendant, Médecin | Président |
+| Nommer / révoquer VP, Secrétaire (révision 11/10), DS, Trésorier, Trésorier adjoint, Intendant, Médecin | Président |
 | Ajouter / retirer le Coach | Président |
 | Choisir / changer le Capitaine | Coach |
 | Transmettre la présidence | Président |
@@ -26,7 +28,8 @@ Route `/club/comite`. Entrée « Club › Comité et bureau ». Tous les joueurs
 
 1. **Identité du club** — logo 48 px, nom, pastilles des couleurs principale et secondaire, ville, pays, devise, fuseau horaire ; « Lien de paiement : configuré » / « non configuré » (visible par le Président seulement). Action de carte (Président) : « Modifier ».
 2. **Président** — avatar 40, nom, « Président depuis le {date} ». Menu « … » (Président) : « Transmettre la présidence ».
-3. **Bureau** (2.2) — une ligne par rôle, dans cet ordre : Vice-président, Directeur sportif, Trésorier, Trésorier adjoint, Intendant, Médecin. Ligne : libellé du rôle, avatar + nom du titulaire, ou `StatusBadge` gris « Poste vacant ». Clic → modale « Rôle : {rôle} ».
+3. **Bureau** (2.2) — une ligne par rôle, dans cet ordre : Vice-président, **Secrétaire** (révision 11/10), Directeur sportif, Trésorier, Trésorier adjoint, Intendant, Médecin. Ligne : libellé du rôle, avatar + nom du titulaire, ou `StatusBadge` gris « Poste vacant ». Clic → modale « Rôle : {rôle} ».
+   - (révision 11/10) Ligne « Secrétaire » : même anatomie que les autres lignes (pas de carte séparée, pas de mise en avant). Sous le nom du titulaire, aide 13 px muted : « Communiqués, préparation des AG, archives. » (rappelle la mission sans ajouter de bouton). Le libellé du rôle est un texte de l'interface ; la liste des rôles et leur ordre viennent de l'API.
 4. **Encadrement sportif** — « Coach » (titulaire ou « Poste vacant ») ; clic → modale « Rôle : Coach » (Président). « Capitaine » ; clic → modale « Changer de capitaine » (Coach) — définie dans `sport-espace-coach.md` §4.7.
 5. **Ajout de joueurs** — « Joueurs autorisés à ajouter des joueurs » : puces avatar + nom. Action de carte (Président) : « Gérer ». Vide : « Seul le Président peut ajouter des joueurs. »
 6. **Effectif** — `DataTable` (> 30 joueurs possibles) : recherche « Rechercher un joueur » ; filtres « Poste », « Statut », « Rôle ». Colonnes : Joueur (figée : avatar, nom) · N° · Poste · Rôles · Statut. Tri par défaut : nom. Clic → modale « Fiche du joueur » (fiche publique 4.2 + rôles ; pas de finances ni de santé).
@@ -61,6 +64,13 @@ Footer.
 - Président, poste occupé : pied « Fermer » / « Remplacer » (affiche le PlayerSearch, avec l'aide « {nom actuel} sera révoqué de ce rôle. ») ; menu « … » : « Révoquer » → ConfirmDialog « Révoquer {nom} du rôle de {rôle} ? Il sera prévenu. » — « Révoquer ».
 - Succès : « {nom} est nommé {rôle}. Il a été prévenu. » / « {nom} n'est plus {rôle}. » (2.3 : log + notification).
 - Erreur : « {rôle} a déjà un titulaire. » (si l'API refuse parce que le nombre de titulaires autorisé pour ce rôle est atteint, 10.2 n° 3 et 24).
+- (révision 11/10) **« Rôle : Secrétaire »** — même modale, mêmes états et mêmes textes que pour le VP :
+  - poste vacant : PlayerSearch « Choisir un joueur » (portée club, joueurs partis exclus ; joueurs suspendus, en dette ou en attente **sélectionnables** : la nomination à un rôle ne dépend pas de ces statuts, l'API reste seule juge) ; aide « Un joueur peut cumuler plusieurs rôles. » ; pied « Annuler » / « Nommer » ;
+  - poste occupé : pied « Fermer » / « Remplacer » (aide « {nom actuel} sera révoqué de ce rôle. ») ; menu « … » « Révoquer » → `ConfirmDialog` « Révoquer {nom} du rôle de Secrétaire ? Il sera prévenu. » — « Révoquer » ;
+  - aide propre au rôle, sous le titulaire (13 px muted) : « Le Secrétaire publie les communiqués, prépare les assemblées générales et dépose les documents dans les archives du club. Un seul Secrétaire par club. » ;
+  - succès : « {nom} est nommé Secrétaire. Il a été prévenu. » / « {nom} n'est plus Secrétaire. » (log + notification « Nomination ou révocation », 4.17) ;
+  - **un seul titulaire** (décision client) : nommer sur un poste occupé = remplacer, jamais ajouter. Si le réglage du nombre de titulaires par rôle (10.2 n° 24) est un jour exposé, la ligne Secrétaire y est **non configurable** (fixée à 1). Erreur API éventuelle : « Secrétaire a déjà un titulaire. »
+  - révocation ou remplacement : les documents qu'il a déposés et les communiqués qu'il a publiés restent en place, avec son nom (aucune réattribution).
 
 ### 4.3 « Transmettre la présidence » (2.3) — taille `md`, Président
 
@@ -91,7 +101,9 @@ PlayerSearch multiple ; puces « Retirer {nom} ». Pied : « Annuler » / « Enr
 
 Aide en bas : « Le mot de passe initial est l'email. {prénom} devra le changer à sa première connexion. Il restera « En attente » jusqu'au paiement de l'adhésion et à la signature du parrain. » Pied : « Annuler » / « Ajouter le joueur ». Succès : « {nom} a été ajouté. Statut : En attente. »
 
-Suite du parcours d'adhésion (hors de cette page) : la signature de la fiche par le parrain (code PIN) et la décision du Président après un refus ou un silence du parrain s'ouvrent depuis **deux points d'entrée** (la carte « À faire » de l'accueil est reportée après le Lot 5, voir `docs/backlog-post-mvp.md` — ces deux actions font partie du MVP et ne peuvent pas en dépendre) : la notification correspondante (fiche à signer, refus ou silence du parrain, CDC 4.3 et 4.17), et le bouton dédié dans la modale « Fiche du joueur » de l'Effectif (§4.7 ci-dessous). Spec minimale dans `club-accueil.md` §5.4 et §5.5 ; **modales détaillées au Lot 1 (adhésion, cf. CDC 4.3)**.
+Suite du parcours d'adhésion (hors de cette page) : la signature de la fiche par le parrain (modale de confirmation) et la décision du Président après un refus ou un silence du parrain s'ouvrent depuis **deux points d'entrée** (la carte « À faire » de l'accueil est reportée après le Lot 5, voir `docs/backlog-post-mvp.md` — ces deux actions font partie du MVP et ne peuvent pas en dépendre) : la notification correspondante (fiche à signer, refus ou silence du parrain, CDC 4.3 et 4.17), et le bouton dédié dans la modale « Fiche du joueur » de l'Effectif (§4.7 ci-dessous). Spec minimale dans `club-accueil.md` §5.4 et §5.5 ; **modales détaillées au Lot 1 (adhésion, cf. CDC 4.3)**.
+
+**Paiement des frais d'adhésion, double envoi (correctif M4, CDC 10.3 n° 178)** : l'envoi du paiement joint un `client_uuid` généré à l'ouverture de la modale. Un double envoi de la confirmation ne crée qu'un seul paiement, un seul reçu et une seule notification : le dossier est renvoyé tel quel (200). Si l'identifiant a déjà servi à une autre saisie : 409 (code `client_uuid_conflict`), message exact « Cet identifiant de saisie a déjà été utilisé pour un autre paiement : il n'a pas été enregistré une seconde fois. ».
 
 ### 4.6 « Importer des joueurs » (4.1) — assistant `xl`, 2 étapes
 
@@ -101,7 +113,7 @@ Suite du parcours d'adhésion (hors de cette page) : la signature de la fiche pa
 ### 4.7 « Fiche du joueur » — taille `lg`
 
 Fiche publique (4.2 : carte, statistiques, aptitude sans diagnostic) + rôles actuels + statut. Pied : « Fermer », plus, uniquement quand l'adhésion du joueur est **En attente** (CDC 4.3) :
-- **« Signer la fiche d'adhésion »** — visible seulement par le parrain désigné de ce joueur ; ouvre la modale de signature par code PIN (détaillée au Lot 1).
+- **« Signer la fiche d'adhésion »** — visible seulement par le parrain désigné de ce joueur ; ouvre la modale de confirmation « Signer la fiche d'adhésion de {prénom} ? » (détaillée au Lot 1).
 - **« Décider de l'adhésion »** — visible seulement par le Président, et seulement après un refus ou un silence du parrain (CDC 4.3, cas limites) ; ouvre la modale de décision (désigner un autre parrain ou annuler l'adhésion, détaillée au Lot 1).
 
 Aucune donnée financière ni médicale détaillée.
@@ -111,7 +123,7 @@ Aucune donnée financière ni médicale détaillée.
 | Zone | Chargement | Vide | Erreur |
 | --- | --- | --- | --- |
 | Identité | Squelette logo + 3 lignes | Logo absent : initiales ; couleurs absentes : « Couleurs non définies. » | Modèle standard |
-| Bureau | 6 lignes squelettes | Chaque rôle vide : « Poste vacant » | Modèle standard |
+| Bureau | 7 lignes squelettes (révision 11/10 : Secrétaire ajouté) | Chaque rôle vide : « Poste vacant » | Modèle standard |
 | Encadrement | 2 lignes | « Poste vacant » ; Capitaine vide : « Aucun capitaine désigné. » | Modèle standard |
 | Effectif | 5 lignes | « Aucun joueur dans le club. » + (Pdt, D) « Ajouter un joueur » | Modèle standard |
 
@@ -123,7 +135,12 @@ Aucune donnée financière ni médicale détaillée.
 ## 7. Décisions par défaut et points ouverts
 
 - **10.2 n° 3, étendu par le n° 24 (décidé, cahier des charges 10.2 n° 24)** : nombre de titulaires par rôle du bureau configurable par club, un seul par défaut. Cet écran décrit le cas par défaut (nommer sur un poste occupé = remplacer) ; le réglage du nombre de titulaires par rôle et l'affichage de plusieurs titulaires ne sont pas encore spécifiés ici — **point ouvert** à traiter dans une révision de cette spec.
-- **Point ouvert** : la passation de présidence n'exige pas de code PIN dans la liste du 7.2, alors qu'elle est irréversible pour le Président sortant. Proposé : confirmation simple (conforme au CDC) ; ajout du PIN à décider par le client.
+- La passation de présidence, irréversible pour le Président sortant, se fait par modale de confirmation explicite (ConfirmDialog, variante action sensible) ; l'auteur est écrit au journal.
 - **Point ouvert** : qui configure le lien de paiement (4.6 « dans ses paramètres ») ? Défaut appliqué : le Président, dans la modale d'identité.
 - **Point ouvert** : changement de devise après des paiements — non traité par le CDC. Défaut d'interface : lecture seule dès qu'un paiement existe (à confirmer avec `finance-engine`).
 - **Proposition** : tableau « Effectif » placé sur cette page, faute d'écran « Joueurs » dédié dans le 3.7.
+- (révision 11/10) **Rôle Secrétaire absent du CDC** : décision client du 11/10/2026, à inscrire par le circuit 9.4 aux 2.2 (« Secrétaire — Club — Communiqués officiels, préparation des assemblées générales, archives des documents »), 2.3 (ajout au groupe nommé par le Président) et 2.4 (nouvelle colonne). Tant que ce n'est pas fait, l'écran est une **proposition**.
+- (révision 11/10) **Point ouvert — un seul titulaire vs 10.2 n° 24** : le 10.2 n° 24 rend le nombre de titulaires configurable pour **chaque** rôle du bureau ; la décision du 11/10 fixe un seul Secrétaire. Position provisoire : Secrétaire fixé à 1, non configurable. À confirmer et à reporter au 10.2.
+- (révision 11/10) **Décidé — canal « Bureau » du chat** : le client a retenu « Bureau, un seul titulaire, membre du canal de chat Bureau ». Le Secrétaire fait partie du canal « Bureau » (CDC 10.3 n° 165 mis à jour).
+- (révision 11/10) **Point ouvert — rôle principal affiché** dans le bas de la barre latérale pour un joueur qui cumule Secrétaire et un autre rôle : ordre de priorité des rôles non défini ; à fixer avec `frontend-dev` (proposition : Président > VP > Secrétaire > DS > Trésorier > …).
+- (révision 11/10) Filtre « Rôle » du tableau « Effectif » : l'option « Secrétaire » s'ajoute automatiquement (liste renvoyée par l'API).

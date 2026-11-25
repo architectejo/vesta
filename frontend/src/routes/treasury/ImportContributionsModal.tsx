@@ -13,11 +13,14 @@ import {
   Avatar,
   Banner,
   Button,
+  ConfirmDialog,
   DataTable,
   EmptyState,
+  IconButton,
+  IconChevronLeft,
+  IconChevronRight,
   Loader,
   Modal,
-  PinPrompt,
   SegmentedControl,
   StatusBadge,
   useToast,
@@ -27,7 +30,6 @@ import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { cellVisual } from "./gridCellVisuals";
 import { ImportRowDetailModal } from "./ImportRowDetailModal";
 import { formatAmount, formatNumber } from "./money";
-import { formatPinError } from "./pinErrors";
 
 const TYPES_QUERY_KEY = ["treasury", "grid-types"] as const;
 const MIN_YEAR = 2000;
@@ -54,16 +56,6 @@ function apiErrorMessage(error: unknown): string {
   return error instanceof ApiError
     ? error.detail
     : "Une erreur est survenue de notre côté. Réessayez dans un instant.";
-}
-
-function isPinRelatedError(error: unknown): boolean {
-  return (
-    error instanceof ApiError &&
-    (error.status === 400 || error.status === 423) &&
-    error.raw !== null &&
-    typeof error.raw === "object" &&
-    ("attempts_remaining" in (error.raw as object) || "locked_until" in (error.raw as object))
-  );
 }
 
 function rowDisplayName(row: ContributionImportRow): string {
@@ -325,9 +317,8 @@ export function ImportContributionsModal({
   const debouncedRowSearch = useDebouncedValue(rowSearchInput, 300);
   const [rowDetail, setRowDetail] = useState<ContributionImportRow | null>(null);
 
-  const [pinOpen, setPinOpen] = useState(false);
-  const [pinSubmitting, setPinSubmitting] = useState(false);
-  const [pinError, setPinError] = useState<string | undefined>(undefined);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [importSubmitting, setImportSubmitting] = useState(false);
   const [step2Banner, setStep2Banner] = useState<{ variant: "danger" | "warning"; message: string; retry?: boolean } | null>(
     null,
   );
@@ -362,9 +353,8 @@ export function ImportContributionsModal({
     setTab("ready");
     setRowSearchInput("");
     setRowDetail(null);
-    setPinOpen(false);
-    setPinSubmitting(false);
-    setPinError(undefined);
+    setConfirmOpen(false);
+    setImportSubmitting(false);
     setStep2Banner(null);
     setResult(null);
     setReportDownloading(false);
@@ -421,27 +411,24 @@ export function ImportContributionsModal({
     setStep2Banner(null);
   }
 
-  function handleOpenPin(): void {
-    setPinError(undefined);
+  function handleOpenConfirm(): void {
     setStep2Banner(null);
-    setPinOpen(true);
+    setConfirmOpen(true);
   }
 
-  async function submitImport(pin: string): Promise<void> {
+  async function submitImport(): Promise<void> {
     if (!file || typeId === "") return;
-    setPinSubmitting(true);
-    setPinError(undefined);
+    if (importSubmitting) return;
+    setImportSubmitting(true);
     try {
-      const report = await createContributionImport({ contribution_type_id: Number(typeId), year, file, pin });
-      setPinOpen(false);
+      const report = await createContributionImport({ contribution_type_id: Number(typeId), year, file });
+      setConfirmOpen(false);
       setResult(report);
       setTab(report.summary.rows_failed > 0 ? "failed" : "ready");
       setStep(3);
     } catch (error) {
-      if (isPinRelatedError(error)) {
-        setPinError(formatPinError(error));
-      } else if (error instanceof ApiError && error.status === 0) {
-        setPinOpen(false);
+      if (error instanceof ApiError && error.status === 0) {
+        setConfirmOpen(false);
         setStep2Banner({
           variant: "warning",
           message:
@@ -449,11 +436,11 @@ export function ImportContributionsModal({
           retry: true,
         });
       } else {
-        setPinOpen(false);
+        setConfirmOpen(false);
         setStep2Banner({ variant: "danger", message: apiErrorMessage(error) });
       }
     } finally {
-      setPinSubmitting(false);
+      setImportSubmitting(false);
     }
   }
 
@@ -578,25 +565,19 @@ export function ImportContributionsModal({
           <div>
             <p className="mb-1 block text-sm font-medium text-text">Année</p>
             <div className="flex items-center gap-1">
-              <button
-                type="button"
+              <IconButton
                 aria-label="Année précédente"
                 onClick={() => setYear((y) => Math.max(MIN_YEAR, y - 1))}
                 disabled={year <= MIN_YEAR}
-                className="flex h-10 w-10 items-center justify-center rounded-sm text-text hover:bg-surface-muted disabled:opacity-40"
-              >
-                ‹
-              </button>
+                icon={<IconChevronLeft aria-hidden="true" className="h-5 w-5" />}
+              />
               <span className="w-14 text-center text-sm font-medium tabular-nums text-text">{year}</span>
-              <button
-                type="button"
+              <IconButton
                 aria-label="Année suivante"
                 onClick={() => setYear((y) => Math.min(currentYear, y + 1))}
                 disabled={year >= currentYear}
-                className="flex h-10 w-10 items-center justify-center rounded-sm text-text hover:bg-surface-muted disabled:opacity-40"
-              >
-                ›
-              </button>
+                icon={<IconChevronRight aria-hidden="true" className="h-5 w-5" />}
+              />
             </div>
           </div>
 
@@ -669,12 +650,12 @@ export function ImportContributionsModal({
           subtitle={stepLabel}
           size="xl"
           isDirty={isDirty}
-          isSubmitting={pinSubmitting}
+          isSubmitting={importSubmitting}
           confirmLabel={`Importer ${preview.summary.rows_succeeded} ligne(s)`}
           confirmDisabled={disableImport}
-          onConfirm={handleOpenPin}
+          onConfirm={handleOpenConfirm}
         >
-          {pinSubmitting ? (
+          {importSubmitting ? (
             <div className="space-y-3">
               <Loader loading variant="list" count={3} />
               <p className="text-sm text-text">
@@ -683,9 +664,9 @@ export function ImportContributionsModal({
             </div>
           ) : (
             <div className="space-y-4">
-              <button type="button" onClick={handleBackToStep1} className="text-sm text-primary-text hover:underline">
-                ‹ Modifier le type, l'année ou le fichier
-              </button>
+              <Button variant="ghost" size="sm" icon={<IconChevronLeft aria-hidden="true" className="h-4 w-4" />} onClick={handleBackToStep1}>
+                Modifier le type, l'année ou le fichier
+              </Button>
 
               <p className="text-sm text-text-muted">
                 {preview.contribution_type.name} · {preview.year} · {file?.name}
@@ -762,15 +743,16 @@ export function ImportContributionsModal({
           )}
         </Modal>
 
-        <PinPrompt
-          open={pinOpen}
-          description={`Importer ${preview.summary.payments_count} paiement(s) pour ${formatAmount(preview.summary.payments_total, currency)} et ${preview.summary.dues_count} montant(s) dû(s) — ${preview.contribution_type.name}, ${preview.year}.`}
+        <ConfirmDialog
+          open={confirmOpen}
+          danger={false}
+          title={`Importer ${preview.summary.payments_count} paiement(s) pour ${formatAmount(preview.summary.payments_total, currency)} ?`}
+          description={`${preview.summary.dues_count} montant(s) dû(s) seront aussi créés — ${preview.contribution_type.name}, ${preview.year}. Les paiements importés ne pourront plus être supprimés, seulement annulés.`}
           confirmLabel="Importer"
-          confirmLoadingLabel="Import en cours…"
-          isSubmitting={pinSubmitting}
-          error={pinError}
-          onSubmit={(pin) => void submitImport(pin)}
-          onClose={() => setPinOpen(false)}
+          loadingLabel="Import en cours…"
+          loading={importSubmitting}
+          onConfirm={() => void submitImport()}
+          onCancel={() => setConfirmOpen(false)}
         />
 
         <ImportRowDetailModal row={rowDetail} currency={currency} onClose={() => setRowDetail(null)} />

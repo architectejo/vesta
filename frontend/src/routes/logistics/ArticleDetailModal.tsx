@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError } from "../../api/client";
 import { archiveArticle, listMovements, reactivateArticle, type Article } from "../../api/logistics";
-import { Button, ConfirmDialog, Modal, StatusBadge } from "../../design-system";
+import { Button, ConfirmDialog, IconButton, IconMore, Modal, StatusBadge } from "../../design-system";
+import { useClosingState } from "../../hooks/useClosingState";
 import { formatDateFr } from "./format";
 import { MovementDetailModal } from "./MovementDetailModal";
 import { RecordMovementModal } from "./RecordMovementModal";
@@ -37,6 +38,8 @@ export function ArticleDetailModal({
 }: ArticleDetailModalProps) {
   const open = article !== null;
   const [menuOpen, setMenuOpen] = useState(false);
+  const { mounted: menuMounted, dataState: menuDataState, onAnimationEnd: onMenuAnimationEnd } =
+    useClosingState(menuOpen, 200);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [archiveError, setArchiveError] = useState<string | undefined>(undefined);
   const [archiving, setArchiving] = useState(false);
@@ -101,11 +104,17 @@ export function ArticleDetailModal({
             {article.status === "archived" ? <StatusBadge status="archived" /> : <span />}
             {canManage ? (
               <div className="relative">
-                <Button size="sm" variant="ghost" onClick={() => setMenuOpen((v) => !v)}>
-                  …
-                </Button>
-                {menuOpen ? (
-                  <div className="absolute right-0 z-10 mt-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated">
+                <IconButton
+                  aria-label="Plus d'actions"
+                  onClick={() => setMenuOpen((v) => !v)}
+                  icon={<IconMore aria-hidden="true" className="h-5 w-5" />}
+                />
+                {menuMounted ? (
+                  <div
+                    data-state={menuDataState}
+                    onAnimationEnd={onMenuAnimationEnd}
+                    className="vesta-anim-menu absolute right-0 z-10 mt-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated"
+                  >
                     <button
                       type="button"
                       className="block w-full px-3 py-2 text-left text-sm text-text hover:bg-surface-muted"

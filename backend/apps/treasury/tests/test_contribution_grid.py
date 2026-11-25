@@ -23,7 +23,6 @@ from apps.clubs.models import Membership
 from apps.core.tenant import TenantMismatchError
 from apps.treasury import services
 from apps.treasury.models import PaymentAllocation
-from apps.treasury.tests.conftest import PIN
 from apps.treasury.tests.grid_helpers import (
     NOW,
     TODAY,
@@ -58,7 +57,7 @@ class TestRepartitionAffichee:
         mars, avril, mai, juin."""
 
         ctype = attached_type(ctx)
-        member = player(ctx, "Adolphe", "Abedi")
+        member = player(ctx, "Adolphe", "Akeba")
         attach(ctx, member, ctype)
         make_dues(ctx, member, ctype, range(1, 10))
         pay(ctx, member, ctype, "20", datetime.date(2026, 2, 5))
@@ -72,7 +71,7 @@ class TestRepartitionAffichee:
 
     def test_cellules_egales_aux_repartitions_enregistrees(self, ctx):
         ctype = attached_type(ctx)
-        member = player(ctx, "Gaston", "Chamba")
+        member = player(ctx, "Gaston", "Lutete")
         attach(ctx, member, ctype)
         make_dues(ctx, member, ctype, range(1, 10))
         pay(ctx, member, ctype, "60", datetime.date(2026, 1, 3))
@@ -91,7 +90,7 @@ class TestRepartitionAffichee:
 
     def test_paiement_anticipe_s_etale_sur_les_mois_futurs(self, ctx):
         ctype = attached_type(ctx)
-        member = player(ctx, "Fabien", "Wilondja")
+        member = player(ctx, "Fabien", "Tshala")
         attach(ctx, member, ctype)
         make_dues(ctx, member, ctype, range(1, 10))
         pay(ctx, member, ctype, "120", datetime.date(2026, 1, 4))
@@ -104,7 +103,7 @@ class TestRepartitionAffichee:
 
     def test_annulation_rend_le_mois_impaye(self, ctx):
         ctype = attached_type(ctx)
-        member = player(ctx, "Serge", "Kadiobo")
+        member = player(ctx, "Serge", "Lokwa")
         attach(ctx, member, ctype)
         make_dues(ctx, member, ctype, [1])
         payment = pay(ctx, member, ctype, "10", datetime.date(2026, 1, 5))
@@ -113,7 +112,7 @@ class TestRepartitionAffichee:
         reversal = services.request_payment_reversal(
             payment=payment, reason="Saisie en double", requested_by=ctx.treasurer.user, now=NOW
         )
-        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=PIN, now=NOW)
+        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, now=NOW)
         cell = row_of(grid_for(ctx, ctype), member).cells[0]
         assert (cell.state, cell.allocated, cell.overdue_amount) == ("overdue", D("0.00"), D("10.00"))
 
@@ -124,7 +123,7 @@ class TestEtatsEtEcheance:
         montant dû de septembre n'est pas encore une dette."""
 
         ctype = attached_type(ctx)
-        member = player(ctx, "Joel", "Mimbu")
+        member = player(ctx, "Joel", "Pindi")
         attach(ctx, member, ctype)
         make_dues(ctx, member, ctype, [9])
         cell = row_of(grid_for(ctx, ctype, today=datetime.date(2026, 9, 5)), member).cells[8]
@@ -137,7 +136,7 @@ class TestEtatsEtEcheance:
         settings_obj.debt_tolerance_days = 5
         settings_obj.save()
         ctype = attached_type(ctx)
-        member = player(ctx, "Fredy", "Kulaluka")
+        member = player(ctx, "Fredy", "Sumbu")
         attach(ctx, member, ctype)
         make_dues(ctx, member, ctype, [9])
         assert row_of(grid_for(ctx, ctype, today=datetime.date(2026, 9, 15)), member).cells[8].state == "upcoming"
@@ -145,7 +144,7 @@ class TestEtatsEtEcheance:
 
     def test_mois_avant_le_rattachement_non_dus(self, ctx):
         ctype = attached_type(ctx)
-        member = player(ctx, "Alain", "Zagabe")
+        member = player(ctx, "Alain", "Tondo")
         attach(ctx, member, ctype, starts_on=period(4))
         make_dues(ctx, member, ctype, range(4, 10))
         row = row_of(grid_for(ctx, ctype), member)
@@ -155,7 +154,7 @@ class TestEtatsEtEcheance:
 
     def test_suspension_mois_futurs_non_dus(self, ctx):
         ctype = attached_type(ctx)
-        member = player(ctx, "Jose", "Mokokya")
+        member = player(ctx, "Jose", "Banza")
         attach(ctx, member, ctype)
         services.create_contribution_suspension(
             membership=member, starts_on=period(10), reason="Blessure longue durée", decided_by=ctx.president.user
@@ -168,7 +167,7 @@ class TestEtatsEtEcheance:
         les mois futurs affichent le nouveau tarif."""
 
         ctype = attached_type(ctx)
-        member = player(ctx, "Deo", "Mrhabazi")
+        member = player(ctx, "Deo", "Kikuni")
         attach(ctx, member, ctype)
         make_dues(ctx, member, ctype, range(1, 10))
         services.update_contribution_type(contribution_type=ctype, updated_by=ctx.president.user, amount="15", now=NOW)
@@ -211,7 +210,7 @@ class TestCoherenceAvecLeSolde:
     )
     def test_impayes_echus_egaux_au_montant_a_regulariser(self, ctx, payments):
         ctype = attached_type(ctx)
-        member = player(ctx, "Jean", "Ngoy")
+        member = player(ctx, "Jean", "Lufu")
         attach(ctx, member, ctype)
         make_dues(ctx, member, ctype, range(1, 10))
         for amount, month in payments:
@@ -281,17 +280,17 @@ class TestRechercheTriFiltre:
     def grid(self, ctx):
         ctype = attached_type(ctx)
         members = {
-            "abedi": player(ctx, "Adolphe", "Abedi", jersey=1),
-            "ciza": player(ctx, "Dunga", "Ciza", jersey=16),
-            "kasonga": player(ctx, "Yannick", "Kasonga", jersey=36),
+            "akeba": player(ctx, "Adolphe", "Akeba", jersey=1),
+            "dimbu": player(ctx, "Dunga", "Dimbu", jersey=16),
+            "kalala": player(ctx, "Patrick", "Kalala", jersey=36),
             "eleve": player(ctx, "Élodie", "Été", jersey=7),
         }
         for member in members.values():
             attach(ctx, member, ctype)
             make_dues(ctx, member, ctype, range(1, 10))
-        pay(ctx, members["abedi"], ctype, "90", datetime.date(2026, 1, 5))
-        pay(ctx, members["ciza"], ctype, "30", datetime.date(2026, 1, 5))
-        pay(ctx, members["kasonga"], ctype, "120", datetime.date(2026, 1, 5))
+        pay(ctx, members["akeba"], ctype, "90", datetime.date(2026, 1, 5))
+        pay(ctx, members["dimbu"], ctype, "30", datetime.date(2026, 1, 5))
+        pay(ctx, members["kalala"], ctype, "120", datetime.date(2026, 1, 5))
         pay(ctx, members["eleve"], ctype, "50", datetime.date(2026, 1, 5))
         return grid_for(ctx, ctype), members
 
@@ -301,12 +300,12 @@ class TestRechercheTriFiltre:
 
     def test_tri_par_nom_par_defaut(self, grid):
         rows = services.filter_grid_rows(grid[0])
-        assert self.names(rows) == ["Abedi", "Ciza", "Été", "Kasonga"]
-        assert self.names(services.filter_grid_rows(grid[0], ordering="-name")) == ["Kasonga", "Été", "Ciza", "Abedi"]
+        assert self.names(rows) == ["Akeba", "Dimbu", "Été", "Kalala"]
+        assert self.names(services.filter_grid_rows(grid[0], ordering="-name")) == ["Kalala", "Été", "Dimbu", "Akeba"]
 
     def test_tri_sur_le_total(self, grid):
-        assert self.names(services.filter_grid_rows(grid[0], ordering="total")) == ["Ciza", "Été", "Abedi", "Kasonga"]
-        assert self.names(services.filter_grid_rows(grid[0], ordering="-total"))[0] == "Kasonga"
+        assert self.names(services.filter_grid_rows(grid[0], ordering="total")) == ["Dimbu", "Été", "Akeba", "Kalala"]
+        assert self.names(services.filter_grid_rows(grid[0], ordering="-total"))[0] == "Kalala"
 
     def test_tri_inconnu(self, grid):
         with pytest.raises(services.TreasuryValidationError):
@@ -314,13 +313,13 @@ class TestRechercheTriFiltre:
 
     def test_recherche_insensible_casse_et_accents(self, grid):
         assert self.names(services.filter_grid_rows(grid[0], query="ete")) == ["Été"]
-        assert self.names(services.filter_grid_rows(grid[0], query="YANNICK kas")) == ["Kasonga"]
-        assert self.names(services.filter_grid_rows(grid[0], query="16")) == ["Ciza"]
+        assert self.names(services.filter_grid_rows(grid[0], query="PATRICK kal")) == ["Kalala"]
+        assert self.names(services.filter_grid_rows(grid[0], query="16")) == ["Dimbu"]
         assert services.filter_grid_rows(grid[0], query="inconnu") == []
 
     def test_filtre_avec_impayes(self, grid):
         rows = services.filter_grid_rows(grid[0], unpaid_only=True)
-        assert self.names(rows) == ["Ciza", "Été"]
+        assert self.names(rows) == ["Dimbu", "Été"]
 
 
 class TestRolesEtEtancheite:
@@ -359,7 +358,7 @@ class TestRolesEtEtancheite:
 class TestDetailDuMois:
     def test_paiements_du_mois_avec_part_affectee_et_etalement(self, ctx):
         ctype = attached_type(ctx)
-        member = player(ctx, "Deny", "Sangwa")
+        member = player(ctx, "Deny", "Wamba")
         attach(ctx, member, ctype)
         make_dues(ctx, member, ctype, range(1, 10))
         first = pay(ctx, member, ctype, "15", datetime.date(2026, 1, 5))
@@ -386,7 +385,7 @@ class TestDetailDuMois:
 class TestExportCsv:
     def test_contenu_exact_et_nom_de_fichier(self, ctx):
         ctype = attached_type(ctx, name="Mensuelle catégorie 10 $")
-        member = player(ctx, "Adolphe", "Abedi", jersey=1)
+        member = player(ctx, "Adolphe", "Akeba", jersey=1)
         other = player(ctx, "Injection", "=HYPERLINK")
         for item in (member, other):
             attach(ctx, item, ctype)
@@ -404,7 +403,7 @@ class TestExportCsv:
             "Joueur;N°;janv. 2026;févr. 2026;mars 2026;avr. 2026;mai 2026;juin 2026;"
             "juil. 2026;août 2026;sept. 2026;oct. 2026;nov. 2026;déc. 2026;Total (USD)"
         )
-        assert "Abedi Adolphe;1;10.00;10.00;10.00;10.00;5.00;0.00;0.00;0.00;0.00;;;;45.00" in lines
+        assert "Akeba Adolphe;1;10.00;10.00;10.00;10.00;5.00;0.00;0.00;0.00;0.00;;;;45.00" in lines
         # Cellule commençant par « = » neutralisée (injection CSV).
         assert "'=HYPERLINK Injection;;0.00;0.00;0.00;0.00;0.00;0.00;0.00;0.00;0.00;;;;0.00" in lines
         assert len([line for line in lines if line]) == 3

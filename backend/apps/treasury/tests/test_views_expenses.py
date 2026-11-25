@@ -1,6 +1,7 @@
 """API des dépenses, de l'assistance sociale et des capacités (tâche 2.2).
 
-Couvre la matrice 2.4 (chaque endpoint déclare ses rôles), le PIN (CDC 7.2),
+Couvre la matrice 2.4 (chaque endpoint déclare ses rôles), l'absence de PIN
+(décision client du 11/10/2026 : auteur journalisé, ``pin`` envoyé ignoré),
 le blocage (409), la dérogation, les fichiers privés servis par des vues
 authentifiées (CLAUDE.md règle n° 10), l'étanchéité entre clubs (404,
 jamais 403) et l'exposition de la devise du club.
@@ -18,7 +19,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.treasury import services
 from apps.treasury.models import Expense, SocialAssistanceEvent, SocialAssistanceRequest
-from apps.treasury.tests.conftest import PIN, WRONG_PIN
+from apps.treasury.tests.conftest import PIN, WRONG_PIN, assert_logged_by
 from apps.treasury.tests.expense_helpers import (
     PDF_CONTENT,
     club_today,
@@ -60,7 +61,7 @@ class TestCapabilities:
         "president": {
             "can_read", "can_write", "can_read_expenses", "can_manage_expense_categories",
             "can_validate_expenses", "can_derogate", "can_manage_assistance_scales",
-            "can_process_assistance_requests", "can_request_assistance",
+            "can_process_assistance_requests", "can_request_assistance", "can_decide_payment_reversal",
         },
         "vice_president": {
             "can_read", "can_read_expenses", "can_validate_expenses", "can_process_assistance_requests",
@@ -222,24 +223,31 @@ class TestExpenseApi:
         foreign = make_expense(other_ctx)
         client = client_for(ctx.president)
         assert client.get(url("expense-detail", foreign.pk)).status_code == 404
-        assert client.post(url("expense-release", foreign.pk), {"pin": PIN}, format="json").status_code == 404
+        assert client.post(url("expense-release", foreign.pk), {}, format="json").status_code == 404
         assert client.post(url("expense-refuse", foreign.pk), {"reason": "x"}, format="json").status_code == 404
         assert Expense.all_objects.get(pk=foreign.pk).status == Expense.Status.PENDING
 
-    def test_release_with_pin(self, ctx):
+    def test_release_without_pin_logs_the_author(self, ctx):
         expense = make_expense(ctx)
         client = client_for(ctx.vice_president)
-        response = client.post(url("expense-release", expense.pk), {"pin": WRONG_PIN}, format="json")
-        assert response.status_code == 400 and "attempts_remaining" in response.data
-        response = client.post(url("expense-release", expense.pk), {"pin": PIN}, format="json")
+        response = client.post(url("expense-release", expense.pk), {}, format="json")
         assert response.status_code == 200
         assert response.data["status"] == "released"
         assert response.data["released_by"]["id"] == ctx.vice_president.user_id
+        assert_logged_by("treasury.expense.released", ctx.vice_president.user, club=ctx.club)
+
+    def test_release_ignores_a_pin_sent_by_an_old_client(self, ctx):
+        expense = make_expense(ctx)
+        response = client_for(ctx.vice_president).post(
+            url("expense-release", expense.pk), {"pin": WRONG_PIN}, format="json"
+        )
+        assert response.status_code == 200 and "attempts_remaining" not in response.data
+        assert response.data["status"] == "released"
 
     @pytest.mark.parametrize("role", ["treasurer", "assistant_treasurer", "player"])
     def test_release_refused_to_other_roles(self, ctx, role):
         expense = make_expense(ctx)
-        response = client_for(getattr(ctx, role)).post(url("expense-release", expense.pk), {"pin": PIN}, format="json")
+        response = client_for(getattr(ctx, role)).post(url("expense-release", expense.pk), {}, format="json")
         assert response.status_code == 403
 
     def test_refuse_requires_reason(self, ctx):
@@ -258,15 +266,15 @@ class TestExpenseApi:
         assert summary["can_release"] is False and summary["blocking_expense_ids"] == [late.pk]
         assert summary["currency"] == "USD"
 
-        response = client_for(ctx.vice_president).post(url("expense-release", urgent.pk), {"pin": PIN}, format="json")
+        response = client_for(ctx.vice_president).post(url("expense-release", urgent.pk), {}, format="json")
         assert response.status_code == 409 and response.data["code"] == "expense_release_blocked"
 
         response = client_for(ctx.vice_president).post(
-            url("expense-derogation", urgent.pk), {"reason": "Blessé", "pin": PIN}, format="json"
+            url("expense-derogation", urgent.pk), {"reason": "Blessé"}, format="json"
         )
         assert response.status_code == 403
         response = client_for(ctx.president).post(
-            url("expense-derogation", urgent.pk), {"reason": "Blessé à soigner", "pin": PIN}, format="json"
+            url("expense-derogation", urgent.pk), {"reason": "Blessé à soigner"}, format="json"
         )
         assert response.status_code == 200
         assert response.data["derogation"]["reason"] == "Blessé à soigner"
@@ -437,7 +445,8 @@ class TestAssistanceApi:
         request_id = submit_via_api(ctx, ctx.player).data["id"]
         response = client_for(ctx.president).post(url("social-assistance-approve", request_id), {}, format="json")
         assert response.status_code == 400
-        assert "10.2 n° 37" in response.data["detail"] or "à régulariser" in response.data["detail"]
+        assert "à régulariser" in response.data["detail"]
+        assert "10.2 n° 37" not in response.data["detail"]  # aucune référence interne (D-A10)
         assert SocialAssistanceRequest.all_objects.get(pk=request_id).status == "submitted"
 
     def test_cross_club_requests_are_404(self, ctx, other_ctx):

@@ -24,7 +24,6 @@ from apps.treasury.models import (
     SocialAssistanceScale,
     Transaction,
 )
-from apps.treasury.tests.conftest import PIN
 from apps.treasury.tests.expense_helpers import (
     club_today,
     days_ago,
@@ -62,7 +61,7 @@ def populate(ctx):
     )
     late = release(ctx, make_expense(ctx, make_category(ctx, name="Transport"), attachment=pdf_file()), now=days_ago(10))
     urgent = make_expense(ctx, make_category(ctx, name="Urgence"))
-    services.release_expense_with_derogation(expense=urgent, president=ctx.president.user, reason="Urgence", pin=PIN)
+    services.release_expense_with_derogation(expense=urgent, president=ctx.president.user, reason="Urgence")
     request_obj = services.submit_social_assistance_request(
         membership=ctx.player,
         submitted_by=ctx.player.user,
@@ -142,9 +141,9 @@ class TestServicesRefuseTheOtherClub:
             lambda: services.archive_expense_category(category=pending.category, archived_by=ctx.treasurer.user),
             lambda: make_expense(other_ctx, pending.category, by=ctx.treasurer),
             lambda: services.refuse_expense(expense=pending, refused_by=ctx.president.user, reason="x"),
-            lambda: services.release_expense(expense=pending, released_by=ctx.president.user, pin=PIN),
+            lambda: services.release_expense(expense=pending, released_by=ctx.president.user),
             lambda: services.release_expense_with_derogation(
-                expense=pending, president=ctx.president.user, reason="U", pin=PIN
+                expense=pending, president=ctx.president.user, reason="U"
             ),
             lambda: services.justify_expense(expense=data["late"], uploaded_by=ctx.treasurer.user, file=pdf_file()),
             lambda: services.create_social_assistance_scale(

@@ -1,3 +1,4 @@
+import { toViewableBlob, UNOPENABLE_FILE_MESSAGE } from "../../api/safeBlob";
 import { useState } from "react";
 import { ApiError, triggerBlobDownload, type DownloadResult } from "../../api/client";
 import { Button } from "../../design-system";
@@ -24,7 +25,13 @@ export function AttachmentLink({ label, download }: AttachmentLinkProps) {
     setError(null);
     try {
       const { blob, filename } = await download();
-      const url = URL.createObjectURL(blob);
+      const safe = toViewableBlob(blob);
+      if (!safe) {
+        triggerBlobDownload(blob, filename);
+        setError(UNOPENABLE_FILE_MESSAGE);
+        return;
+      }
+      const url = URL.createObjectURL(safe);
       const opened = window.open(url, "_blank", "noopener,noreferrer");
       if (!opened) {
         triggerBlobDownload(blob, filename);

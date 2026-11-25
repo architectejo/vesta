@@ -108,3 +108,17 @@ def test_sport_integration_apte_player_is_eligible(ctx):
     playability = sport_services.get_playability(ctx.player)
     assert playability.eligible is True
     assert playability.reason_code == ""
+
+
+def test_medical_error_messages_are_accented_french_without_internal_references():
+    """D17 : messages affichés à l'utilisateur en français accentué, sans renvoi interne au CDC."""
+    from apps.clubs.permissions import IsClubHeadCoach
+    from apps.medical import permissions
+
+    for permission in (permissions.CanAccessMedicalPage, permissions.CanReportInjury, permissions.IsClubDoctor):
+        assert permission.message.startswith("Réservé")
+        assert "CDC" not in permission.message
+    assert "Médecin" in permissions.IsClubDoctor.message
+    # Formulation neutre : le message s'affiche aussi quand l'auteur du refus est le Président.
+    assert "assistant ne peut pas" not in IsClubHeadCoach.message
+    assert IsClubHeadCoach.message == "Seul le Coach du club peut nommer ou retirer un assistant."

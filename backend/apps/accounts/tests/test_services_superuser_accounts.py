@@ -92,6 +92,25 @@ class TestSearchAccounts:
 
 @pytest.mark.django_db
 class TestDeactivateAccount:
+    def test_refuse_de_se_desactiver_soi_meme(self):
+        superuser = SuperuserFactory()
+        with pytest.raises(services.AccountDeactivationRefusedError, match="propre compte"):
+            services.deactivate_account(superuser=superuser, target_user=superuser)
+        superuser.refresh_from_db()
+        assert superuser.is_active is True
+
+    def test_refuse_de_desactiver_le_dernier_superuser_actif(self):
+        actor = SuperuserFactory()
+        actor_two = SuperuserFactory(is_active=False)
+        with pytest.raises(services.AccountDeactivationRefusedError, match="dernier Superuser"):
+            services.deactivate_account(superuser=actor_two, target_user=actor)
+
+    def test_un_autre_superuser_reste_desactivable(self):
+        first, second = SuperuserFactory(), SuperuserFactory()
+        services.deactivate_account(superuser=first, target_user=second, reason="Test")
+        second.refresh_from_db()
+        assert second.is_active is False
+
     def test_desactive_le_compte(self):
         superuser = SuperuserFactory()
         target = UserFactory(is_active=True)

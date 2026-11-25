@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import unicodedata
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -26,10 +27,10 @@ from django.db import transaction
 from django.utils import timezone
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas as pdf_canvas
 
 from apps.accounts import services as accounts_services
 from apps.clubs.models import (
+    COACHING_STAFF_ROLES,
     ClubSettings,
     ImportBatch,
     Membership,
@@ -39,6 +40,8 @@ from apps.clubs.models import (
 )
 from apps.core.roles import has_any_role
 from apps.core.services import log_action
+
+logger = logging.getLogger(__name__)
 
 # Import tardif (dans chaque fonction, pas ici) pour `apps.treasury.services` :
 # ce module importe deja `apps.clubs.models` au niveau module -- l'importer
@@ -314,6 +317,7 @@ PRESIDENT_NOMINATED_ROLES = frozenset(
         MembershipRole.Role.TREASURER,
         MembershipRole.Role.ASSISTANT_TREASURER,
         MembershipRole.Role.STEWARD,
+        MembershipRole.Role.SECRETARY,
         MembershipRole.Role.DOCTOR,
         MembershipRole.Role.COACH,
         MembershipRole.Role.PLAYER_RECRUITER,
@@ -393,7 +397,7 @@ PENDING_STATUS_VISIBLE_ROLES = frozenset(
         MembershipRole.Role.PRESIDENT,
         MembershipRole.Role.VICE_PRESIDENT,
         MembershipRole.Role.SPORTS_DIRECTOR,
-        MembershipRole.Role.COACH,
+        *COACHING_STAFF_ROLES,
         MembershipRole.Role.DOCTOR,
     }
 )
@@ -444,31 +448,29 @@ def appoint_president_nominated_role(
 
     if role not in PRESIDENT_NOMINATED_ROLES:
         raise RoleManagementError(
-            "Ce role ne se nomme pas par cette fonction : le President nomme "
-            "le bureau, le Medecin, le Coach et les recruteurs (CDC 2.3). Le "
-            "Capitaine se nomme par le Coach (voir appoint_captain), le "
-            "President se transmet par passation (voir "
-            "transfer_presidency_by_handover)."
+            "Ce rôle ne se nomme pas ici : le Président nomme le bureau, le "
+            "Médecin, le Coach et les recruteurs. Le Capitaine est choisi par "
+            "le Coach, et la présidence se transmet par une passation."
         )
 
     if not has_any_role(president_user, {MembershipRole.Role.PRESIDENT}, club=target_membership.club):
-        raise PermissionError("Seul le President du club peut nommer ce role (CDC 2.3, 2.4).")
+        raise PermissionError("Seul le Président du club peut nommer ce rôle.")
 
     if target_membership.status != Membership.Status.ACTIVE:
         raise RoleManagementError(
-            "Ce joueur n'est plus inscrit au club : la nomination n'est pas possible (CDC 2.3)."
+            "Ce joueur n'est plus inscrit au club : la nomination n'est pas possible."
         )
 
     if role == MembershipRole.Role.DOCTOR and is_qualified_professional is None:
         raise RoleManagementError(
-            "La nomination au role Medecin exige de preciser si le joueur est "
-            "qualifie professionnellement, pour afficher le bon libelle "
-            "(« Medecin » ou « Medecin / referent sante », CDC 10.2 n17)."
+            "La nomination au rôle de Médecin exige de préciser si le joueur est "
+            "qualifié professionnellement, pour afficher le bon libellé "
+            "(« Médecin » ou « Médecin / référent santé »)."
         )
     if role != MembershipRole.Role.DOCTOR and is_qualified_professional is not None:
         raise RoleManagementError(
             "Le choix de qualification professionnelle ne s'applique qu'au "
-            "role Medecin (CDC 10.2 n17)."
+            "rôle de Médecin."
         )
 
     now = now or timezone.now()
@@ -497,14 +499,14 @@ def revoke_president_nominated_role(
 
     if role.role not in PRESIDENT_NOMINATED_ROLES:
         raise RoleManagementError(
-            "Ce role ne se revoque pas par cette fonction (CDC 2.3) : voir "
-            "revoke_captain pour le Capitaine, transfer_presidency_by_handover/"
-            "transfer_presidency_by_superuser pour le President."
+            "Ce rôle ne se révoque pas ici : le Capitaine est retiré par le "
+            "Coach, l'Assistant du Coach est retiré par le Coach, et la "
+            "présidence se transmet par une passation."
         )
     if role.revoked_at is not None:
-        raise RoleManagementError("Ce role est deja revoque.")
+        raise RoleManagementError("Ce rôle est déjà révoqué.")
     if not has_any_role(president_user, {MembershipRole.Role.PRESIDENT}, club=role.club):
-        raise PermissionError("Seul le President du club peut revoquer ce role (CDC 2.3, 2.4).")
+        raise PermissionError("Seul le Président du club peut révoquer ce rôle.")
 
     now = now or timezone.now()
     role.revoked_by = president_user
@@ -529,13 +531,21 @@ def appoint_captain(*, coach_user, target_membership: "Membership", now=None) ->
     comme pour tout autre role plafonne.
     """
 
-    if not has_any_role(coach_user, {MembershipRole.Role.COACH}, club=target_membership.club):
-        raise PermissionError("Seul le Coach du club peut choisir le Capitaine (CDC 2.3, 2.4).")
+    if not has_any_role(coach_user, COACHING_STAFF_ROLES, club=target_membership.club):
+        raise PermissionError("Seul le Coach du club (ou son assistant) peut choisir le Capitaine.")
 
     if target_membership.status != Membership.Status.ACTIVE:
         raise RoleManagementError(
-            "Ce joueur n'est plus inscrit au club : la nomination du Capitaine n'est pas possible (CDC 2.3)."
+            "Ce joueur n'est plus inscrit au club : la nomination du Capitaine n'est pas possible."
         )
+
+    if MembershipRole.all_objects.filter(
+        club_id=target_membership.club_id,
+        membership=target_membership,
+        role=MembershipRole.Role.CAPTAIN,
+        revoked_at__isnull=True,
+    ).exists():
+        raise RoleManagementError("Ce joueur est déjà Capitaine du club.")
 
     now = now or timezone.now()
     new_role = MembershipRole(
@@ -556,11 +566,11 @@ def revoke_captain(*, coach_user, role: "MembershipRole", reason: str = "", now=
     """Retire le Capitaine (CDC 2.3 : « Il peut le changer »). Reserve au Coach."""
 
     if role.role != MembershipRole.Role.CAPTAIN:
-        raise RoleManagementError("Ce role n'est pas le Capitaine.")
+        raise RoleManagementError("Ce rôle n'est pas celui de Capitaine.")
     if role.revoked_at is not None:
-        raise RoleManagementError("Ce role est deja revoque.")
-    if not has_any_role(coach_user, {MembershipRole.Role.COACH}, club=role.club):
-        raise PermissionError("Seul le Coach du club peut retirer le Capitaine (CDC 2.3, 2.4).")
+        raise RoleManagementError("Ce rôle est déjà révoqué.")
+    if not has_any_role(coach_user, COACHING_STAFF_ROLES, club=role.club):
+        raise PermissionError("Seul le Coach du club (ou son assistant) peut retirer le Capitaine.")
 
     now = now or timezone.now()
     role.revoked_by = coach_user
@@ -571,6 +581,114 @@ def revoke_captain(*, coach_user, role: "MembershipRole", reason: str = "", now=
     notify_role_change(role_instance=role, event="revoked")
 
     return role
+
+
+# ---------------------------------------------------------------------------
+# Assistant du Coach (CDC 10.3 n179, decision client du 13/11/2026)
+# ---------------------------------------------------------------------------
+#
+# (a) memes droits que le Coach (voir ``COACHING_STAFF_ROLES``), sauf
+#     nommer/retirer un assistant ;
+# (b) nomme et retire par le Coach SEUL (jamais le President, jamais un
+#     assistant) ; journal (signal) + notification a l'interesse ;
+# (c) UN SEUL assistant par Coach : en nommer un remplace le precedent ;
+# (d) si le Coach change ou perd son role, l'assistant GARDE son poste
+#     (aucune revocation automatique) ; un assistant dont le nominateur n'est
+#     plus Coach est « orphelin » : tout Coach actif du club peut le retirer
+#     ou le remplacer.
+
+
+def _is_assistant_of(coach_user, role: "MembershipRole") -> bool:
+    """Vrai si ``role`` (Assistant actif) releve de ``coach_user`` : nomme
+    par lui, ou orphelin (son nominateur n'est plus Coach actif du club)."""
+
+    if role.appointed_by_id == getattr(coach_user, "id", None):
+        return True
+    return not has_any_role(role.appointed_by, {MembershipRole.Role.COACH}, club=role.club)
+
+
+def appoint_assistant_coach(*, coach_user, target_membership: "Membership", now=None) -> "MembershipRole":
+    """Nomme l'Assistant du Coach (reserve au Coach). Remplace l'assistant
+    precedent du Coach s'il y en a un (le retrait est journalise et notifie)."""
+
+    club = target_membership.club
+    if not has_any_role(coach_user, {MembershipRole.Role.COACH}, club=club):
+        raise PermissionError("Seul le Coach du club peut nommer son assistant.")
+
+    if target_membership.status != Membership.Status.ACTIVE:
+        raise RoleManagementError(
+            "Ce joueur n'est plus inscrit au club : la nomination de l'assistant n'est pas possible."
+        )
+    if target_membership.user_id == coach_user.id:
+        raise RoleManagementError("Vous ne pouvez pas être votre propre assistant.")
+    if has_any_role(target_membership.user, {MembershipRole.Role.COACH}, club=club):
+        raise RoleManagementError("Ce joueur est déjà Coach du club : il ne peut pas être assistant.")
+
+    now = now or timezone.now()
+    with transaction.atomic():
+        # Verrou sur l'adhesion du Coach : serialise deux nominations
+        # simultanees du meme Coach (aucun assistant a verrouiller si aucun
+        # n'existe encore).
+        Membership.all_objects.select_for_update().filter(club=club, user=coach_user).first()
+        active = list(
+            MembershipRole.all_objects.select_for_update()
+            .select_related("membership", "appointed_by")
+            .filter(club=club, role=MembershipRole.Role.ASSISTANT_COACH, revoked_at__isnull=True)
+        )
+        mine = [r for r in active if _is_assistant_of(coach_user, r)]
+        if any(r.membership_id == target_membership.id and r.appointed_by_id == coach_user.id for r in mine):
+            raise RoleManagementError("Ce joueur est déjà votre assistant.")
+
+        replaced = []
+        for old in mine:
+            old.revoked_by = coach_user
+            old.revoked_at = now
+            old.revoked_reason = "Remplacé par un nouvel assistant"
+            old.save()  # journal (signal)
+            replaced.append(old)
+
+        new_role = MembershipRole(
+            club=club,
+            membership=target_membership,
+            role=MembershipRole.Role.ASSISTANT_COACH,
+            appointed_by=coach_user,
+            appointed_at=now,
+        )
+        new_role.save()
+
+    for old in replaced:
+        notify_role_change(role_instance=old, event="revoked")
+    notify_role_change(role_instance=new_role, event="appointed")
+    return new_role
+
+
+def remove_assistant_coach(*, coach_user, role: "MembershipRole", reason: str = "", now=None) -> "MembershipRole":
+    """Retire l'Assistant du Coach (reserve au Coach ; le sien, ou un
+    assistant orphelin -- decision (d))."""
+
+    if role.role != MembershipRole.Role.ASSISTANT_COACH:
+        raise RoleManagementError("Ce rôle n'est pas celui d'Assistant du Coach.")
+    if not has_any_role(coach_user, {MembershipRole.Role.COACH}, club=role.club):
+        raise PermissionError("Seul le Coach du club peut retirer son assistant.")
+
+    now = now or timezone.now()
+    with transaction.atomic():
+        locked = (
+            MembershipRole.all_objects.select_for_update()
+            .select_related("appointed_by")
+            .get(pk=role.pk)
+        )
+        if locked.revoked_at is not None:
+            raise RoleManagementError("Ce rôle est déjà révoqué.")
+        if not _is_assistant_of(coach_user, locked):
+            raise PermissionError("Cet assistant a été nommé par un autre Coach du club.")
+        locked.revoked_by = coach_user
+        locked.revoked_at = now
+        locked.revoked_reason = reason
+        locked.save()
+
+    notify_role_change(role_instance=locked, event="revoked")
+    return locked
 
 
 def transfer_presidency_by_handover(
@@ -597,21 +715,21 @@ def transfer_presidency_by_handover(
         )
         if current_role is None:
             raise RoleManagementError(
-                "Aucun President actif dans ce club : impossible d'effectuer une passation directe."
+                "Aucun Président actif dans ce club : la passation directe est impossible."
             )
         if current_role.membership.user_id != getattr(outgoing_user, "id", None):
             raise PermissionError(
-                "Seul le President sortant peut designer son successeur (CDC 2.3)."
+                "Seul le Président sortant peut désigner son successeur."
             )
         if to_membership.club_id != club.id:
-            raise RoleManagementError("Le successeur doit appartenir au meme club que le President sortant.")
+            raise RoleManagementError("Le successeur doit appartenir au même club que le Président sortant.")
         if current_role.membership_id == to_membership.id:
             raise RoleManagementError(
-                "Le successeur doit etre un joueur different du President sortant."
+                "Le successeur doit être un joueur différent du Président sortant."
             )
         if to_membership.status != Membership.Status.ACTIVE:
             raise RoleManagementError(
-                "Le successeur n'est plus inscrit au club : la passation de presidence n'est pas possible (CDC 2.3)."
+                "Le successeur n'est plus inscrit au club : la passation de présidence n'est pas possible."
             )
 
         from_membership = current_role.membership
@@ -662,18 +780,18 @@ def transfer_presidency_by_superuser(
     """
 
     if not getattr(superuser, "is_superuser", False):
-        raise PermissionError("Seul un Superuser peut forcer une passation de presidence (CDC 2.3, 2.5).")
+        raise PermissionError("Seul un Superuser peut forcer une passation de présidence.")
     if not (reason or "").strip():
         raise RoleManagementError(
-            "Un motif ecrit est obligatoire pour une intervention Superuser (CDC 2.5, Ghost Mode)."
+            "Un motif écrit est obligatoire pour une intervention du Superuser."
         )
 
     club = from_membership.club
     if to_membership.club_id != club.id:
-        raise RoleManagementError("Le successeur doit appartenir au meme club que le President sortant.")
+        raise RoleManagementError("Le successeur doit appartenir au même club que le Président sortant.")
     if to_membership.status != Membership.Status.ACTIVE:
         raise RoleManagementError(
-            "Le successeur n'est plus inscrit au club : la passation de presidence n'est pas possible (CDC 2.3)."
+            "Le successeur n'est plus inscrit au club : la passation de présidence n'est pas possible."
         )
 
     now = now or timezone.now()
@@ -686,7 +804,7 @@ def transfer_presidency_by_superuser(
         )
         if current_role is None or current_role.membership_id != from_membership.id:
             raise RoleManagementError(
-                "L'adhesion indiquee comme sortante ne detient pas actuellement le role President."
+                "L'adhésion indiquée comme sortante ne détient pas actuellement le rôle de Président."
             )
 
         current_role.revoked_by = superuser
@@ -734,7 +852,7 @@ def update_board_seats_per_role(
 
     if not has_any_role(president_user, {MembershipRole.Role.PRESIDENT}, club=club_settings.club):
         raise PermissionError(
-            "Seul le President peut modifier le nombre de titulaires par role (CDC 2.4, 10.2 n24)."
+            "Seul le Président peut modifier le nombre de titulaires par rôle."
         )
 
     before = {"board_seats_per_role": club_settings.board_seats_per_role}
@@ -828,7 +946,7 @@ def _parse_position(raw: str) -> str:
         return _POSITION_ALIASES[normalized]
     except KeyError:
         raise PlayerImportError(
-            f"poste inconnu : « {raw} » (attendu Gardien, Defenseur, Milieu ou Attaquant, ou vide)."
+            f"poste inconnu : « {raw} » (attendu : Gardien, Défenseur, Milieu ou Attaquant, ou vide)."
         ) from None
 
 
@@ -853,9 +971,9 @@ def _parse_optional_jersey_number(raw: str) -> Optional[int]:
     try:
         number = int(value)
     except ValueError:
-        raise PlayerImportError(f"numero de maillot invalide : « {raw} ».") from None
+        raise PlayerImportError(f"numéro de maillot invalide : « {raw} ».") from None
     if not (1 <= number <= 99):
-        raise PlayerImportError(f"numero de maillot invalide : « {raw} » (doit etre entre 1 et 99).")
+        raise PlayerImportError(f"numéro de maillot invalide : « {raw} » (doit être entre 1 et 99).")
     return number
 
 
@@ -941,8 +1059,8 @@ def create_or_update_player(
        email, changement obligatoire, CDC 4.1) et nouvelle adhesion
        (``outcome="created"``).
 
-    Leve :class:`PlayerImportError` (message en francais) si le numero de
-    maillot fourni est deja porte par un autre joueur ACTIF de ``club``
+    Leve :class:`PlayerImportError` (message en francais) si le numéro de
+    maillot fourni est déjà porté par un autre joueur ACTIF de ``club``
     (CDC 4.1 : « Numero de maillot [...] Unique dans le club » ; controle de
     service, pas de contrainte DB -- voir le commentaire de
     ``Membership.jersey_number``), ou si le compte a deja une adhesion
@@ -966,9 +1084,23 @@ def create_or_update_player(
         )
         if conflict is not None:
             raise PlayerImportError(
-                f"le numero {jersey_number} est deja porte par "
+                f"le numéro {jersey_number} est déjà porté par "
                 f"{conflict.user.first_name} {conflict.user.last_name}."
             )
+
+    # Garde (D-A1, position prudente provisoire, question client Q1) : un
+    # compte déjà membre ACTIF ou EN ATTENTE d'un AUTRE club n'est ni enrôlé
+    # ni modifié ici -- une seconde adhésion rendrait le club actif ambigu
+    # (``resolve_active_membership``) et couperait l'accès du propriétaire
+    # légitime à tous ses clubs. Contrôle fait AVANT toute écriture sur le
+    # compte. Message neutre : ne révèle ni l'existence du compte ni
+    # l'autre club. Un compte « parti » (DEPARTED) reste repris normalement.
+    already_member_here = Membership.all_objects.filter(club=club, user__email=normalized_email).exists()
+    if not already_member_here and Membership.all_objects.filter(
+        user__email=normalized_email,
+        status__in=(Membership.Status.ACTIVE, Membership.Status.PENDING),
+    ).exclude(club=club).exists():
+        raise PlayerImportError("Ce compte ne peut pas être ajouté à ce club pour le moment.")
 
     platform_user_result = accounts_services.get_or_create_platform_user(
         email=normalized_email,
@@ -1025,21 +1157,6 @@ def create_or_update_player(
 
         return PlayerImportResult(existing_membership, "updated", user_created)
 
-    if status == Membership.Status.ACTIVE and Membership.all_objects.filter(
-        user=user, status=Membership.Status.ACTIVE
-    ).exclude(club=club).exists():
-        # Securite (pas une regle metier tranchee, voir docstring cas 2
-        # ci-dessus) : ce compte a deja une adhesion ACTIVE dans un autre
-        # club. Creer ici une seconde adhesion ACTIVE rendrait le club
-        # actif ambigu pour ce compte (apps.core.services.resolve_active_
-        # membership leve NoActiveClubError dans ce cas) et
-        # apps.core.authentication.TenantJWTAuthentication avale cette
-        # exception sans fixer de club actif : le proprietaire legitime du
-        # compte perdrait silencieusement l'acces a tous ses clubs. Message
-        # volontairement neutre : ne confirme jamais l'existence du compte
-        # sur la plateforme.
-        raise PlayerImportError("cette ligne n'a pas pu etre importee.")
-
     membership = Membership(
         club=club,
         user=user,
@@ -1059,11 +1176,10 @@ def create_or_update_player(
 
 
 _ROW_OUTCOME_MESSAGES = {
-    "created": "joueur cree.",
-    "updated": "fiche mise a jour.",
-    "created_new_club_membership": (
-        "joueur deja present sur la plateforme (autre club) : nouvelle adhesion creee dans ce club."
-    ),
+    "created": "joueur créé.",
+    "updated": "fiche mise à jour.",
+    # Message neutre : ne révèle pas si l'email existait déjà ailleurs (CDC 7.6).
+    "created_new_club_membership": "adhésion créée.",
 }
 
 
@@ -1143,7 +1259,7 @@ def _import_single_row(*, club, added_by, raw_row: dict[str, Any], now) -> Playe
     if not email:
         raise PlayerImportError("email manquant.")
     if not first_name:
-        raise PlayerImportError("prenom manquant.")
+        raise PlayerImportError("prénom manquant.")
     if not last_name:
         raise PlayerImportError("nom manquant.")
 
@@ -1182,7 +1298,7 @@ def _import_single_row(*, club, added_by, raw_row: dict[str, Any], now) -> Playe
 
 def _build_import_report_file(rows: list[ImportRowReport]) -> ContentFile:
     """Rapport CSV joint au lot d'import (CDC 4.1 : « Le rapport liste les
-    lignes importees et les lignes en echec, avec le numero de ligne et un
+    lignes importees et les lignes en echec, avec le numéro de ligne et un
     message en francais »). Pas de PDF stylise : hors perimetre de cette
     tache (voir tache 1.11, modeles/annexes)."""
 
@@ -1255,7 +1371,7 @@ def import_players_from_csv(*, club: "Club", imported_by, csv_file, now=None) ->
         text = raw_bytes.decode("utf-8-sig")
     except UnicodeDecodeError:
         raise PlayerImportError(
-            "Le fichier n'est pas encode en UTF-8. Reenregistrez-le en UTF-8 avant de l'importer."
+            "Le fichier n'est pas encodé en UTF-8. Réenregistrez-le en UTF-8 avant de l'importer."
         ) from None
     reader = csv.DictReader(io.StringIO(text))
 
@@ -1292,7 +1408,7 @@ def import_players_from_csv(*, club: "Club", imported_by, csv_file, now=None) ->
     batch = ImportBatch(
         club=club,
         import_type=ImportBatch.ImportType.PLAYERS,
-        source_file=ContentFile(raw_bytes, name=getattr(csv_file, "name", "import.csv")),
+        source_file=ContentFile(raw_bytes, name="import.csv"),
         report_file=_build_import_report_file(rows),
         imported_by=imported_by,
         imported_at=now,
@@ -1311,9 +1427,7 @@ def import_players_from_csv(*, club: "Club", imported_by, csv_file, now=None) ->
 # Consomme telle quelle l'interface exposee par `finance-engine`
 # (`apps.treasury.services.record_membership_fee_payment`/
 # `has_paid_membership_fee`/`refund_membership_fee`/
-# `get_active_membership_fee_type`) et le mecanisme generique de PIN
-# (`apps.accounts.services.require_valid_pin`) : aucune des deux n'est
-# modifiee ici. Les permissions de vue restent dans
+# `get_active_membership_fee_type`) : elle n'est pas modifiee ici. Les permissions de vue restent dans
 # `apps.clubs.permissions` (President/recruteur pour l'ajout, Tresorier/
 # adjoint pour le paiement -- matrice 2.4, confirme par `finance-engine`) ;
 # les fonctions ci-dessous revalident neanmoins le role President pour les
@@ -1369,7 +1483,7 @@ def _active_president_membership(club: "Club") -> Optional["Membership"]:
 
 def notify_sponsor(*, application: "MembershipApplication") -> None:
     """Notification au parrain (CDC 4.3 etape 4 : « Le parrain recoit une
-    notification et signe par son code PIN »), reutilisee pour le rappel a
+    notification et signe »), reutilisee pour le rappel a
     3 jours.
 
     Cablee tache 1.7. Distingue les deux evenements CDC 4.17 (« Fiche
@@ -1392,7 +1506,7 @@ def notify_sponsor(*, application: "MembershipApplication") -> None:
         title = "Rappel : fiche d'adhésion à signer"
         message = (
             f"La fiche d'adhésion de {recruit_name} attend votre réponse "
-            "depuis 3 jours. Signez-la avec votre code PIN, ou refusez en "
+            "depuis 3 jours. Signez-la, ou refusez en "
             "indiquant un motif."
         )
     else:
@@ -1400,7 +1514,7 @@ def notify_sponsor(*, application: "MembershipApplication") -> None:
         title = "Fiche d'adhésion à signer"
         message = (
             f"{recruit_name} attend votre parrainage. Ouvrez sa fiche "
-            "d'adhésion pour la signer avec votre code PIN, ou pour refuser "
+            "d'adhésion pour la signer, ou pour refuser "
             "en indiquant un motif."
         )
 
@@ -1526,17 +1640,17 @@ def add_player_with_sponsor(
 
     if sponsor is None:
         raise MembershipApplicationError(
-            "Un parrain est obligatoire pour l'ajout d'un nouveau joueur (CDC 4.3)."
+            "Un parrain est obligatoire pour ajouter un nouveau joueur."
         )
     if sponsor.club_id != club.id:
-        raise MembershipApplicationError("Le parrain doit appartenir au meme club que le nouveau joueur.")
+        raise MembershipApplicationError("Le parrain doit appartenir au même club que le nouveau joueur.")
     if sponsor.status != Membership.Status.ACTIVE:
         raise MembershipApplicationError(
-            "Le parrain doit etre un joueur Inscrit du club (CDC 4.3)."
+            "Le parrain doit être un joueur inscrit du club."
         )
     if not (position or "").strip():
         raise MembershipApplicationError(
-            "Le poste est obligatoire pour l'ajout manuel d'un joueur (CDC 4.1)."
+            "Le poste est obligatoire pour ajouter un joueur manuellement."
         )
 
     # Tout-ou-rien : `create_or_update_player` ecrit le `User`, le
@@ -1567,85 +1681,112 @@ def add_player_with_sponsor(
         )
         if result.outcome == "updated":
             raise MembershipApplicationError(
-                "Ce joueur est deja membre de ce club : utilisez sa fiche existante plutot que d'en ajouter une nouvelle."
+                "Ce joueur est déjà membre de ce club : utilisez sa fiche existante plutôt que d'en ajouter une nouvelle."
             )
 
         application = MembershipApplication(club=club, membership=result.membership)
         application.save()  # full_clean() (coherence de club)
 
+        # Decision du client du 17/11/2026 (CDC 4.3, 4.4.2 ; 10.3 n° 100) :
+        # les frais d'adhesion sont une somme a payer -- montant du unique
+        # cree avec l'adhesion, dans la meme transaction (idempotent ; aucun
+        # du si le club n'a pas de type « adhesion » actif).
+        from apps.treasury import services as treasury_services
+
+        treasury_services.ensure_membership_fee_due(result.membership, actor=added_by, now=now)
+
         return result.membership, application
 
 
+APPLICATION_DOC_TYPE_LABEL = "Fiche d'adhésion"
+
+
 def _build_membership_application_pdf(application: "MembershipApplication") -> bytes:
-    """Construit la fiche d'adhesion en PDF, aux couleurs du club (CDC 4.3
-    etape 3). Mise en page volontairement simple (canevas bas niveau, hors
-    perimetre `ui-designer`) : nom du joueur, nom du parrain, montant paye,
-    date, bandeau aux couleurs du club (``Club.primary_color``/
-    ``secondary_color``), mention de signature. N'integre jamais le logo du
-    club (``Club.logo``) dans cette version -- simplification deliberee,
-    signalee au compte rendu : un logo absent ou illisible ne doit jamais
-    faire echouer la generation de la fiche.
+    """Construit la fiche d'adhésion en PDF (CDC 4.3 étape 3), avec
+    l'en-tête commun ``apps.core.pdf.draw_header`` (logo et couleurs du club,
+    comme le reçu de trésorerie). Aucune mention de l'éditeur ni de la
+    plateforme sur le document. Un logo absent ou illisible ne fait jamais
+    échouer la génération (géré par ``draw_header``).
     """
 
-    def hex_to_rgb01(value: str, default: tuple[float, float, float]) -> tuple[float, float, float]:
-        value = (value or "").strip()
-        if not (value.startswith("#") and len(value) == 7):
-            return default
-        try:
-            return (
-                int(value[1:3], 16) / 255,
-                int(value[3:5], 16) / 255,
-                int(value[5:7], 16) / 255,
-            )
-        except ValueError:
-            return default
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    from apps.core.pdf import (
+        DARK_TEXT_RGB,
+        MARGIN,
+        MUTED_TEXT_RGB,
+        NumberedDocumentCanvas,
+        draw_header,
+        make_footer_drawer,
+        wrap_text,
+    )
 
     membership = application.membership
     club = membership.club
     sponsor = membership.sponsor
     payment = application.membership_fee_payment
 
-    primary = hex_to_rgb01(club.primary_color, (0.12, 0.16, 0.32))
-    secondary = hex_to_rgb01(club.secondary_color, (0.85, 0.85, 0.85))
+    tz = ZoneInfo("UTC")
+    club_settings = getattr(club, "settings", None)
+    try:
+        tz = ZoneInfo(club_settings.timezone) if club_settings is not None else tz
+    except (ZoneInfoNotFoundError, ValueError):
+        pass
+    generated_local = timezone.now().astimezone(tz)
+
+    doc_type_label = APPLICATION_DOC_TYPE_LABEL
+    reference = f"A-{application.pk}"
+    width, height = A4
+    content_width = width - 2 * MARGIN
 
     buffer = io.BytesIO()
-    pdf = pdf_canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
-
-    pdf.setFillColorRGB(*primary)
-    pdf.rect(0, height - 30 * mm, width, 30 * mm, fill=1, stroke=0)
-    pdf.setFillColorRGB(1, 1, 1)
-    pdf.setFont("Helvetica-Bold", 18)
-    pdf.drawString(20 * mm, height - 18 * mm, club.name or "Club")
-    pdf.setFont("Helvetica", 11)
-    pdf.drawString(20 * mm, height - 26 * mm, "Fiche d'adhesion")
-    pdf.setFillColorRGB(*secondary)
-    pdf.rect(0, height - 32 * mm, width, 2 * mm, fill=1, stroke=0)
-
-    pdf.setFillColorRGB(0, 0, 0)
-    pdf.setFont("Helvetica", 12)
-    y = height - 50 * mm
-    line_height = 8 * mm
-
-    def line(label: str, value: str) -> None:
-        nonlocal y
-        pdf.drawString(20 * mm, y, f"{label} : {value}")
-        y -= line_height
-
-    line("Joueur", f"{membership.user.first_name} {membership.user.last_name}")
-    line("Parrain", f"{sponsor.user.first_name} {sponsor.user.last_name}" if sponsor else "-")
-    if payment is not None:
-        line("Montant paye", f"{payment.amount} {payment.currency}")
-        line("Date de paiement", payment.paid_on.strftime("%d/%m/%Y"))
-    line("Date de generation", timezone.now().strftime("%d/%m/%Y %H:%M"))
-
-    y -= line_height
-    pdf.setFont("Helvetica-Oblique", 10)
-    pdf.drawString(
-        20 * mm,
-        y,
-        "Cette fiche est valable une fois signee par le parrain via son code PIN (CDC 4.3).",
+    footer_fn = make_footer_drawer(
+        club_name=club.name,
+        doc_type_label=doc_type_label,
+        reference=reference,
+        generated_at_text=f"{generated_local.strftime('%d/%m/%Y')} à {generated_local.strftime('%H:%M')}",
+        width=width,
     )
+    pdf = NumberedDocumentCanvas(buffer, pagesize=A4, pageCompression=0, footer_fn=footer_fn)
+    pdf.setTitle(doc_type_label)
+    pdf.setAuthor(club.name)
+    pdf.setCreator(club.name)
+    pdf.setSubject(doc_type_label)
+
+    y = draw_header(
+        pdf, club=club, doc_type_label=doc_type_label, reference=f"Réf. {reference}", width=width, height=height
+    )
+
+    pdf.setFillColorRGB(*DARK_TEXT_RGB)
+    pdf.setFont("Helvetica-Bold", 16)
+    pdf.drawString(MARGIN, y, doc_type_label)
+    y -= 12 * mm
+
+    label_col = 48 * mm
+
+    def field_row(label: str, value: str) -> None:
+        nonlocal y
+        pdf.setFillColorRGB(*MUTED_TEXT_RGB)
+        pdf.setFont("Helvetica", 10)
+        pdf.drawString(MARGIN, y, label)
+        pdf.setFillColorRGB(*DARK_TEXT_RGB)
+        for line in wrap_text(value, font="Helvetica", size=10, max_width=content_width - label_col):
+            pdf.setFont("Helvetica", 10)
+            pdf.drawString(MARGIN + label_col, y, line)
+            y -= 10 * 1.35
+        y -= 2 * mm
+
+    field_row("Joueur", f"{membership.user.first_name} {membership.user.last_name}")
+    field_row("Parrain", f"{sponsor.user.first_name} {sponsor.user.last_name}" if sponsor else "-")
+    if payment is not None:
+        field_row("Montant payé", f"{payment.amount} {payment.currency}")
+        field_row("Date de paiement", payment.paid_on.strftime("%d/%m/%Y"))
+    field_row("Date de génération", generated_local.strftime("%d/%m/%Y %H:%M"))
+
+    y -= 4 * mm
+    pdf.setFillColorRGB(*MUTED_TEXT_RGB)
+    pdf.setFont("Helvetica-Oblique", 10)
+    pdf.drawString(MARGIN, y, "Cette fiche est valable une fois signée par le parrain.")
 
     pdf.showPage()
     pdf.save()
@@ -1696,9 +1837,12 @@ def notify_sponsor_for_signature(*, application: "MembershipApplication", now=No
         return application
 
     now = now or timezone.now()
-    application.sponsor_notified_at = now
-    application.save()
-    notify_sponsor(application=application)
+    with transaction.atomic():
+        # Marquage et notification ensemble : un echec de la notification
+        # n'enregistre pas « notifie », le rejeu pourra donc la renvoyer.
+        application.sponsor_notified_at = now
+        application.save()
+        notify_sponsor(application=application)
     return application
 
 
@@ -1724,11 +1868,19 @@ def _maybe_activate_membership(*, application: "MembershipApplication", actor, n
     if application.sponsor_decision != MembershipApplication.SponsorDecision.SIGNED:
         return membership
 
-    before = membership_snapshot(membership)
-    membership.status = Membership.Status.ACTIVE
-    membership.save()
-    log_membership_updated(membership, before, actor=actor)
-    return membership
+    with transaction.atomic():
+        # Verrou puis re-verification du statut : deux evenements simultanes
+        # (paiement + signature) n'ecrivent qu'un seul passage « Inscrit ».
+        locked = Membership.all_objects.select_for_update().get(pk=membership.pk, club_id=membership.club_id)
+        if locked.status == Membership.Status.ACTIVE:
+            membership.status = locked.status
+            return membership
+        before = membership_snapshot(locked)
+        locked.status = Membership.Status.ACTIVE
+        locked.save()
+        log_membership_updated(locked, before, actor=actor)
+    membership.status = locked.status
+    return locked
 
 
 def record_membership_fee_payment_for_application(
@@ -1738,10 +1890,10 @@ def record_membership_fee_payment_for_application(
     method: str,
     paid_on: date,
     validated_by,
-    pin: str,
     reference: str = "",
     attachment=None,
     now=None,
+    client_uuid=None,
 ) -> "MembershipApplication":
     """Enregistre le paiement des frais d'adhesion d'un dossier de
     parrainage (CDC 4.3 etape 2), puis enchaine automatiquement les etapes
@@ -1751,7 +1903,7 @@ def record_membership_fee_payment_for_application(
     Delegue integralement la partie tresorerie a
     ``apps.treasury.services.record_membership_fee_payment`` (interface
     livree par `finance-engine`, non modifiee ici : memes exceptions,
-    meme PIN, meme chainage). Cette fonction ne fait qu'orchestrer la
+    meme chainage). Cette fonction ne fait qu'orchestrer la
     suite propre au dossier d'adhesion :
 
     1. Relie le `Payment` cree a ``application.membership_fee_payment``
@@ -1764,47 +1916,79 @@ def record_membership_fee_payment_for_application(
 
     Rien n'est ecrit cote dossier d'adhesion si
     ``record_membership_fee_payment`` leve une exception (memes garanties
-    que ce service : role/PIN verifies avant toute ecriture).
+    que ce service : role verifie avant toute ecriture).
     """
 
     from apps.treasury import services as treasury_services
 
     now = now or timezone.now()
-    payment = treasury_services.record_membership_fee_payment(
-        membership=application.membership,
-        amount=amount,
-        method=method,
-        paid_on=paid_on,
-        validated_by=validated_by,
-        pin=pin,
-        reference=reference,
-        attachment=attachment,
-        now=now,
-    )
+    membership = application.membership
 
-    before = _application_snapshot(application)
-    if application.membership_fee_payment_id is None:
-        application.membership_fee_payment = payment
-    application.save()
-    log_action(
-        actor=validated_by,
-        club=application.club,
-        action_type="clubs.membership_application.fee_payment_recorded",
-        obj=application,
-        before=before,
-        after=_application_snapshot(application),
-    )
+    # Partie atomique : dossier verrouille (filtre par club) + paiement
+    # tresorerie + rattachement + journal + passage « Inscrit ». Si l'une de
+    # ces etapes echoue, rien n'est ecrit (pas de paiement orphelin).
+    with transaction.atomic():
+        locked = MembershipApplication.all_objects.select_for_update().get(
+            pk=application.pk, club_id=application.club_id
+        )
+        locked.membership = membership
+        payment = treasury_services.record_membership_fee_payment(
+            membership=membership,
+            amount=amount,
+            method=method,
+            paid_on=paid_on,
+            validated_by=validated_by,
+            reference=reference,
+            attachment=attachment,
+            now=now,
+            client_uuid=client_uuid,
+        )
+        is_replay = bool(getattr(payment, "idempotent_replay", False))
 
-    if application.generated_at is None and treasury_services.has_paid_membership_fee(application.membership):
-        application = generate_membership_application_pdf(application=application, actor=validated_by, now=now)
-        application = notify_sponsor_for_signature(application=application, now=now)
+        # Creation : toujours journaliser. Rejeu : rattrapage seulement si le
+        # paiement n'est pas encore rattache (reprise d'un etat partiel), sans
+        # second journal sinon.
+        if not is_replay or locked.membership_fee_payment_id is None:
+            before = _application_snapshot(locked)
+            if locked.membership_fee_payment_id is None:
+                locked.membership_fee_payment = payment
+            locked.save()
+            log_action(
+                actor=validated_by,
+                club=locked.club,
+                action_type="clubs.membership_application.fee_payment_recorded",
+                obj=locked,
+                before=before,
+                after=_application_snapshot(locked),
+            )
 
-    _maybe_activate_membership(application=application, actor=validated_by, now=now)
+        application = locked
+        _maybe_activate_membership(application=application, actor=validated_by, now=now)
+
+    if is_replay:
+        application.idempotent_replay = True
+
+    # Etapes 3-4 apres validation de la transaction, tolerantes : un echec
+    # (PDF, notification) ne remet pas en cause le paiement ; un rejeu avec la
+    # meme cle les relance (idempotentes : fiche deja generee et parrain deja
+    # notifie ne sont jamais refaits).
+    if treasury_services.has_paid_membership_fee(application.membership):
+        try:
+            if application.generated_at is None:
+                application = generate_membership_application_pdf(
+                    application=application, actor=validated_by, now=now
+                )
+            application = notify_sponsor_for_signature(application=application, now=now)
+        except Exception:  # noqa: BLE001 - rattrapable par rejeu
+            logger.exception(
+                "Echec apres paiement des frais d'adhesion (dossier %s) : a relancer par rejeu.",
+                application.pk,
+            )
     return application
 
 
-def sign_sponsor_application(*, application: "MembershipApplication", sponsor_user, pin: str, now=None) -> "MembershipApplication":
-    """Signature du parrain par code PIN (CDC 4.3 etape 4 ; 7.2). Reserve
+def sign_sponsor_application(*, application: "MembershipApplication", sponsor_user, now=None) -> "MembershipApplication":
+    """Signature du parrain (CDC 4.3 etape 4). Reserve
     au parrain reellement designe pour ce dossier -- verifie ici en plus
     du controle de vue (``IsActiveClubMember`` seulement : c'est cette
     fonction qui verifie l'identite precise, comme une action « P » de la
@@ -1822,47 +2006,54 @@ def sign_sponsor_application(*, application: "MembershipApplication", sponsor_us
     jamais au parrain seul (CDC 4.3, corrige en revue independante tache
     1.4bt).
 
-    Propage telle quelle toute exception PIN
-    (``apps.accounts.services.PinNotSetError``/``InvalidPinError``/
-    ``PinLockedError``) sans modifier le dossier (le PIN est verifie avant
-    toute ecriture, meme principe que ``record_membership_fee_payment``).
     """
 
     membership = application.membership
     sponsor = membership.sponsor
     if sponsor is None or sponsor.user_id != getattr(sponsor_user, "id", None):
-        raise PermissionError("Seul le parrain designe pour ce dossier peut le signer (CDC 4.3).")
+        raise PermissionError("Seul le parrain désigné pour ce dossier peut le signer.")
     if application.sponsor_decision == MembershipApplication.SponsorDecision.SIGNED:
-        raise MembershipApplicationError("Ce dossier d'adhesion est deja signe.")
+        raise MembershipApplicationError("Ce dossier d'adhésion est déjà signé.")
     if application.sponsor_decision == MembershipApplication.SponsorDecision.REFUSED:
         raise MembershipApplicationError(
-            "Ce dossier a deja ete refuse par ce parrain ; seule une reassignation par le "
-            "President peut rouvrir la signature (CDC 4.3)."
+            "Ce dossier a déjà été refusé par ce parrain ; seul le Président peut "
+            "désigner un autre parrain pour rouvrir la signature."
         )
     if application.generated_at is None:
         raise MembershipApplicationError(
-            "La fiche d'adhesion n'a pas encore ete generee (les frais d'adhesion doivent d'abord etre payes)."
+            "La fiche d'adhésion n'a pas encore été générée : les frais d'adhésion doivent d'abord être payés."
         )
 
-    accounts_services.require_valid_pin(user=sponsor_user, pin=pin)
-
     now = now or timezone.now()
-    before = _application_snapshot(application)
-    application.sponsor_decision = MembershipApplication.SponsorDecision.SIGNED
-    application.sponsor_signed_by = sponsor_user
-    application.sponsor_signed_at = now
-    application.resolved_at = now
-    application.save()
-    log_action(
-        actor=sponsor_user,
-        club=application.club,
-        action_type="clubs.membership_application.sponsor_signed",
-        obj=application,
-        before=before,
-        after=_application_snapshot(application),
-    )
+    with transaction.atomic():
+        # Verrou puis re-verification : un second envoi concurrent ou rejoue
+        # est rejete, une seule signature est journalisee.
+        application = MembershipApplication.all_objects.select_for_update().get(
+            pk=application.pk, club_id=application.club_id
+        )
+        if application.sponsor_decision != MembershipApplication.SponsorDecision.PENDING:
+            raise MembershipApplicationError(
+                "Ce dossier d'adhésion est déjà signé."
+                if application.sponsor_decision == MembershipApplication.SponsorDecision.SIGNED
+                else "Ce dossier a déjà été refusé par ce parrain ; seul le Président peut "
+                "désigner un autre parrain pour rouvrir la signature."
+            )
+        before = _application_snapshot(application)
+        application.sponsor_decision = MembershipApplication.SponsorDecision.SIGNED
+        application.sponsor_signed_by = sponsor_user
+        application.sponsor_signed_at = now
+        application.resolved_at = now
+        application.save()
+        log_action(
+            actor=sponsor_user,
+            club=application.club,
+            action_type="clubs.membership_application.sponsor_signed",
+            obj=application,
+            before=before,
+            after=_application_snapshot(application),
+        )
 
-    _maybe_activate_membership(application=application, actor=sponsor_user, now=now)
+        _maybe_activate_membership(application=application, actor=sponsor_user, now=now)
     return application
 
 
@@ -1882,28 +2073,36 @@ def refuse_sponsor_application(
     membership = application.membership
     sponsor = membership.sponsor
     if sponsor is None or sponsor.user_id != getattr(sponsor_user, "id", None):
-        raise PermissionError("Seul le parrain designe pour ce dossier peut le refuser (CDC 4.3).")
+        raise PermissionError("Seul le parrain désigné pour ce dossier peut le refuser.")
     if application.sponsor_decision != MembershipApplication.SponsorDecision.PENDING:
-        raise MembershipApplicationError("Ce dossier n'est plus en attente de decision du parrain.")
+        raise MembershipApplicationError("Ce dossier n'est plus en attente de décision du parrain.")
 
     cleaned_reason = (reason or "").strip()
     if not cleaned_reason:
         raise MembershipApplicationError(
-            "Un motif est obligatoire pour refuser de parrainer un joueur (CDC 4.3)."
+            "Un motif est obligatoire pour refuser de parrainer un joueur."
         )
 
-    before = _application_snapshot(application)
-    application.sponsor_decision = MembershipApplication.SponsorDecision.REFUSED
-    application.sponsor_refused_reason = cleaned_reason
-    application.save()
-    log_action(
-        actor=sponsor_user,
-        club=application.club,
-        action_type="clubs.membership_application.sponsor_refused",
-        obj=application,
-        before=before,
-        after=_application_snapshot(application),
-    )
+    with transaction.atomic():
+        # Verrou puis re-verification : signature et refus simultanes ne
+        # s'ecrasent pas, une seule decision est enregistree.
+        application = MembershipApplication.all_objects.select_for_update().get(
+            pk=application.pk, club_id=application.club_id
+        )
+        if application.sponsor_decision != MembershipApplication.SponsorDecision.PENDING:
+            raise MembershipApplicationError("Ce dossier n'est plus en attente de décision du parrain.")
+        before = _application_snapshot(application)
+        application.sponsor_decision = MembershipApplication.SponsorDecision.REFUSED
+        application.sponsor_refused_reason = cleaned_reason
+        application.save()
+        log_action(
+            actor=sponsor_user,
+            club=application.club,
+            action_type="clubs.membership_application.sponsor_refused",
+            obj=application,
+            before=before,
+            after=_application_snapshot(application),
+        )
 
     notify_president_of_sponsor_refusal(application=application)
     return application
@@ -1924,19 +2123,19 @@ def reassign_sponsor(
 
     club = application.club
     if not has_any_role(president_user, {MembershipRole.Role.PRESIDENT}, club=club):
-        raise PermissionError("Seul le President peut designer un nouveau parrain (CDC 4.3).")
+        raise PermissionError("Seul le Président peut désigner un nouveau parrain.")
     if application.sponsor_decision != MembershipApplication.SponsorDecision.REFUSED:
         raise MembershipApplicationError(
-            "Un nouveau parrain ne peut etre designe qu'apres un refus du parrain actuel (CDC 4.3)."
+            "Un nouveau parrain ne peut être désigné qu'après un refus du parrain actuel."
         )
     if new_sponsor.club_id != club.id:
-        raise MembershipApplicationError("Le nouveau parrain doit appartenir a ce club.")
+        raise MembershipApplicationError("Le nouveau parrain doit appartenir à ce club.")
     if new_sponsor.status != Membership.Status.ACTIVE:
-        raise MembershipApplicationError("Le nouveau parrain doit etre un joueur Inscrit du club (CDC 4.3).")
+        raise MembershipApplicationError("Le nouveau parrain doit être un joueur inscrit du club.")
 
     membership = application.membership
     if new_sponsor.id == membership.id:
-        raise MembershipApplicationError("Un joueur ne peut pas etre son propre parrain.")
+        raise MembershipApplicationError("Un joueur ne peut pas être son propre parrain.")
 
     now = now or timezone.now()
 
@@ -1971,7 +2170,6 @@ def cancel_membership_application(
     president_user,
     reason: str,
     disposition: str,
-    pin: str,
     now=None,
 ) -> "MembershipApplication":
     """Le President annule l'adhesion apres un refus du parrain (CDC 4.3,
@@ -1985,11 +2183,9 @@ def cancel_membership_application(
     chaque cas, jamais une regle automatique :
 
     - ``FeeDisposition.REFUNDED`` : appelle
-      ``apps.treasury.services.refund_membership_fee`` (PIN deja verifie
-      par ce service) -- leve :class:`MembershipApplicationError` s'il
+      ``apps.treasury.services.refund_membership_fee`` -- leve :class:`MembershipApplicationError` s'il
       n'y a en realite aucun paiement a rembourser ;
-    - ``FeeDisposition.KEPT`` : aucune ecriture financiere ; le PIN est
-      neanmoins exige ici (action sensible, CDC 7.2 « annulation »).
+    - ``FeeDisposition.KEPT`` : aucune ecriture financiere.
 
     Reserve au President (matrice 2.4, revalide en defense en profondeur).
     Revalide aussi, en defense en profondeur, l'invariant que ce chemin
@@ -2005,57 +2201,75 @@ def cancel_membership_application(
 
     club = application.club
     if not has_any_role(president_user, {MembershipRole.Role.PRESIDENT}, club=club):
-        raise PermissionError("Seul le President peut annuler une adhesion (CDC 4.3).")
-    if application.sponsor_decision != MembershipApplication.SponsorDecision.REFUSED:
-        raise MembershipApplicationError(
-            "Une adhesion ne peut etre annulee par ce chemin qu'apres un refus du parrain (CDC 4.3)."
-        )
-    if application.membership.status == Membership.Status.ACTIVE:
-        raise MembershipApplicationError(
-            "Une adhesion deja Inscrite ne peut pas etre annulee par ce chemin (CDC 4.3)."
-        )
-
+        raise PermissionError("Seul le Président peut annuler une adhésion.")
     cleaned_reason = (reason or "").strip()
     if not cleaned_reason:
-        raise MembershipApplicationError("Un motif est obligatoire pour annuler une adhesion.")
+        raise MembershipApplicationError("Un motif est obligatoire pour annuler une adhésion.")
     if disposition not in MembershipApplication.FeeDisposition.values:
         raise MembershipApplicationError(
-            "Le sort du paiement doit etre precise : rembourse ou conserve (CDC 4.3)."
+            "Précisez le sort du paiement : remboursé ou conservé."
         )
 
     now = now or timezone.now()
-    membership = application.membership
 
-    if disposition == MembershipApplication.FeeDisposition.REFUNDED:
-        if not treasury_services.has_paid_membership_fee(membership):
-            raise MembershipApplicationError("Aucun paiement de frais d'adhesion a rembourser pour ce joueur.")
-        treasury_services.refund_membership_fee(
-            membership=membership, reason=cleaned_reason, president=president_user, pin=pin, now=now
+    with transaction.atomic():
+        # Verrou sur le dossier : deux annulations concurrentes (ou rejouees)
+        # ne peuvent pas rembourser/journaliser deux fois. Toutes les
+        # verifications d'etat sont refaites APRES le verrou.
+        application = MembershipApplication.all_objects.select_for_update().get(
+            pk=application.pk, club_id=club.id
         )
-    else:
-        accounts_services.require_valid_pin(user=president_user, pin=pin)
+        if application.cancelled_by_id is not None:
+            raise MembershipApplicationError("Cette adhésion a déjà été annulée.")
+        if application.sponsor_decision != MembershipApplication.SponsorDecision.REFUSED:
+            raise MembershipApplicationError(
+                "Une adhésion ne peut être annulée ici qu'après un refus du parrain."
+            )
+        membership = Membership.all_objects.get(pk=application.membership_id, club_id=club.id)
+        if membership.status == Membership.Status.ACTIVE:
+            raise MembershipApplicationError(
+                "Une adhésion déjà validée (joueur inscrit) ne peut pas être annulée ici."
+            )
 
-    before_membership = membership_snapshot(membership)
-    membership.status = Membership.Status.DEPARTED
-    membership.left_on = now.date()
-    membership.left_reason = Membership.LeftReason.CANCELLED
-    membership.left_by = president_user
-    membership.save()  # journalise automatiquement (signal, tache 1.6 -- log_membership_departed)
+        fee_paid = treasury_services.has_paid_membership_fee(membership)
+        if disposition == MembershipApplication.FeeDisposition.REFUNDED:
+            if not fee_paid:
+                raise MembershipApplicationError("Aucun paiement de frais d'adhésion à rembourser pour ce joueur.")
+            treasury_services.refund_membership_fee(
+                membership=membership, reason=cleaned_reason, president=president_user, now=now
+            )
+        # Decision du client du 17/11/2026 : le du d'adhesion d'une adhesion
+        # annulee est neutralise par une ecriture d'annulation (jamais
+        # supprime), sauf si les frais entierement payes sont conserves par
+        # le club (le du reste alors couvert par le paiement, solde a 0).
+        if disposition == MembershipApplication.FeeDisposition.REFUNDED or not fee_paid:
+            treasury_services.cancel_membership_fee_due(
+                membership=membership,
+                reason=f"Adhésion annulée : {cleaned_reason}",
+                cancelled_by=president_user,
+                now=now,
+            )
 
-    before = _application_snapshot(application)
-    application.cancelled_by = president_user
-    application.cancelled_reason = cleaned_reason
-    application.membership_fee_disposition = disposition
-    application.resolved_at = now
-    application.save()
-    log_action(
-        actor=president_user,
-        club=club,
-        action_type="clubs.membership_application.cancelled",
-        obj=application,
-        before=before,
-        after=_application_snapshot(application),
-    )
+        membership.status = Membership.Status.DEPARTED
+        membership.left_on = now.date()
+        membership.left_reason = Membership.LeftReason.CANCELLED
+        membership.left_by = president_user
+        membership.save()  # journalise automatiquement (signal, tache 1.6 -- log_membership_departed)
+
+        before = _application_snapshot(application)
+        application.cancelled_by = president_user
+        application.cancelled_reason = cleaned_reason
+        application.membership_fee_disposition = disposition
+        application.resolved_at = now
+        application.save()
+        log_action(
+            actor=president_user,
+            club=club,
+            action_type="clubs.membership_application.cancelled",
+            obj=application,
+            before=before,
+            after=_application_snapshot(application),
+        )
 
     return application
 
@@ -2157,7 +2371,13 @@ def _club_identity_snapshot(club: "Club", club_settings: "ClubSettings") -> dict
         "currency": club_settings.currency,
         "timezone": club_settings.timezone,
         "payment_link_url": club_settings.payment_link_url,
+        "debt_tolerance_days": club_settings.debt_tolerance_days,
     }
+
+
+#: Bornes de la tolérance de dette (jours) configurable par le club (CDC 4.4.2).
+DEBT_TOLERANCE_MIN_DAYS = 0
+DEBT_TOLERANCE_MAX_DAYS = 90
 
 
 def update_club_identity(
@@ -2173,6 +2393,7 @@ def update_club_identity(
     currency=_NOT_PROVIDED,
     timezone=_NOT_PROVIDED,
     payment_link_url=_NOT_PROVIDED,
+    debt_tolerance_days=_NOT_PROVIDED,
 ) -> "Club":
     """Modifie l'identite du club (nom, logo, couleurs, ville, pays,
     devise, fuseau, lien de paiement -- club-comite-bureau.md §4.1).
@@ -2191,14 +2412,22 @@ def update_club_identity(
     """
 
     if not has_any_role(president_user, {MembershipRole.Role.PRESIDENT}, club=club):
-        raise PermissionError("Reserve au President du club (CDC 2.4, 3.5).")
+        raise PermissionError("Réservé au Président du club.")
 
     club_settings = club.settings
     before = {**_club_identity_snapshot(club, club_settings), "logo": bool(club.logo)}
 
     if currency is not _NOT_PROVIDED and currency != club_settings.currency and club_has_payments(club):
         raise ClubIdentityError(
-            "La devise ne peut plus etre changee : des paiements existent deja pour ce club."
+            "La devise ne peut plus être changée : des paiements existent déjà pour ce club."
+        )
+
+    if debt_tolerance_days is not _NOT_PROVIDED and not (
+        DEBT_TOLERANCE_MIN_DAYS <= debt_tolerance_days <= DEBT_TOLERANCE_MAX_DAYS
+    ):
+        raise ClubIdentityError(
+            f"La tolérance de dette doit être comprise entre {DEBT_TOLERANCE_MIN_DAYS} "
+            f"et {DEBT_TOLERANCE_MAX_DAYS} jours."
         )
 
     if name is not _NOT_PROVIDED:
@@ -2221,6 +2450,8 @@ def update_club_identity(
         club_settings.timezone = timezone
     if payment_link_url is not _NOT_PROVIDED:
         club_settings.payment_link_url = payment_link_url
+    if debt_tolerance_days is not _NOT_PROVIDED:
+        club_settings.debt_tolerance_days = debt_tolerance_days
     club_settings.updated_by = president_user
     club_settings.full_clean()
     club_settings.save()

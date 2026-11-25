@@ -9,8 +9,7 @@ import {
   type MovementInput,
   type MovementType,
 } from "../../api/logistics";
-import { getExpenses } from "../../api/treasury";
-import { searchActiveClubPlayers } from "../../api/clubs";
+import { getMyProfile, searchActiveClubPlayers } from "../../api/clubs";
 import type { MatchListItem } from "../../api/sport";
 import {
   ArticleSearch,
@@ -22,6 +21,7 @@ import {
   type ArticleSearchResult,
   type PlayerSearchResult,
 } from "../../design-system";
+import { getMaterialAccess } from "./materielAccess";
 import { formatDateFr, todayIsoDate } from "./format";
 import { IN_MOVEMENT_TYPE_OPTIONS, MOVEMENT_TYPES_WITH_MATCH, MOVEMENT_TYPES_WITH_MEMBERSHIP, OUT_MOVEMENT_TYPE_OPTIONS } from "./materielLabels";
 import { SearchCombobox } from "./SearchCombobox";
@@ -63,13 +63,11 @@ export function RecordMovementModal({ open, lockedArticle, onClose, onSaved }: R
   // aucun accès à `/treasury/expenses/` dans la matrice 2.4. Un refus 403
   // masque le champ « Dépense liée » avec une explication plutôt que de
   // laisser une recherche qui échouera systématiquement.
-  const expenseAccessQuery = useQuery({
-    queryKey: ["logistics", "expense-access-probe"],
-    queryFn: () => getExpenses({ limit: 1 }),
-    enabled: open,
-    retry: false,
-  });
-  const expenseAccessDenied = expenseAccessQuery.isError && (expenseAccessQuery.error as ApiError)?.status === 403;
+  // L'accès est déduit du rôle (materielAccess.ts) : aucune requête n'est
+  // envoyée pour sonder un refus.
+  const profileQuery = useQuery({ queryKey: ["profile", "me"], queryFn: getMyProfile, staleTime: 60_000 });
+  const expenseAccessDenied =
+    !profileQuery.isLoading && !getMaterialAccess(profileQuery.data?.roles).canSeeExpenseDetail;
 
   useEffect(() => {
     if (!open) return;

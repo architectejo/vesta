@@ -38,6 +38,7 @@ urlpatterns = [
     path("api/v1/mercato/", include("apps.mercato.urls")),
     path("api/v1/assemblies/", include("apps.assemblies.urls")),
     path("api/v1/social/", include("apps.social.urls")),
+    path("api/v1/audit/", include("apps.audit.urls")),
 ]
 
 if settings.DEBUG:

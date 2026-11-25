@@ -1,4 +1,5 @@
-"""Paiement des frais d'adhesion (CDC 4.3 etape 2, 4.4.4, 4.6, 7.2 ; tache 1.4b).
+"""Paiement des frais d'adhesion (CDC 4.3 etape 2, 4.4.4, 4.6 ; tache 1.4b ;
+plus de PIN depuis le 11/10/2026, CLAUDE.md regle 7).
 
 Interface exposee a `backend-dev` : `record_membership_fee_payment` et
 `has_paid_membership_fee` (invariant 10, cote tresorerie).
@@ -12,12 +13,11 @@ from decimal import Decimal
 import pytest
 from django.utils import timezone
 
-from apps.accounts.services import InvalidPinError, PinLockedError, PinNotSetError
 from apps.audit.models import AuditLog
 from apps.clubs.models import Membership
 from apps.treasury import services
 from apps.treasury.models import LedgerChainState, Payment, Transaction
-from apps.treasury.tests.conftest import PIN, WRONG_PIN, make_member, past_day
+from apps.treasury.tests.conftest import PIN, WRONG_PIN, assert_logged_by, make_member, past_day
 from apps.treasury.tests.factories import ContributionTypeFactory
 
 from apps.accounts.tests.factories import SuperuserFactory  # noqa: E402
@@ -25,14 +25,13 @@ from apps.accounts.tests.factories import SuperuserFactory  # noqa: E402
 pytestmark = pytest.mark.django_db
 
 
-def pay(ctx, *, membership=None, amount="5", method="cash", paid_on=None, validated_by=None, pin=PIN, **extra):
+def pay(ctx, *, membership=None, amount="5", method="cash", paid_on=None, validated_by=None, **extra):
     return services.record_membership_fee_payment(
         membership=membership or ctx.pending_member,
         amount=amount,
         method=method,
         paid_on=paid_on or past_day(),
         validated_by=(validated_by or ctx.treasurer).user,
-        pin=pin,
         **extra,
     )
 
@@ -160,33 +159,15 @@ class TestRefus:
         assert not Payment.all_objects.exists()
         assert not Transaction.all_objects.exists()
 
-    def test_pin_incorrect_refuse_et_compteur_d_echecs_conserve(self, ctx, fee_type):
-        with pytest.raises(InvalidPinError):
-            pay(ctx, pin=WRONG_PIN)
-        self._assert_nothing_written()
-        ctx.treasurer.user.refresh_from_db()
-        # L'echec PIN n'est pas annule par un rollback de transaction.
-        assert ctx.treasurer.user.pin_failed_attempts == 1
-
-    def test_pin_bloque_apres_trois_echecs(self, ctx, fee_type):
-        for _ in range(2):
-            with pytest.raises(InvalidPinError):
-                pay(ctx, pin=WRONG_PIN)
-        with pytest.raises(PinLockedError):
-            pay(ctx, pin=WRONG_PIN)
-        with pytest.raises(PinLockedError):
-            pay(ctx, pin=PIN)
-        self._assert_nothing_written()
-
-    def test_pin_non_defini(self, ctx, fee_type):
+    def test_tresorier_adjoint_sans_pin_defini_enregistre(self, ctx, fee_type):
         from apps.clubs.models import MembershipRole
 
         ctx.club.settings.board_seats_per_role = 2
         ctx.club.settings.save()
-        no_pin = make_member(ctx.club, roles=[MembershipRole.Role.ASSISTANT_TREASURER], pin=None)
-        with pytest.raises(PinNotSetError):
-            pay(ctx, validated_by=no_pin)
-        self._assert_nothing_written()
+        no_pin = make_member(ctx.club, roles=[MembershipRole.Role.ASSISTANT_TREASURER])
+        payment = pay(ctx, validated_by=no_pin)
+        assert payment.validated_by_id == no_pin.user_id
+        assert_logged_by("treasury.payment.validated", no_pin.user, club=ctx.club)
 
     @pytest.mark.parametrize("who", ["president", "vice_president", "player", "pending_member"])
     def test_seuls_tresorier_et_adjoint_valident_matrice_2_4(self, ctx, fee_type, who):
@@ -232,12 +213,6 @@ class TestRefus:
         )
         payment = pay(ctx, validated_by=ctx.treasurer)
         assert payment.validated_by_id == ctx.treasurer.user_id
-
-    def test_refus_role_avant_toute_verification_du_pin(self, ctx, fee_type):
-        with pytest.raises(services.TreasuryPermissionError):
-            pay(ctx, validated_by=ctx.player, pin=WRONG_PIN)
-        ctx.player.user.refresh_from_db()
-        assert ctx.player.user.pin_failed_attempts == 0
 
     def test_tresorier_d_un_autre_club_refuse(self, ctx, fee_type, other_ctx, other_fee_type):
         with pytest.raises(services.TreasuryPermissionError):
@@ -307,7 +282,6 @@ class TestRefus:
             membership=other_ctx.pending_member,
             reason="Refus du parrain",
             president=other_ctx.president.user,
-            pin=PIN,
         )
         assert len(reversals) == 1
         assert services.has_paid_membership_fee(other_ctx.pending_member) is False
@@ -354,30 +328,25 @@ class TestMontantSuperieurAuDu:
         assert services.verify_chain(ctx.club).ok is True
 
 
-class TestGarantiesPin:
-    """Le PIN est verifie a nouveau a **chaque** appel (CDC 7.2) : aucun etat
-    de verification ne doit pouvoir « fuiter » d'un paiement au suivant."""
+class TestSansPin:
+    """Decision client du 11/10/2026 (CLAUDE.md regle 7) : plus de PIN. Le
+    parametre ``pin`` n'existe plus ; la tracabilite repose sur l'auteur
+    journalise."""
 
-    def test_pin_est_un_parametre_obligatoire_de_chaque_appel(self, ctx, fee_type):
-        # Garantie structurelle : `pin` n'a pas de valeur par defaut dans la
-        # signature du service, donc aucun appel ne peut « omettre » le PIN
-        # pour reutiliser implicitement une verification precedente.
+    def test_le_parametre_pin_n_existe_plus(self, ctx, fee_type):
         import inspect
 
         signature = inspect.signature(services.record_membership_fee_payment)
-        assert signature.parameters["pin"].default is inspect.Parameter.empty
+        assert "pin" not in signature.parameters
 
-    def test_reussite_d_un_premier_paiement_ne_dispense_pas_le_pin_du_second(self, ctx, fee_type):
+    def test_paiement_reussit_sans_pin_et_journalise_l_auteur(self, ctx, fee_type):
+        payment = pay(ctx, validated_by=ctx.assistant_treasurer)
+        assert payment.validated_by_id == ctx.assistant_treasurer.user_id
+        assert_logged_by("treasury.payment.validated", ctx.assistant_treasurer.user, club=ctx.club)
+
+    def test_paiements_successifs_additionnes_sans_compteur_pin(self, ctx, fee_type):
         first = pay(ctx, amount="2")
-        assert first.pk is not None
-        # Un deuxieme paiement avec un mauvais PIN echoue independamment du
-        # premier paiement reussi : aucune verification n'est memorisee.
-        with pytest.raises(InvalidPinError):
-            pay(ctx, amount="3", pin=WRONG_PIN)
-        assert services.has_paid_membership_fee(ctx.pending_member) is False
-        ctx.treasurer.user.refresh_from_db()
-        assert ctx.treasurer.user.pin_failed_attempts == 1
-        # Avec le bon PIN, le second paiement passe normalement.
         second = pay(ctx, amount="3")
-        assert second.pk is not None
+        assert first.pk and second.pk
         assert services.has_paid_membership_fee(ctx.pending_member) is True
+        ctx.treasurer.user.refresh_from_db()

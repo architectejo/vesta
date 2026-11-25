@@ -1,8 +1,9 @@
 import { useState } from "react";
+import { ApiError } from "../../api/client";
 import { reportPost } from "../../api/social";
 import { Modal, TextArea, useToast } from "../../design-system";
 
-/** Modale « Signaler la publication » (A5.3, 10.2 n° 23). Pas de code PIN. */
+/** Modale « Signaler la publication » (A5.3, 10.2 n° 23). */
 export function ReportPostModal({
   open,
   postId,
@@ -25,8 +26,13 @@ export function ReportPostModal({
       showToast("Merci. La publication a été signalée à l'équipe Vesta.");
       onReported();
       onClose();
-    } catch {
-      showToast("Connexion impossible. Vérifiez votre réseau et réessayez.");
+    } catch (error) {
+      // Message de l'API si elle en fournit un ; message réseau seulement hors connexion (status 0).
+      showToast(
+        error instanceof ApiError && error.status !== 0 && error.detail
+          ? error.detail
+          : "Connexion impossible. Vérifiez votre réseau et réessayez.",
+      );
     } finally {
       setSubmitting(false);
     }

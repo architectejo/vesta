@@ -2,7 +2,8 @@ import { useState } from "react";
 import { deactivateAccount, superuserResetPassword } from "../../api/auth";
 import type { AccountSearchResult } from "../../api/auth";
 import { ApiError } from "../../api/client";
-import { Banner, Button, ConfirmDialog, IconButton, Modal, TextArea, useToast } from "../../design-system";
+import { Banner, Button, ConfirmDialog, IconButton, IconMore, Modal, TextArea, useToast } from "../../design-system";
+import { useClosingState } from "../../hooks/useClosingState";
 import { TemporaryPasswordModal } from "./TemporaryPasswordModal";
 
 /**
@@ -22,6 +23,8 @@ export function UserDetailModal({
 }) {
   const { showToast } = useToast();
   const [menuOpen, setMenuOpen] = useState(false);
+  const { mounted: menuMounted, dataState: menuDataState, onAnimationEnd: onMenuAnimationEnd } =
+    useClosingState(menuOpen, 200);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
@@ -92,10 +95,14 @@ export function UserDetailModal({
               <IconButton
                 aria-label="Ouvrir le menu"
                 onClick={() => setMenuOpen((v) => !v)}
-                icon={<span aria-hidden="true">…</span>}
+                icon={<IconMore aria-hidden="true" className="h-5 w-5" />}
               />
-              {menuOpen ? (
-                <div className="absolute bottom-full left-0 mb-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated">
+              {menuMounted ? (
+                <div
+                  data-state={menuDataState}
+                  onAnimationEnd={onMenuAnimationEnd}
+                  className="vesta-anim-menu vesta-anim-menu--bottom-left absolute bottom-full left-0 mb-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated"
+                >
                   {account.is_active ? (
                     <button
                       type="button"

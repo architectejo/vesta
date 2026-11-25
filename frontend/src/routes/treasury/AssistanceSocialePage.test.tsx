@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MyProfile } from "../../api/clubs";
 import { ApiError } from "../../api/client";
@@ -70,6 +71,7 @@ function makeCapabilities(overrides: Partial<TreasuryCapabilities> = {}): {
       can_submit_expenses: false,
       can_validate_expenses: true,
       can_derogate: true,
+      can_decide_payment_reversal: false,
       can_upload_expense_receipts: false,
       can_manage_assistance_scales: false,
       can_process_assistance_requests: true,
@@ -112,11 +114,13 @@ function listResponse(results: SocialAssistanceRequest[]): SocialAssistanceReque
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
+    <MemoryRouter>
     <QueryClientProvider client={client}>
       <ToastProvider>
         <AssistanceSocialePage />
       </ToastProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 

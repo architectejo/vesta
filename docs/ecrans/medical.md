@@ -135,7 +135,7 @@ Ouverte depuis : la page Médical (Médecin, Coach), la vue « Bilan » d'une s�
 
 Aide, en haut du corps (encadré neutre, icône cadenas) : « Le Médecin sera prévenu et complétera la fiche. Après l'envoi, seuls le Médecin et le joueur pourront relire ces informations. Le staff verra seulement l'aptitude et la date de retour. »
 
-Pied : « Annuler » / « Déclarer ». Pas de code PIN (hors liste 7.2).
+Pied : « Annuler » / « Déclarer ».
 
 Succès : toast « Blessure déclarée. Le Médecin a été prévenu. » Le joueur devient inapte (calcul de l'API). S'il était réparti en équipe A/B, il rejoint « Ne peuvent pas jouer » (`sport-seance.md` §3.2).
 
@@ -266,7 +266,7 @@ Pied : « Annuler » / « Ajouter ». Succès : « Suivi ajouté. » Une entrée
 
 Titre « Déclarer le retour de {prénom} ? ». Texte : « Il redeviendra apte et pourra de nouveau être composé. » Champ `DateField` « Date du retour » (défaut aujourd'hui, ni future, ni avant la blessure). Si une autre blessure du joueur est en cours : texte remplacé par « Cette blessure sera close, mais {prénom} restera inapte : une autre blessure est en cours. »
 
-Boutons « Annuler » / « Déclarer le retour » (bouton `primary`, pas `danger` : l'action n'est pas destructrice). Pas de code PIN (hors liste 7.2). Succès : « Retour déclaré. {Prénom} est de nouveau apte. » (ou « Retour déclaré. {Prénom} reste inapte. »). Pour mettre le joueur « Apte avec restriction » ensuite : « Modifier l'aptitude ».
+Boutons « Annuler » / « Déclarer le retour » (bouton `primary`, pas `danger` : l'action n'est pas destructrice). Succès : « Retour déclaré. {Prénom} est de nouveau apte. » (ou « Retour déclaré. {Prénom} reste inapte. »). Pour mettre le joueur « Apte avec restriction » ensuite : « Modifier l'aptitude ».
 
 ### 4.10 Côté joueur : « Ma fiche de santé » (depuis « Mon profil », carte Santé)
 
@@ -297,7 +297,7 @@ Pied :
 - non accordé : « Annuler » / « Autoriser ». Succès : « Autorisation accordée au Président. »
 - accordé : « Fermer » / « Révoquer » (`danger`) → `ConfirmDialog` « Révoquer l'autorisation ? » — « La révocation prend effet immédiatement : le Président ne pourra plus consulter votre dossier médical complet. » — « Annuler » / « Révoquer ». Succès : « Autorisation révoquée. »
 
-Pas de code PIN. Pas de mise à jour optimiste : l'état affiché est toujours celui du serveur.
+Pas de mise à jour optimiste : l'état affiché est toujours celui du serveur.
 
 **Nouveau — état effectif** : la carte Santé et cette modale affichent l'état **calculé** par la règle `can_president_read_full_record` (schéma §6 : accordé, non révoqué, **et postérieur à la dernière passation**). Après une passation, le joueur ne doit jamais lire « Accordé » alors que le nouveau Président n'a pas accès.
 

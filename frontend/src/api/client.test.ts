@@ -51,6 +51,26 @@ describe("apiRequest", () => {
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer access-1");
   });
 
+  it("refuse un statut 200 qui n'est pas du JSON (page index.html renvoyée par le repli du .htaccess)", async () => {
+    // Non-régression (production, 13/10/2026) : sans VITE_API_URL, la connexion
+    // appelait /api/v1 sur le domaine de l'interface ; le .htaccess répondait
+    // par index.html en 200, pris à tort pour une connexion réussie.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("<!doctype html><html><body>Vesta</body></html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        }),
+      ),
+    );
+
+    await expect(apiPost("/auth/login/", { email: "a@b.cd", password: "x" }, { auth: false })).rejects.toMatchObject({
+      status: 502,
+      detail: "Le serveur a répondu de façon inattendue. Réessayez, ou contactez le support si cela continue.",
+    });
+  });
+
   it("renouvelle le jeton une fois sur un 401 puis rejoue la requête", async () => {
     const fetchMock = vi
       .fn()

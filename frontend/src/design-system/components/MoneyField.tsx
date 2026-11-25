@@ -8,7 +8,8 @@ export interface MoneyFieldProps extends Omit<TextFieldProps, "type" | "rightSlo
 /**
  * Champ de montant (docs/lot0/design-system.md §3.1 « MoneyField ») :
  * devise du club affichée en suffixe, clavier numérique, séparateur
- * décimal virgule accepté (converti en point pour l'API).
+ * décimal virgule ou point accepté ; la saisie est conservée telle quelle
+ * (l'appelant l'envoie via `toApiAmount`).
  */
 export function MoneyField({ currency, onChange, ...rest }: MoneyFieldProps) {
   return (
@@ -16,7 +17,7 @@ export function MoneyField({ currency, onChange, ...rest }: MoneyFieldProps) {
       {...rest}
       type="text"
       inputMode="decimal"
-      onChange={(value) => onChange(value.replace(/,/g, "."))}
+      onChange={onChange}
       rightSlot={<span className="text-sm text-text-muted">{currency}</span>}
     />
   );

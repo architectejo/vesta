@@ -39,9 +39,21 @@ export function formatMonthYear(period: string): string {
   return new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric" }).format(date);
 }
 
-/** Normalise la virgule décimale saisie en point avant l'envoi à l'API. */
+/**
+ * Utilitaire unique des champs de montant : la saisie est envoyée à l'API
+ * telle quelle (espaces de bord retirés), la virgule décimale étant seulement
+ * remplacée par un point. Jamais de float JS ; l'API valide le format
+ * (2 décimales max, pas de « 1e3 » ni de « 1 000 ») et ses messages sont
+ * affichés tels quels.
+ */
 export function toApiAmount(value: string): string {
-  return value.replace(/,/g, ".");
+  return value.trim().replace(/,/g, ".");
+}
+
+/** Vrai si la saisie est un nombre strictement positif (virgule ou point). */
+export function isPositiveAmount(value: string): boolean {
+  const normalized = toApiAmount(value);
+  return normalized !== "" && Number(normalized) > 0;
 }
 
 /** Date du jour au format « YYYY-MM-DD » (fuseau local du navigateur). */

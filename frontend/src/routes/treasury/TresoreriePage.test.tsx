@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MyProfile } from "../../api/clubs";
 import { ApiError } from "../../api/client";
@@ -97,6 +98,7 @@ function makeCapabilities(overrides: Partial<TreasuryCapabilities> = {}): {
       can_submit_expenses: false,
       can_validate_expenses: false,
       can_derogate: false,
+      can_decide_payment_reversal: false,
       can_upload_expense_receipts: false,
       can_manage_assistance_scales: false,
       can_process_assistance_requests: false,
@@ -109,13 +111,15 @@ function makeCapabilities(overrides: Partial<TreasuryCapabilities> = {}): {
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
+    <MemoryRouter>
     <QueryClientProvider client={client}>
       <AuthProvider>
         <ToastProvider>
           <TresoreriePage />
         </ToastProvider>
       </AuthProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -189,7 +193,7 @@ describe("TresoreriePage", () => {
 
       vi.mocked(getContributionTypes).mockResolvedValue([makeType()]);
       await userEvent.setup().click(screen.getByRole("button", { name: "Réessayer" }));
-      expect(await screen.findByText("Mensuelle catégorie A")).toBeInTheDocument();
+      expect(await screen.findByText("Mensuelle catégorie A", { selector: "p" })).toBeInTheDocument();
     });
   });
 
@@ -218,7 +222,7 @@ describe("TresoreriePage", () => {
       ]);
       renderPage();
 
-      expect(await screen.findByText("Mensuelle catégorie A")).toBeInTheDocument();
+      expect(await screen.findByText("Mensuelle catégorie A", { selector: "p" })).toBeInTheDocument();
       expect(screen.getByText("Obligatoire · Mensuelle · 20.00")).toBeInTheDocument();
       expect(screen.getByText("Libre · Ponctuelle")).toBeInTheDocument();
       expect(screen.getByText("Obligatoire · Annuelle · 5.00")).toBeInTheDocument();
@@ -243,7 +247,7 @@ describe("TresoreriePage", () => {
         vi.mocked(getContributionTypes).mockResolvedValue([makeType()]);
         renderPage();
 
-        expect(await screen.findByText("Mensuelle catégorie A")).toBeInTheDocument();
+        expect(await screen.findByText("Mensuelle catégorie A", { selector: "p" })).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Nouveau type" })).not.toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Archiver" })).not.toBeInTheDocument();
       },
@@ -272,7 +276,7 @@ describe("TresoreriePage", () => {
 
       const dialog = await screen.findByRole("dialog", { name: "Modifier le type de cotisation" });
       expect(within(dialog).getByLabelText("Nom")).toHaveValue("Adhésion");
-      expect(within(dialog).getByLabelText("Montant")).toHaveValue(5);
+      expect(within(dialog).getByLabelText("Montant")).toHaveValue("5.00");
       expect(within(dialog).getByLabelText("Périodicité")).toHaveValue("annual");
       expect(within(dialog).getByLabelText("Jour d'échéance")).toHaveValue(15);
     });
@@ -425,6 +429,7 @@ describe("TresoreriePage", () => {
       expect(await screen.findByRole("heading", { name: "Trésorerie" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Enregistrer un paiement" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Caisse Terrain Express" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Importer des cotisations" })).not.toBeInTheDocument();
     });
 
     it("affiche les deux actions et ouvre « Enregistrer un paiement » pour un Trésorier", async () => {
@@ -440,6 +445,24 @@ describe("TresoreriePage", () => {
 
       await user.click(recordButton);
       expect(await screen.findByRole("dialog", { name: "Enregistrer un paiement" })).toBeInTheDocument();
+    });
+
+    it("affiche « Importer des cotisations » selon la capacité et l'ouvre", async () => {
+      vi.mocked(getMyProfile).mockResolvedValue(makeProfile("treasurer"));
+      vi.mocked(getTreasuryCapabilities).mockResolvedValue(
+        makeCapabilities({ can_write: true, can_record_payments: true }),
+      );
+      const user = userEvent.setup();
+      renderPage();
+
+      await user.click(await screen.findByRole("button", { name: "Importer des cotisations" }));
+      expect(await screen.findByRole("dialog", { name: /Importer/ })).toBeInTheDocument();
+    });
+
+    it("affiche la section « Membres du club »", async () => {
+      vi.mocked(getMyProfile).mockResolvedValue(makeProfile("vice_president"));
+      renderPage();
+      expect(await screen.findByRole("region", { name: "Membres du club" })).toBeInTheDocument();
     });
   });
 });

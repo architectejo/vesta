@@ -20,9 +20,3 @@ export async function pickPlayerFromSearch(
   await expect(option).toBeVisible({ timeout: 8_000 });
   await option.click();
 }
-
-/** Saisit le code PIN dans la boîte modale `PinPrompt` du design system. */
-export async function fillPin(page: Page, pin: string): Promise<void> {
-  const input = page.getByLabel("Votre code PIN");
-  await input.fill(pin);
-}

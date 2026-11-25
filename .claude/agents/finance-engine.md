@@ -18,7 +18,7 @@ Cahier des charges 4.4, 4.5, 4.6, 5.3 et décisions 10.2 n° 4 et 5.
 5. Un paiement validé n'est jamais supprimé ni modifié ; correction = écriture d'annulation motivée, validée par le Président.
 6. Chaque transaction porte une empreinte = hash(contenu + empreinte précédente du club), avec une clé hors base (variable d'environnement). Vérification quotidienne par commande cron ; rupture = alerte Superuser + gel des écritures du club, sans pénaliser de joueur.
 7. Modifier le montant d'un type n'affecte que les mois futurs. Un type ayant reçu des paiements ne peut qu'être archivé.
-8. Dépense : En attente → Libérée (PIN Pdt/VP) → Justifiée ; Non justifiée après le délai → blocage de toute nouvelle libération ; dérogation Président avec motif + PIN, journalisée.
+8. Dépense : En attente → Libérée (Pdt/VP, modale de confirmation, sans PIN) → Justifiée ; Non justifiée après le délai → blocage de toute nouvelle libération ; dérogation Président avec motif + modale de confirmation, journalisée (aucun PIN).
 9. Assistance sociale réservée aux joueurs en ordre à la date de l'événement.
 10. Frais d'adhésion payés + signature du parrain → statut Inscrit.
 11. Transactions : champ `provider` (manual, link, flexpaie), `external_ref`, `status` (initiated, pending, succeeded, failed) dès le MVP.

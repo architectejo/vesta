@@ -320,7 +320,7 @@ d'adhésion au club B (ils concernent le club B, pas l'émetteur).
 
 ### 3.1 Rôle du document
 
-PV rédigé dans l'application, signé par code PIN par le Président et le
+PV rédigé dans l'application, signé électroniquement par le Président et le
 Vice-président, ou par le Président seul si le poste de Vice-président est
 vacant, la vacance étant actée dans le PV (CDC 4.15, 7.2, 10.2 n° 28). Généré
 dès que le PV est complet (`assemblees-page-ag.md` §4.6).
@@ -363,10 +363,10 @@ dès que le PV est complet (`assemblees-page-ag.md` §4.6).
 │ [mention de vacance, si le cas se présente]                      │
 │ ┌ Président ───────────────┐  ┌ Vice-président ──────────┐       │
 │ │ {Prénom} {Nom}           │  │ {Prénom} {Nom}           │       │
-│ │ Signé par code PIN par … │  │ Signé par code PIN par … │       │
+│ │ Signé électroniquement   │  │ Signé électroniquement   │       │
 │ └──────────────────────────┘  └──────────────────────────┘       │
-│ Signatures électroniques par code PIN personnel, enregistrées    │
-│ dans le journal d'activité du club.                              │
+│ Signatures électroniques confirmées dans l'application,          │
+│ enregistrées dans le journal d'activité du club.                 │
 │                                                                  │
 │ (pied de page commun, §1.5 : « Page 1 sur N »)                   │
 └──────────────────────────────────────────────────────────────────┘
@@ -392,10 +392,10 @@ mêmes mots.
 | 10 | Point sans vote saisi | `Aucune décision saisie.` (9 pt italique ; texte de l'état vide de l'écran §5) | absence de `Decision` pour ce point |
 | 11 | Section `Texte du procès-verbal` | texte intégral, 10 pt ; une ligne vide = nouveau paragraphe (4 pt d'espace) ; ligne commençant par `- ` ou `• ` = puce ; `1. ` conservé tel quel | `Minutes.content` |
 | 12 | Section `Signatures` : mention de vacance (si `vp_vacant_at_signature`) | `Le poste de Vice-président étant vacant à la date de la signature, le procès-verbal est signé par le Président seul.` (écran §4.2, texte servi par l'API ; 9 pt italique, au-dessus des cadres) | `Minutes.vp_vacant_at_signature` |
-| 13 | Cadre `Président` | ligne 1 : `{Prénom} {Nom}` (10 pt gras) ; ligne 2 : `Signé par code PIN par {Prénom} {Nom}, Président, le {JJ/MM/AAAA} à {HH:MM}` (écran §4.6, 9 pt) | `president_signed_by`, `president_signed_at` |
+| 13 | Cadre `Président` | ligne 1 : `{Prénom} {Nom}` (10 pt gras) ; ligne 2 : `Signé électroniquement par {Prénom} {Nom}, Président, le {JJ/MM/AAAA} à {HH:MM}` (écran §4.6, 9 pt) | `president_signed_by`, `president_signed_at` |
 | 14 | Cadre `Vice-président`, cas signé | idem avec `Vice-président` | `vp_signed_by`, `vp_signed_at` |
 | 15 | Cadre `Vice-président`, cas vacant | ligne 1 : badge gris `Poste vacant` (libellé de l'écran §4.2) ; ligne 2 : `Signature non requise.` (9 pt) | `vp_vacant_at_signature` vrai et `vp_signed_by` vide |
-| 16 | Mention sous les cadres (9 pt italique) | `Signatures électroniques par code PIN personnel, enregistrées dans le journal d'activité du club.` | CDC 7.2, 5.2 |
+| 16 | Mention sous les cadres (9 pt italique) | `Signatures électroniques confirmées dans l'application, enregistrées dans le journal d'activité du club.` | CDC 7.2, 5.2 |
 
 ### 3.4 Zone de signature : les deux cas de figure (10.2 n° 28)
 
@@ -431,8 +431,8 @@ fois le libellé validé.
 
 Règles communes aux trois cas :
 - Aucune fausse signature manuscrite, aucune image de signature, aucun trait
-  « Signature : ________ » : la signature est électronique (PIN). Le texte
-  « Signé par code PIN par… » est la signature affichée.
+  « Signature : ________ » : la signature est électronique (confirmation dans l'application). Le texte
+  « Signé électroniquement par… » est la signature affichée.
 - Le bloc « Signatures » (titre, mention éventuelle, cadres, mention finale)
   **ne se coupe jamais** entre deux pages : s'il ne tient pas en bas de page, il
   passe entier à la page suivante.
@@ -468,6 +468,22 @@ technique, non lisible hors de l'application), toute mention de l'Éditeur.
 ## 4. Reçu (partie 1, Lot 2) — à rédiger
 
 Non livré à la tâche 2.9. Doit reprendre le §1 sans le modifier.
+
+**Générateur provisoire (non validé par le client ni par `ui-designer`).**
+`backend/apps/treasury/services.py`, `_build_payment_receipt_pdf`, appelé par
+`issue_payment_receipt`. En attendant le gabarit de cette section, le contenu
+retenu est le plus restreint possible, dans le cadre commun du §1 :
+
+| | |
+| --- | --- |
+| Déclencheur | Validation du paiement (CDC 4.4.4), après enregistrement effectif en base. Paiements de l'import historique (CDC 4.4.8) : émis par la commande `issue_missing_payment_receipts` (cron), pas pendant l'import. |
+| Identité portée | Club du paiement : logo, nom, ville, pays, couleurs (§1.3) |
+| Référence | `R-{numéro de reçu}` (numéro séquentiel par club) |
+| Titre | `Reçu de paiement n° {n}`, sous-titre `Émis le {date longue} à {HH:MM}` |
+| Contenu | Section « Joueur » : nom du joueur concerné. Section « Paiement » : cotisation, montant (devise du paiement, format §1.7), mode, référence (si renseignée), date du paiement, date et heure de validation. Mention finale 9 pt italique : `Ce reçu est émis automatiquement par {Club} à la validation du paiement. Il ne comporte pas de signature manuscrite.` |
+| Exclus | Solde, statut « En ordre », répartition par mois (projection recalculable, alors que le reçu est figé), nom du valideur, contacts, toute mention de l'Éditeur ou de « Vesta » |
+| Fichier stocké | `recu-c{club}-{numéro sur 6 chiffres}.pdf`, stockage privé ; servi par `PaymentReceiptDownloadView` sous le nom `paiement-{id}-recu.pdf` |
+| Figé | Jamais régénéré ni remplacé (verrou dans `Payment.save`) ; conservé en cas d'annulation du paiement. Un paiement annulé qui n'a jamais eu de reçu n'en reçoit pas après coup. |
 
 ## 5. Fiche d'adhésion (partie 1, Lot 2) — à rédiger
 
@@ -559,11 +575,11 @@ lignes (même écart mineur que le PV, § ci-dessus).
 | 0.4 et 4.14 étape 4 : quitus = absence de dette, généré automatiquement | §2.1, §2.3 |
 | 10.2 n° 30 : déblocage automatique | §2.1 (même document, quel que soit le déclencheur) |
 | 10.2 n° 34 : aucun frais de sortie | §2.3 ligne 14 |
-| 4.15 : PV rédigé, signé par PIN, généré en PDF ; présences, quorum, votes, décisions | §3 |
+| 4.15 : PV rédigé, signé électroniquement, généré en PDF ; présences, quorum, votes, décisions | §3 |
 | 10.2 n° 28 : Président seul si VP vacant, vacance actée dans le PV | §3.3 lignes 12 et 15, §3.4 cas 2 |
 | 10.2 n° 18 : quorum en pourcentage | §3.3 ligne 5 |
 | 10.2 n° 24 : plusieurs titulaires | §3.4 |
-| 7.2 : signature par PIN | §3.4 |
+| 7.2 : signature électronique confirmée dans l'application | §3.4 |
 | 6.7, CLAUDE.md §2.10 : fichiers privés par vue authentifiée | §1.9 |
 | CLAUDE.md §2.11, 7.5 : pas de donnée médicale, minimisation | §1.8, §2.3 (exclus), §3.6 |
 | CLAUDE.md §2.19 : Éditeur absent des documents générés | §1.5, §1.8 |
@@ -574,8 +590,9 @@ lignes (même écart mineur que le PV, § ci-dessus).
 1. **Partie 1 de l'annexe D absente.** La tâche 2.9 (reçu, fiche d'adhésion)
    n'a laissé aucun livrable dans `docs/`. Le cadre commun (§1) est donc posé
    ici pour la première fois ; les sections 4 et 5 restent à rédiger par
-   `ui-designer`, et le générateur de la fiche d'adhésion à aligner. Aucun
-   générateur de reçu n'a été trouvé dans le code. À replanifier.
+   `ui-designer`, et le générateur de la fiche d'adhésion à aligner. Un générateur
+   de reçu provisoire existe désormais (§4) ; son contenu reste à valider.
+   À replanifier.
 2. **Mention « IMARA TECH Group » sur les PDF — non tranchée par le CDC.** Le
    CDC 3.5 place la phrase dans le « footer, sur toutes les pages » et dit que
    c'est « la seule mention de l'Éditeur dans l'application », sans parler des

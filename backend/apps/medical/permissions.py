@@ -6,18 +6,18 @@ meme convention que ``apps.sport.permissions``/``apps.clubs.permissions``.
 
 from __future__ import annotations
 
-from apps.clubs.models import MembershipRole
+from apps.clubs.models import COACHING_STAFF_ROLES, MembershipRole
 from apps.core.roles import HasClubRole
 
 # Page « Medical » (medical.md §3) : Medecin, Coach, President (barre
 # laterale, design-system §3.9).
 MEDICAL_PAGE_ROLES = frozenset(
-    {MembershipRole.Role.DOCTOR, MembershipRole.Role.COACH, MembershipRole.Role.PRESIDENT}
+    {MembershipRole.Role.DOCTOR, *COACHING_STAFF_ROLES, MembershipRole.Role.PRESIDENT}
 )
 
 # Declaration d'une blessure (CDC 4.12 etape 1) : Coach, Capitaine, Medecin.
 INJURY_REPORTER_ROLES = frozenset(
-    {MembershipRole.Role.COACH, MembershipRole.Role.CAPTAIN, MembershipRole.Role.DOCTOR}
+    {*COACHING_STAFF_ROLES, MembershipRole.Role.CAPTAIN, MembershipRole.Role.DOCTOR}
 )
 
 # Ecriture clinique (fiche, bilan, suivi, aptitude) : Medecin uniquement
@@ -26,15 +26,18 @@ DOCTOR_ONLY_ROLES = frozenset({MembershipRole.Role.DOCTOR})
 
 
 class CanAccessMedicalPage(HasClubRole):
+    ghost_readable = False
     required_roles = MEDICAL_PAGE_ROLES
-    message = "Reserve au Medecin, au Coach et au President (CDC 2.4, 4.12)."
+    message = "Réservé au Médecin, au Coach (ou son assistant) et au Président."
 
 
 class CanReportInjury(HasClubRole):
+    ghost_readable = False
     required_roles = INJURY_REPORTER_ROLES
-    message = "Reserve au Coach, au Capitaine et au Medecin (CDC 2.4, 4.12)."
+    message = "Réservé au Coach (ou son assistant), au Capitaine et au Médecin."
 
 
 class IsClubDoctor(HasClubRole):
+    ghost_readable = False
     required_roles = DOCTOR_ONLY_ROLES
-    message = "Reserve au Medecin / referent sante (CDC 2.4, 4.12)."
+    message = "Réservé au Médecin / référent santé."

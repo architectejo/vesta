@@ -38,9 +38,9 @@ Ce document décrit des structures de données, pas du code. Noms d'entités et 
 
 Toute création, modification ou suppression d'une entité de ce document appelle le service d'audit (`apps/audit`), qui écrit une entrée `AuditLog` (définie en §12) avec l'état avant/après en JSON. **Exception stricte** : le contenu médical (`HealthRecord`, `Injury`, `InjuryFollowUp`) n'est jamais copié dans le journal — seule la métadonnée « fiche consultée/modifiée » est tracée (CDC 5.2 « Médical »).
 
-### 1.4 Code PIN (règle n° 7, CDC 7.2)
+### 1.4 Confirmation des actions sensibles (règle n° 7, CDC 7.2) — modifié le 11/10/2026 (10.3 n° 177)
 
-Aucun PIN n'est stocké dans les entités métier. Les actions qui l'exigent (signature parrain, signature PV) enregistrent l'acteur (`*_by`) et l'horodatage (`*_at`) ; ces deux champs attestent qu'une vérification PIN a réussi, le service refusant l'écriture sinon. Le hash du PIN lui-même vit sur `User` (§3.1).
+Le code PIN est supprimé. Les actions sensibles (signature parrain, signature PV) se valident par un bouton puis une modale de confirmation, et enregistrent l'acteur (`*_by`) et l'horodatage (`*_at`) ; l'action est journalisée (auteur, date, objet), le service refusant l'écriture sans acteur autorisé. Les anciens champs PIN de `User` ont été supprimés le 13/11/2026.
 
 ### 1.5 Fichiers (CDC 6.7)
 
@@ -109,9 +109,6 @@ Un compte par personne, indépendant de tout club. Un Superuser n'a **jamais** d
 | `photo` | Image | facultatif à la création, demandée à la première connexion | Avatar ; initiales affichées à défaut. |
 | `is_superuser` | Booléen | obligatoire, défaut faux | Compte Éditeur ; ne peut avoir aucun `Membership`. |
 | `is_active` | Booléen | obligatoire, défaut vrai | Désactivation par un Superuser (CDC 4.18). |
-| `pin_hash` | Text | facultatif | Défini à la première action sensible (CDC 7.2). |
-| `pin_failed_attempts` | Entier ≥ 0 | défaut 0 | |
-| `pin_locked_until` | DateTime | facultatif | Blocage 30 min après 3 échecs. |
 | `failed_login_attempts` | Entier ≥ 0 | défaut 0 | |
 | `login_locked_until` | DateTime | facultatif | Blocage 15 min après 5 échecs (CDC 7.1). |
 | `card_publication_consent_at` | DateTime | facultatif | Consentement à la publication de la carte de joueur (CDC 7.5) — voir décision D2. |
@@ -168,7 +165,7 @@ Un par `Membership` nouvellement créé (hors import CSV historique, qui passe d
 | `generated_at` | DateTime | facultatif | |
 | `sponsor_notified_at` | DateTime | facultatif | |
 | `sponsor_decision` | Enum(`pending`, `signed`, `refused`) | obligatoire, défaut `pending` | |
-| `sponsor_signed_by` | FK → User | requis si `signed` ; doit être `membership.sponsor.user` | Signature par code PIN (règle n° 7). |
+| `sponsor_signed_by` | FK → User | requis si `signed` ; doit être `membership.sponsor.user` | Signature par bouton + modale de confirmation (règle n° 7). |
 | `sponsor_signed_at` | DateTime | requis si `signed` | |
 | `sponsor_refused_reason` | Text | requis si `refused` | |
 | `sponsor_reminder_sent_at` | DateTime | facultatif | Rappel après 3 jours sans réponse. |
@@ -187,8 +184,8 @@ Un joueur peut cumuler plusieurs rôles ; ses droits sont l'union des droits de 
 | `id` | id | PK | |
 | `club` | FK → Club | obligatoire, indexé | **Isolation multi-tenant** (dénormalisé pour les contraintes d'unicité ci-dessous). |
 | `membership` | FK → Membership | obligatoire ; même club | |
-| `role` | Enum(`president`, `vice_president`, `sports_director`, `treasurer`, `assistant_treasurer`, `steward`, `coach`, `captain`, `doctor`, `player_recruiter`) | obligatoire | Le rôle « Joueur » n'est pas stocké : il est implicite à tout `Membership`. |
-| `appointed_by` | FK → User | obligatoire | Président (bureau, Médecin, Coach), Coach (Capitaine). |
+| `role` | Enum(`president`, `vice_president`, `sports_director`, `treasurer`, `assistant_treasurer`, `steward`, `secretary`, `coach`, `assistant_coach`, `captain`, `doctor`, `player_recruiter`) | obligatoire | Le rôle « Joueur » n'est pas stocké : il est implicite à tout `Membership`. |
+| `appointed_by` | FK → User | obligatoire | Président (bureau, Médecin, Coach), Coach (Capitaine, **Assistant du Coach** : `appointed_by` = le Coach qui l'a nommé, conservé même si ce Coach perd son rôle ; CDC 10.3 n° 179). |
 | `appointed_at` | DateTime | obligatoire | |
 | `revoked_by` | FK → User | facultatif | |
 | `revoked_at` | DateTime | facultatif | |
@@ -196,7 +193,7 @@ Un joueur peut cumuler plusieurs rôles ; ses droits sont l'union des droits de 
 
 Contraintes :
 
-- **Au plus `ClubSettings.board_seats_per_role` titulaires actifs par `(club, role)`** (10.2 n° 3 et n° 24, défaut 1, configurable par club) pour tous les rôles sauf `player_recruiter` et `president`, qui ont une règle spécifique ci-dessous. `player_recruiter` (joueurs autorisés à ajouter des joueurs, CDC 2.3) admet toujours plusieurs titulaires actifs, quel que soit `board_seats_per_role`.
+- **Au plus `ClubSettings.board_seats_per_role` titulaires actifs par `(club, role)`** (10.2 n° 3 et n° 24, défaut 1, configurable par club) pour tous les rôles sauf `player_recruiter` et `president`, qui ont une règle spécifique ci-dessous. `player_recruiter` (joueurs autorisés à ajouter des joueurs, CDC 2.3) admet toujours plusieurs titulaires actifs, quel que soit `board_seats_per_role`. `assistant_coach` est lui aussi exclu de ce plafond : sa règle est **un seul assistant actif par Coach** (CDC 10.3 n° 179), appliquée par `apps.clubs.services.appoint_assistant_coach` (transaction atomique, verrou sur l'adhésion du Coach et sur les assistants actifs du club) qui révoque l'assistant précédent du même Coach (ou orphelin, dont le nominateur n'est plus Coach) avant de créer le nouveau. Aucune révocation automatique quand le Coach change.
 - `role = president` : toujours **exactement un** titulaire actif par club (« un club a toujours un et un seul Président », CDC 2.3). La révocation d'un Président n'est possible que via `PresidencyTransfer` (3.5), jamais par une révocation simple.
 - Toute nomination ou révocation appelle le service d'audit **et** crée une `Notification` au joueur concerné (CDC 2.3).
 
@@ -800,8 +797,8 @@ Unique `(assembly, membership)`. Le quorum n'est **pas stocké** : calculé (`Σ
 | `assembly` | FK → Assembly | PK, 1-1 | |
 | `club` | FK → Club | obligatoire, indexé | **Isolation multi-tenant.** |
 | `content` | Text | obligatoire | Rédigé dans l'application. |
-| `president_signed_by`, `president_signed_at` | FK → User, DateTime | requis pour générer le PDF | Signature PIN, rôle Président (règle n° 7). |
-| `vp_signed_by`, `vp_signed_at` | FK → User, DateTime | **facultatifs si le poste de VP est vacant** (10.2 n° 28) | Signature PIN, rôle Vice-président. |
+| `president_signed_by`, `president_signed_at` | FK → User, DateTime | requis pour générer le PDF | Signature par bouton + confirmation, rôle Président (règle n° 7). |
+| `vp_signed_by`, `vp_signed_at` | FK → User, DateTime | **facultatifs si le poste de VP est vacant** (10.2 n° 28) | Signature par bouton + confirmation, rôle Vice-président. |
 | `vp_vacant_at_signature` | Booléen | obligatoire, défaut faux | Renseigné à vrai si le PV est généré sans VP en poste ; le PDF mentionne alors la vacance (10.2 n° 28). |
 | `pdf_file` | File | facultatif | Généré dès la signature du Président si `vp_vacant_at_signature` est vrai ; sinon une fois les deux signatures réunies. |
 | `generated_at` | DateTime | facultatif | |

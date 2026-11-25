@@ -193,6 +193,30 @@ def test_only_coach_updates_a_match(ctx):
     assert allowed.data["opponent"] == "FC Rival"
 
 
+def test_update_match_refuses_own_club_as_opponent_or_challenge_target(ctx):
+    match = MatchFactory(club=ctx.club, event__club=ctx.club, event__season=ctx.season)
+    url = reverse("sport:match-detail", args=[match.pk])
+    payload = {
+        "event_date": match.event.event_date.isoformat(),
+        "kickoff_time": "16:30:00",
+        "match_type": Match.MatchType.CHAMPIONSHIP,
+        "venue": Match.Venue.AWAY,
+    }
+
+    own_opponent = client_for(ctx.coach.user).patch(url, {**payload, "opponent_club_id": ctx.club.pk})
+    assert own_opponent.status_code == status.HTTP_400_BAD_REQUEST
+    assert own_opponent.data["detail"] == "Votre propre club ne peut pas être l'adversaire d'un match."
+
+    own_challenge = client_for(ctx.coach.user).patch(
+        url, {**payload, "opponent_name": "FC Rival", "challenge_to_club_id": ctx.club.pk}
+    )
+    assert own_challenge.status_code == status.HTTP_400_BAD_REQUEST
+    assert own_challenge.data["detail"] == "Vous ne pouvez pas lancer un défi à votre propre club."
+
+    match.refresh_from_db()
+    assert match.opponent_club_id is None
+
+
 def test_update_match_ignores_opponent_change_for_an_accepted_challenge(ctx, other_ctx):
     match = MatchFactory(
         club=ctx.club,
@@ -270,3 +294,60 @@ def test_match_attendance_mark_requires_a_recorder_role(ctx):
         url, {"membership_id": ctx.player.pk, "arrived_at": _match_arrived(match, 14, 30).isoformat()}
     )
     assert denied.status_code == status.HTTP_403_FORBIDDEN
+
+
+def test_unpublished_composition_is_staff_only(ctx):
+    """D3 : brouillon de composition invisible hors staff tant que non publié (CDC 4.8)."""
+    match = MatchFactory(club=ctx.club, event__club=ctx.club, event__season=ctx.season)
+    add = client_for(ctx.coach.user).post(
+        reverse("sport:match-composition-add", args=[match.pk]),
+        {"membership_id": ctx.player.pk, "role": "starter", "position": "midfielder", "jersey_number": 10},
+    )
+    assert add.status_code == status.HTTP_201_CREATED, add.data
+    url = reverse("sport:match-detail", args=[match.pk])
+
+    assert len(client_for(ctx.coach.user).get(url).data["starters"]) == 1
+    for viewer in (ctx.player, ctx.captain):
+        data = client_for(viewer.user).get(url).data
+        assert data["starters"] == [] and data["substitutes"] == []
+
+    match.is_composition_published = True
+    match.save()
+    assert len(client_for(ctx.player.user).get(url).data["starters"]) == 1
+
+
+def test_create_match_without_opponent_is_400_and_leaves_no_orphan_event(ctx):
+    from apps.sport.models import Event
+
+    payload = _match_payload()
+    payload.pop("opponent_name")
+    before = Event.all_objects.filter(club=ctx.club).count()
+    response = client_for(ctx.coach.user).post(reverse("sport:match-list"), payload)
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "adverse" in response.data["detail"]
+    assert Event.all_objects.filter(club=ctx.club).count() == before
+
+
+def test_composition_refuses_a_jersey_number_already_taken(ctx):
+    match = MatchFactory(club=ctx.club, event__club=ctx.club, event__season=ctx.season)
+    url = reverse("sport:match-composition-add", args=[match.pk])
+    client = client_for(ctx.coach.user)
+    assert client.post(
+        url, {"membership_id": ctx.player.pk, "role": "starter", "position": "midfielder", "jersey_number": 10}
+    ).status_code == status.HTTP_201_CREATED
+    dup = client.post(
+        url, {"membership_id": ctx.captain.pk, "role": "starter", "position": "midfielder", "jersey_number": 10}
+    )
+    assert dup.status_code == status.HTTP_400_BAD_REQUEST
+    assert "déjà attribué" in dup.data["detail"]
+
+
+def test_goal_refuses_assist_equal_to_scorer(ctx):
+    match = MatchFactory(club=ctx.club, event__club=ctx.club, event__season=ctx.season)
+    client_for(ctx.coach.user).post(reverse("sport:match-score", args=[match.pk]), {"score_home": 1, "score_away": 0})
+    response = client_for(ctx.coach.user).post(
+        reverse("sport:match-goal-list", args=[match.pk]),
+        {"scorer_membership_id": ctx.player.pk, "assist_membership_id": ctx.player.pk, "minute": 5},
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "différent du buteur" in response.data["detail"]

@@ -1,14 +1,14 @@
 # Écran — Trésorerie : modale « Importer les cotisations »
 
-Sources : CDC 4.4.8 (import historique), 4.4.3 (répartition), 4.4.7 (grille), 7.2 (code PIN), 3 (charte), matrice 2.4. Tâche 2.6 du Lot 2.
-Composants : `Modal`, `PinPrompt`, `Banner`, `Button`, `SegmentedControl`, `StatusBadge`, `DataTable` (`variant="grid"` et liste), `EmptyState`, `Loader`, `useToast` (design system) ; `formatPinError` (`routes/treasury/pinErrors.ts`).
-Référence de famille : `routes/club/ImportPlayersModal.tsx` (sélection de fichier, rapport) et `routes/treasury/RecordPaymentModal.tsx` (enchaînement modale → `PinPrompt`).
+Sources : CDC 4.4.8 (import historique), 4.4.3 (répartition), 4.4.7 (grille), 7.2 (actions sensibles : confirmation explicite), 3 (charte), matrice 2.4. Tâche 2.6 du Lot 2.
+Composants : `Modal`, `ConfirmDialog` (variante action sensible), `Banner`, `Button`, `SegmentedControl`, `StatusBadge`, `DataTable` (`variant="grid"` et liste), `EmptyState`, `Loader`, `useToast` (design system).
+Référence de famille : `routes/club/ImportPlayersModal.tsx` (sélection de fichier, rapport) et `routes/treasury/RecordPaymentModal.tsx` (enchaînement modale → modale de confirmation).
 
 **Aucune règle métier dans l'interface.** L'analyse du fichier, la recherche des joueurs, les paiements et montants dus prévus, les soldes : tout vient de l'API. L'écran affiche le rapport tel quel.
 
 ## 1. Objectif
 
-Permettre au Trésorier de reprendre lui-même, avec son code PIN, les fichiers de suivi du club (une ligne par joueur, une colonne par mois) pour un type de cotisation et une année, après avoir vu l'aperçu de la grille résultante.
+Permettre au Trésorier de reprendre lui-même, lui-même, après confirmation, les fichiers de suivi du club (une ligne par joueur, une colonne par mois) pour un type de cotisation et une année, après avoir vu l'aperçu de la grille résultante.
 
 ## 2. Accès
 
@@ -77,7 +77,7 @@ Ordre du corps :
 Pied : « Annuler » / **« Importer »** (libellé complet : « Importer {rows_succeeded} ligne(s) »).
 Bouton désactivé si `rows_succeeded === 0` ou si `payments_count + dues_count === 0`, avec, à sa place dans le corps, `Banner variant="info"` : « Rien à importer : aucune ligne ne crée de paiement ni de montant dû. » (proposition, §11 point 6).
 
-Clic sur « Importer » → `PinPrompt` (§7). Le fichier, le type et l'année envoyés à l'import sont **exactement** ceux de l'aperçu (même objet `File` conservé en mémoire).
+Clic sur « Importer » → modale de confirmation (§7). Le fichier, le type et l'année envoyés à l'import sont **exactement** ceux de l'aperçu (même objet `File` conservé en mémoire).
 
 ### 6.1 « Détail de la ligne » — `Modal` niveau 2, taille `md`, lecture seule
 
@@ -89,22 +89,19 @@ Clic sur « Importer » → `PinPrompt` (§7). Le fichier, le type et l'année e
 - Section « À vérifier » (si `warnings`) : chaque message tel quel, sur fond orange clair.
 - Pied : « Fermer ».
 
-## 7. Confirmation par code PIN
+## 7. Confirmation simple (position provisoire)
 
-`PinPrompt` niveau 2, par-dessus la modale (pattern exact de `RecordPaymentModal.tsx`) :
+Modale de confirmation niveau 2 (`ConfirmDialog`, variante action sensible), par-dessus la modale. Position provisoire : l'import historique se valide par une confirmation simple, sans champ ; à confirmer par le client. L'auteur est écrit au journal d'activité.
 
-- Titre par défaut : « Confirmer avec votre code PIN ».
+- Titre : « Importer cet historique ? ».
 - Description : « Importer {payments_count} paiement(s) pour {payments_total} {devise} et {dues_count} montant(s) dû(s) — {type}, {année}. »
-- `confirmLabel` : « Importer » ; `confirmLoadingLabel` : « Import en cours… ».
-- Appel : `POST /treasury/contribution-imports/` en multipart (`contribution_type_id`, `year`, `file`, `pin`).
+- Boutons : « Annuler » / « Importer » ; libellé de chargement : « Import en cours… ».
+- Appel : `POST /treasury/contribution-imports/` en multipart (`contribution_type_id`, `year`, `file`) ; plus de paramètre `pin`.
 
-Le PIN est saisi **uniquement** par le Trésorier dans `PinPrompt` (`type="password"`, `autoComplete="off"`). Il n'est jamais stocké dans un état autre que celui du `PinPrompt`, ni placé dans une clé de cache TanStack Query, une URL, un journal console, un rapport d'erreur ou un toast. Aucune valeur par défaut, aucun préremplissage.
-
-Pendant l'appel : le `PinPrompt` affiche « Import en cours… », et le corps de la modale niveau 1 affiche un `Loader` avec « Import en cours. Cela peut prendre jusqu'à une minute : ne fermez pas cette fenêtre. » (l'import est synchrone, §11 point 5).
+Pendant l'appel : la modale de confirmation affiche « Import en cours… », et le corps de la modale niveau 1 affiche un `Loader` avec « Import en cours. Cela peut prendre jusqu'à une minute : ne fermez pas cette fenêtre. » (l'import est synchrone, §11 point 5).
 
 Erreurs :
-- **PIN incorrect** (400 avec `attempts_remaining`) ou **PIN bloqué** (423) : message de `formatPinError` dans le `PinPrompt`, saisie effacée, rien n'est importé.
-- **Toute autre erreur** (fichier devenu invalide, type archivé entre-temps, écritures gelées, droits retirés) : le `PinPrompt` se ferme, retour à l'étape 2 avec `Banner variant="danger"` = `detail` de l'API.
+- **Toute autre erreur** (fichier devenu invalide, type archivé entre-temps, écritures gelées, droits retirés) : la modale de confirmation se ferme, retour à l'étape 2 avec `Banner variant="danger"` = `detail` de l'API.
 - **Réseau coupé / délai dépassé** : retour à l'étape 2 avec `Banner variant="warning"` : « La connexion a été interrompue : l'import a peut-être été enregistré. Relancez l'aperçu : les paiements déjà importés y apparaîtront comme « déjà importés » et ne seront pas recréés. » + bouton secondaire « Relancer l'aperçu ».
 
 ## 8. Étape 3 — Résultat

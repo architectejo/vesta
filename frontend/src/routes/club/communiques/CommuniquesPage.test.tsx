@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClubBrandingProvider, ToastProvider } from "../../../design-system";
 import { CommuniquesPage } from "./CommuniquesPage";
 
@@ -14,6 +15,12 @@ vi.mock("../../../api/social", async () => {
   };
 });
 
+vi.mock("../../../api/clubs", async () => {
+  const actual = await vi.importActual<typeof import("../../../api/clubs")>("../../../api/clubs");
+  return { ...actual, getMyProfile: vi.fn() };
+});
+
+import { getMyProfile } from "../../../api/clubs";
 import { getAnnouncement, listAnnouncements } from "../../../api/social";
 
 const ANNOUNCEMENT = {
@@ -32,17 +39,23 @@ const ANNOUNCEMENT = {
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
+    <MemoryRouter>
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
         <ClubBrandingProvider branding={{ name: "Loisirs Club Discovery", logoUrl: null, primaryColor: null, secondaryColor: null }}>
           <CommuniquesPage />
         </ClubBrandingProvider>
       </ToastProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 
 describe("CommuniquesPage", () => {
+  beforeEach(() => {
+    vi.mocked(getMyProfile).mockResolvedValue({ roles: [] } as unknown as Awaited<ReturnType<typeof getMyProfile>>);
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -83,6 +96,17 @@ describe("CommuniquesPage", () => {
     renderPage();
 
     expect(await screen.findByText("Aucun communiqué pour l'instant.")).toBeInTheDocument();
+  });
+
+  it("affiche « Publier un communiqué » au Secrétaire même quand la liste est vide", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue({
+      roles: [{ role: "secretary", label: "Secrétaire" }],
+    } as unknown as Awaited<ReturnType<typeof getMyProfile>>);
+    vi.mocked(listAnnouncements).mockResolvedValue({ results: [], count: 0, next_offset: null });
+    renderPage();
+
+    expect(await screen.findByText("Aucun communiqué pour l'instant.")).toBeInTheDocument();
+    expect((await screen.findAllByRole("button", { name: "Publier un communiqué" })).length).toBeGreaterThan(0);
   });
 
   it("ouvre la modale de détail au clic sur une ligne", async () => {

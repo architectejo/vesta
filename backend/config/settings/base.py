@@ -287,6 +287,7 @@ REST_FRAMEWORK = {
         "apps.core.permissions.HasAcceptedLatestTerms",
         "apps.core.permissions.HasUsableLicence",
     ),
+    "EXCEPTION_HANDLER": "apps.core.exceptions.vesta_exception_handler",
     "DEFAULT_RENDERER_CLASSES": (
         "rest_framework.renderers.JSONRenderer",
     ),

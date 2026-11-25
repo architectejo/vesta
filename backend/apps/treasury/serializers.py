@@ -5,6 +5,7 @@ from rest_framework import serializers
 
 from apps.audit.services import GHOST_ACTOR_DISPLAY_NAME
 from apps.treasury import services
+from apps.treasury.fields import MoneyField
 from apps.treasury.models import (
     ContributionType,
     Expense,
@@ -51,7 +52,7 @@ class MyBalanceSerializer(serializers.Serializer):
 class ContributionTypeInputSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=120, required=False)
     nature = serializers.ChoiceField(choices=ContributionType.Nature.choices, required=False)
-    amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    amount = MoneyField(required=False, allow_null=True)
     periodicity = serializers.ChoiceField(choices=ContributionType.Periodicity.choices, required=False)
     due_day = serializers.IntegerField(required=False, allow_null=True)
     due_month = serializers.IntegerField(required=False, allow_null=True)
@@ -100,7 +101,7 @@ class ExpenseCategorySerializer(serializers.ModelSerializer):
 
 class ExpenseCategoryInputSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=120, required=False)
-    ceiling = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    ceiling = MoneyField(required=False, allow_null=True)
     receipt_required = serializers.BooleanField(required=False)
     good_standing_only = serializers.BooleanField(required=False)
 
@@ -166,7 +167,7 @@ class ExpenseSerializer(serializers.Serializer):
 
 class ExpenseCreateSerializer(serializers.Serializer):
     category_id = serializers.IntegerField()
-    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    amount = MoneyField()
     beneficiary_name = serializers.CharField(max_length=160, required=False, allow_blank=True, default="")
     beneficiary_membership_id = serializers.IntegerField(required=False, allow_null=True)
     reason = serializers.CharField(allow_blank=True)
@@ -178,11 +179,17 @@ class ReasonSerializer(serializers.Serializer):
     reason = serializers.CharField(allow_blank=True, required=False, default="")
 
 
-class PinSerializer(serializers.Serializer):
-    pin = serializers.CharField(max_length=12)
+class ConfirmationSerializer(serializers.Serializer):
+    """Action sensible sans corps : la confirmation est faite par la modale de
+    l'interface, l'auteur est journalisé (CLAUDE.md règle 7, décision du
+    11/10/2026). Un ancien champ ``pin`` éventuellement envoyé est ignoré."""
 
 
-class DerogationSerializer(PinSerializer):
+# Ancien nom conservé le temps de la transition (views.py) ; sans champ.
+PinSerializer = ConfirmationSerializer
+
+
+class DerogationSerializer(ConfirmationSerializer):
     reason = serializers.CharField(allow_blank=True, required=False, default="")
 
 
@@ -205,14 +212,14 @@ class SocialAssistanceScaleSerializer(serializers.Serializer):
 
 
 class SocialAssistanceScaleInputSerializer(serializers.Serializer):
-    amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    amount = MoneyField(required=False)
     processing_days = serializers.IntegerField(required=False)
     expense_category_id = serializers.IntegerField(required=False)
 
 
 class SocialAssistanceScaleCreateSerializer(SocialAssistanceScaleInputSerializer):
     event_type = serializers.ChoiceField(choices=SocialAssistanceEvent.choices)
-    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    amount = MoneyField()
     processing_days = serializers.IntegerField()
     expense_category_id = serializers.IntegerField()
 
@@ -299,10 +306,13 @@ class PaymentCreateSerializer(PaymentPreviewInputSerializer):
     method = serializers.ChoiceField(choices=sorted(services.TREASURER_ENTRY_METHODS))
     reference = serializers.CharField(max_length=120, required=False, allow_blank=True, default="")
     attachment = serializers.FileField(required=False, allow_null=True)
-    pin = serializers.CharField(max_length=12)
+    # Clé d'idempotence facultative (correctif M4) : UUID généré par
+    # l'interface à l'ouverture de la modale de confirmation ; un renvoi
+    # avec la même clé renvoie le paiement existant (HTTP 200).
+    client_uuid = serializers.UUIDField(required=False, allow_null=True)
 
 
-class CashSessionOpenSerializer(PinSerializer):
+class CashSessionOpenSerializer(ConfirmationSerializer):
     pass
 
 
@@ -562,9 +572,37 @@ def serialize_payment_detail(payment, *, reader, request) -> dict:
                 if reversal is not None
                 else None
             ),
+            "reversal_history": [
+                _reversal_history_entry(item, reader) for item in payment.reversal_history()
+            ],
         }
     )
     return data
+
+
+def _reversal_history_entry(reversal, reader) -> dict:
+    """Une ligne de l'historique des demandes d'annulation (décision client
+    du 15/11/2026) : décideur et date de décision unifiés (Président qui a
+    approuvé ou refusé), ``None`` tant que la demande est en attente."""
+
+    if reversal.status == PaymentReversal.Status.APPROVED:
+        decided_by, decided_at = reversal.approved_by, reversal.approved_at
+    elif reversal.status == PaymentReversal.Status.REJECTED:
+        decided_by, decided_at = reversal.rejected_by, reversal.rejected_at
+    else:
+        decided_by, decided_at = None, None
+    return {
+        "id": reversal.pk,
+        "status": reversal.status,
+        "status_label": reversal.get_status_display(),
+        "reason": reversal.reason,
+        "reason_kind": reversal.reason_kind,
+        "requested_by": _actor(reversal.requested_by, reader),
+        "requested_at": reversal.requested_at,
+        "decided_by": _actor(decided_by, reader),
+        "decided_at": decided_at,
+        "rejection_reason": reversal.rejection_reason,
+    }
 
 
 class ReversalRequestSerializer(serializers.Serializer):
@@ -576,8 +614,8 @@ class ReversalRejectSerializer(serializers.Serializer):
 
 
 def serialize_cash_session(session, *, state: str, payments_count: int, payments_total, currency: str, timezone: str):
-    """Session de caisse : jamais de PIN ni d'empreinte de PIN, seulement
-    l'identifiant public et les horodatages (10.2 n° 22)."""
+    """Session de caisse : seulement l'identifiant public et les
+    horodatages (10.2 n° 22)."""
 
     return {
         "id": str(session.public_id),
@@ -725,6 +763,158 @@ def serialize_month_detail(detail, *, can_record_payment: bool, request) -> dict
     }
 
 
+# ---------------------------------------------------------------------------
+# Données du joueur connecté, pour lui seul (« Mon profil » ; fiche
+# comptes-mon-profil §3.2, §4.4). Sérialisation seule : statuts, cellules et
+# solde viennent de ``apps.treasury.services``. Aucun champ réservé au
+# bureau (auteurs, motifs d'annulation, session de caisse, pièce jointe).
+# ---------------------------------------------------------------------------
+
+
+def serialize_my_payment(payment, *, detail: bool = False) -> dict:
+    """Ligne « Derniers paiements » du profil ; ``detail`` ajoute la
+    répartition par mois (modale « Détail du paiement »). Attend
+    ``contribution_type``, ``transaction``, ``reversal`` chargés et
+    ``allocations`` préchargées."""
+
+    status_key = services.payment_status_key(payment)
+    receipt_available = bool(payment.receipt_file)
+    data = {
+        "id": payment.pk,
+        "contribution_type": {"id": payment.contribution_type_id, "name": payment.contribution_type.name},
+        "amount": _money(payment.amount),
+        "currency": payment.currency,
+        "paid_on": payment.paid_on,
+        "method": payment.method,
+        "method_label": payment.get_method_display(),
+        "source": payment.source,
+        "source_label": payment.get_source_display(),
+        "reference": payment.reference,
+        "status": status_key,
+        "status_label": services.PAYMENT_STATUS_LABELS[status_key],
+        "validated_at": payment.validated_at,
+        "receipt_number": payment.receipt_number,
+        "receipt_available": receipt_available,
+        "receipt_url": (
+            reverse("treasury:payment-receipt-download", args=[payment.pk]) if receipt_available else None
+        ),
+    }
+    if detail:
+        data["allocations"] = [
+            {
+                "period": allocation.period,
+                "period_label": services.french_month_label(allocation.period),
+                "amount": _money(allocation.amount),
+            }
+            for allocation in sorted(payment.allocations.all(), key=lambda item: item.period)
+        ]
+    return data
+
+
+def serialize_own_lines(own) -> dict:
+    """« Mes cotisations {année} » : une ligne de grille par type."""
+
+    return {
+        "year": own.year,
+        "currency": own.currency,
+        "today": own.today,
+        "months": [
+            {
+                "period": period,
+                "month": period.month,
+                "label": services.FRENCH_MONTHS_SHORT[period.month - 1],
+                "long_label": services.french_month_label(period),
+            }
+            for period in own.periods
+        ],
+        "states": services.GRID_STATE_LABELS,
+        "player_status": serialize_summary(own.summary),
+        "lines": [
+            {
+                "contribution_type": serialize_grid_type(line.contribution_type),
+                "cells": [serialize_grid_cell(cell) for cell in line.row.cells],
+                "total": _money(line.row.total),
+                "overdue_amount": _money(line.row.overdue_amount),
+                "has_unpaid": line.row.has_unpaid,
+            }
+            for line in own.lines
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tableau « Membres du club » et modale « Situation financière » (CDC 4.4.6 ;
+# fiche tresorerie-tableau-de-bord §3 point 3, §4.3). Sérialisation seule :
+# solde, statuts, impayés et échéances viennent de ``apps.treasury.services``.
+# Aucune coordonnée (email, téléphone) ni donnée médicale (CLAUDE.md n° 11).
+# ---------------------------------------------------------------------------
+
+
+def _type_ref(ctype) -> dict | None:
+    return None if ctype is None else {"id": ctype.pk, "name": ctype.name}
+
+
+def serialize_member_row(row, *, request) -> dict:
+    return {
+        **_grid_player(row.membership, request=request),
+        "financial_status": row.financial_status,
+        "financial_status_label": services.MEMBER_STATUS_LABELS[row.financial_status],
+        "statuses": [{"key": key, "label": services.MEMBER_STATUS_LABELS[key]} for key in row.statuses],
+        "is_suspended": row.is_suspended,
+        "suspension_matches_remaining": row.suspension_matches_remaining,
+        **serialize_summary(row.summary),
+        "monthly_type": _type_ref(row.monthly_type),
+        "last_payment_on": row.last_payment_on,
+    }
+
+
+def serialize_member_detail(detail, *, can_record_payment: bool, request) -> dict:
+    return {
+        **serialize_member_row(detail.row, request=request),
+        "today": detail.today,
+        "next_due": (
+            {
+                "contribution_type": _type_ref(detail.next_due.contribution_type),
+                "period": detail.next_due.period,
+                "period_label": services.french_month_label(detail.next_due.period),
+                "due_date": detail.next_due.due_date,
+                "amount": _money(detail.next_due.amount),
+            }
+            if detail.next_due is not None
+            else None
+        ),
+        "unpaid_months": [
+            {
+                "contribution_type": _type_ref(item.contribution_type),
+                "period": item.period,
+                "period_label": services.french_month_label(item.period),
+                "due_date": item.due_date,
+                "amount_due": _money(item.amount_due),
+                "allocated": _money(item.allocated),
+                "remaining": _money(item.remaining),
+            }
+            for item in detail.unpaid_months
+        ],
+        "free_contributions": [
+            {
+                "contribution_type": _type_ref(item.contribution_type),
+                "total": _money(item.total),
+                "payments_count": item.payments_count,
+                "last_paid_on": item.last_paid_on,
+            }
+            for item in detail.free_contributions
+        ],
+        "can_record_payment": can_record_payment,
+    }
+
+
+def serialize_member_lines(lines, *, request) -> dict:
+    """Onglet « Grille {année} » : même forme que « Mes cotisations », plus
+    l'identité du joueur consulté."""
+
+    return {"player": _grid_player(lines.membership, request=request), **serialize_own_lines(lines)}
+
+
 class ContributionImportInputSerializer(serializers.Serializer):
     """Modale d'import (CDC 4.4.8) : type, année et fichier CSV (multipart)."""
 
@@ -734,7 +924,7 @@ class ContributionImportInputSerializer(serializers.Serializer):
 
 
 class ContributionImportCreateSerializer(ContributionImportInputSerializer):
-    pin = serializers.CharField(max_length=12)
+    """Import confirmé par la modale de l'interface : plus de ``pin``."""
 
 
 def _import_payment_line(line) -> dict:

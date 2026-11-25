@@ -1,8 +1,24 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Modal } from "./Modal";
+
+/**
+ * `Modal` garde un état partagé entre instances : chaque retour d'historique
+ * demandé par le code (`goBackProgrammatically`) laisse un jeton en attente
+ * jusqu'à l'arrivée de son `popstate`, ou 1 s au plus (filet de sécurité).
+ * jsdom abandonne parfois ce retour : le jeton survit alors aux tests
+ * précédents et avale le `popstate` du test suivant, qui est pris pour le
+ * retour du code. Les tests qui simulent un vrai appui sur Retour attendent
+ * donc l'expiration du filet pour partir d'un état propre.
+ */
+const PROGRAMMATIC_BACK_TTL_MS = 1000;
+async function waitForProgrammaticBackExpiry(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, PROGRAMMATIC_BACK_TTL_MS + 150));
+  });
+}
 
 describe("Modal", () => {
   it("n'affiche rien quand open est faux", () => {
@@ -150,7 +166,8 @@ describe("Modal", () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
-  it("ferme la modale quand l'historique reçoit un popstate (retour Android)", () => {
+  it("ferme la modale quand l'historique reçoit un popstate (retour Android)", async () => {
+    await waitForProgrammaticBackExpiry();
     const onClose = vi.fn();
     render(
       <Modal open onClose={onClose} title="Titre">
@@ -174,10 +191,12 @@ describe("Modal — historique (bouton Retour) et React StrictMode", () => {
   // immédiatement (cas du double effet de StrictMode), alors que les
   // navigateurs le laissent aboutir et émettent bien le popstate. On reproduit
   // le comportement des navigateurs : chaque back() émet un popstate asynchrone.
-  beforeAll(() => {
+  beforeAll(async () => {
     vi.spyOn(window.history, "back").mockImplementation(() => {
       setTimeout(() => window.dispatchEvent(new PopStateEvent("popstate")), 0);
     });
+    // Jetons laissés en attente par les tests du bloc précédent (voir plus haut).
+    await waitForProgrammaticBackExpiry();
   });
   afterAll(() => {
     vi.mocked(window.history.back).mockRestore();
@@ -324,7 +343,9 @@ describe("Modal — historique (bouton Retour) et React StrictMode", () => {
     rerender(<Stack topOpen={false} />);
     await flushHistory();
 
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    // La modale de niveau 2 reste montée pendant son animation de fermeture
+    // (design-system-icones-animations.md §2.2 : démontage différé).
+    await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1));
     expect(onCloseBase).not.toHaveBeenCalled();
     expect(onCloseTop).not.toHaveBeenCalled();
   });

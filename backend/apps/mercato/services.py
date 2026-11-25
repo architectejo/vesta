@@ -17,22 +17,16 @@ rendu) :
   point d'entrée exposé pour un déclenchement à chaque paiement validé
   (``finance-engine``) et pour une commande cron de secours.
 - **10.2 n° 34** : aucun champ ni logique de frais de sortie.
-- **Convention déjà établie ailleurs dans le projet** (``apps.treasury.
-  services.run_unjustified_expenses``, ``generate_monthly_dues``) : une
-  transition purement automatique, sans acteur humain réel (cron, ou
-  déblocage déclenché par un paiement validé par un tiers), n'écrit
-  **aucune** entrée de journal -- ``AuditLog.actor`` est obligatoire et il
-  n'existe aucun acteur réel à lui attribuer honnêtement. Une transition
-  décidée par un humain (acceptation du joueur) journalise, elle,
-  normalement avec cet acteur réel.
+- **Transition automatique** (déblocage après paiement, cron) : journalisée
+  avec l'acteur « Système » (``apps.treasury.services.get_system_actor``),
+  règle non négociable n° 6. Une transition décidée par un humain
+  (acceptation du joueur) journalise avec cet acteur réel.
 - **Messagerie inter-clubs** : lecture et écriture restreintes au
   Président et au Directeur sportif de chaque club (voir docstring de
   ``apps.mercato.models``, contradiction schéma/CDC non définitivement
   tranchée par le client).
-- **Publication automatique sur le fil public** (CDC 4.14 étape 6, 4.16) :
-  **non câblée** ici -- ``apps.social`` n'a encore aucun modèle `Post`
-  (scaffolding vide à ce jour). Point ouvert signalé au compte rendu,
-  à câbler par une migration additive quand `apps.social` existera.
+- **Publication automatique** (CDC 4.14 étape 6) : câblée dans
+  :func:`complete_transfer` (``Post.PostKind.AUTO_TRANSFER``, visibilité « Club »).
 """
 
 from __future__ import annotations
@@ -83,6 +77,10 @@ class MercatoError(Exception):
 # Président et Directeur sportif seulement (VP/Trés/Coach : L ou —).
 OFFER_INITIATOR_ROLES = frozenset({MembershipRole.Role.PRESIDENT, MembershipRole.Role.SPORTS_DIRECTOR})
 MESSAGING_ROLES = OFFER_INITIATOR_ROLES
+
+
+class MercatoPermissionError(MercatoError):
+    """Action réservée à un autre acteur (traduite en 403 par les vues)."""
 
 
 def _officers(club) -> list:
@@ -183,7 +181,7 @@ def create_transfer_offer(
     *, initiated_by, target_club, target_membership: Membership, message: str, conditions: str = "", now: Optional[datetime.datetime] = None
 ) -> TransferOffer:
     if not has_any_role(initiated_by, OFFER_INITIATOR_ROLES, club=target_club):
-        raise MercatoError("Réservé au Président et au Directeur sportif (CDC 2.4, 4.14).")
+        raise MercatoError("Réservé au Président et au Directeur sportif.")
     if target_membership.club_id == target_club.id:
         raise MercatoError("Ce joueur appartient déjà à votre club.")
     if target_membership.status != Membership.Status.ACTIVE:
@@ -256,7 +254,7 @@ def create_transfer_offer(
 
 def respond_to_offer(*, offer: TransferOffer, actor, accept: bool, now: Optional[datetime.datetime] = None) -> TransferOffer:
     if offer.target_membership.user_id != getattr(actor, "id", None):
-        raise MercatoError("Seul le joueur visé peut répondre à cette offre.")
+        raise MercatoPermissionError("Seul le joueur visé peut répondre à cette offre.")
     if offer.status != TransferOffer.Status.SENT:
         raise MercatoError("Cette offre n'est plus en attente.")
 
@@ -587,6 +585,26 @@ def _build_quitus_pdf(offer: TransferOffer, *, now: datetime.datetime) -> bytes:
     return buffer.getvalue()
 
 
+def _publish_transfer_post(offer: TransferOffer, *, author, now) -> None:
+    """Publication automatique sur le fil du nouveau club (CDC 4.14 étape 6).
+
+    Position prudente : visibilité « Club » et non publique (10.2 n° 160 :
+    jamais public sans consentement du joueur) -- à confirmer par le client."""
+
+    from apps.social.models import Post
+
+    player = offer.target_membership.user
+    # Écriture dans le club B alors que le contexte courant est celui du club A.
+    with active_club(offer.target_club):
+        Post.all_objects.create(
+            club=offer.target_club,
+            author=author,
+            body=f"{player.first_name} {player.last_name} rejoint {offer.target_club.name}. Bienvenue !",
+            visibility=Post.Visibility.CLUB_ONLY,
+            post_kind=Post.PostKind.AUTO_TRANSFER,
+        )
+
+
 def complete_transfer(offer: TransferOffer, *, actor=None, now: Optional[datetime.datetime] = None) -> TransferOffer:
     """Finalise le transfert : quitus, clôture de l'adhésion au club A,
     ouverture d'une adhésion « En attente » au club B (règle non négociable
@@ -630,14 +648,21 @@ def complete_transfer(offer: TransferOffer, *, actor=None, now: Optional[datetim
         offer.debt_amount = None
         offer.save()
 
-    if actor is not None:
-        log_action(
-            actor=actor,
-            club=offer.target_club,
-            action_type="mercato.transfer_offer.completed",
-            obj=offer,
-            after={"status": offer.status, "new_membership_id": new_membership.pk},
-        )
+    # Règle 6 : journal systématique. Déblocage automatique (sans acteur
+    # humain) : acteur « Système » explicite (pas de silence dans le journal).
+    log_actor = actor
+    if log_actor is None:
+        from apps.treasury.services import get_system_actor
+
+        log_actor = get_system_actor()
+    log_action(
+        actor=log_actor,
+        club=offer.target_club,
+        action_type="mercato.transfer_offer.completed",
+        obj=offer,
+        after={"status": offer.status, "new_membership_id": new_membership.pk},
+    )
+    _publish_transfer_post(offer, author=log_actor, now=now)
 
     from apps.notifications.models import Notification
     from apps.notifications.services import create_notification
@@ -713,7 +738,7 @@ def get_or_create_thread(*, club_a, club_b, subject: str = "", transfer_offer: T
 
 def send_message(*, thread: MercatoThread, actor, club, body: str, now=None) -> MercatoMessage:
     if not has_any_role(actor, MESSAGING_ROLES, club=club):
-        raise MercatoError("Réservé au Président et au Directeur sportif (CDC 4.14).")
+        raise MercatoError("Réservé au Président et au Directeur sportif.")
     if club.id not in (thread.club_a_id, thread.club_b_id):
         raise MercatoError("Ce fil ne concerne pas votre club.")
     if not (body or "").strip():

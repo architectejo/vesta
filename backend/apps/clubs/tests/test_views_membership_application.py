@@ -20,7 +20,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from apps.clubs.models import Membership, MembershipApplication, MembershipRole
 from apps.clubs.tests.test_membership_application import add_player, build_context, pay
 from apps.treasury.models import Payment
-from apps.treasury.tests.conftest import PIN, WRONG_PIN, make_member
+from apps.audit.models import AuditLog
+from apps.treasury.tests.conftest import make_member
 
 pytestmark = pytest.mark.django_db
 
@@ -146,7 +147,6 @@ class TestMembershipFeePaymentView:
                 "amount": "5",
                 "method": "cash",
                 "paid_on": "2026-09-20",
-                "pin": PIN,
             },
         )
 
@@ -166,7 +166,6 @@ class TestMembershipFeePaymentView:
                 "amount": "5",
                 "method": "cash",
                 "paid_on": "2026-09-20",
-                "pin": PIN,
             },
         )
 
@@ -187,13 +186,12 @@ class TestMembershipFeePaymentView:
                 "amount": "5",
                 "method": "cash",
                 "paid_on": "2026-09-20",
-                "pin": PIN,
             },
         )
 
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_pin_incorrect_renvoie_400_avec_tentatives_restantes(self):
+    def test_reussit_sans_pin_et_ignore_un_pin_recu_auteur_dans_le_journal(self):
         ctx = build_context()
         _membership, application = add_player(ctx)
         client = _authenticated_client(ctx.treasurer.user)
@@ -205,12 +203,16 @@ class TestMembershipFeePaymentView:
                 "amount": "5",
                 "method": "cash",
                 "paid_on": "2026-09-20",
-                "pin": WRONG_PIN,
+                "pin": "pin-quelconque-ignore",
             },
         )
 
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert "attempts_remaining" in response.data
+        assert response.status_code == status.HTTP_200_OK
+        log = AuditLog.objects.get(
+            action_type="clubs.membership_application.fee_payment_recorded",
+            object_id=str(application.pk),
+        )
+        assert log.actor_id == ctx.treasurer.user_id
 
     def test_dossier_dun_autre_club_introuvable(self):
         ctx = build_context()
@@ -225,7 +227,6 @@ class TestMembershipFeePaymentView:
                 "amount": "5",
                 "method": "cash",
                 "paid_on": "2026-09-20",
-                "pin": PIN,
             },
         )
 
@@ -251,12 +252,42 @@ class TestMembershipFeePaymentView:
                 "amount": "5",
                 "method": "cash",
                 "paid_on": "2026-09-20",
-                "pin": PIN,
             },
         )
 
         assert response.status_code == status.HTTP_409_CONFLICT
         assert "detail" in response.data
+
+    def test_montant_a_la_virgule_decimale(self):
+        """Décision client du 15/11/2026 : « 5,00 » est accepté comme
+        « 5.00 » (mêmes règles que ``treasury.services.to_money``)."""
+
+        ctx = build_context()
+        _membership, application = add_player(ctx)
+        client = _authenticated_client(ctx.treasurer.user)
+
+        response = client.post(
+            reverse("clubs:application-fee-payment"),
+            {"application_id": application.id, "amount": "5,00", "method": "cash", "paid_on": "2026-09-20"},
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        assert Payment.all_objects.get(membership=application.membership).amount == 5
+
+    @pytest.mark.parametrize("raw", ["5,001", "5e0", "1 000"])
+    def test_montant_illisible_refuse_sans_ecriture(self, raw):
+        ctx = build_context()
+        _membership, application = add_player(ctx)
+        client = _authenticated_client(ctx.treasurer.user)
+
+        response = client.post(
+            reverse("clubs:application-fee-payment"),
+            {"application_id": application.id, "amount": raw, "method": "cash", "paid_on": "2026-09-20"},
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "Montant invalide" in str(response.data)
+        assert not Payment.all_objects.filter(membership=application.membership).exists()
 
 
 class TestMembershipFeePaymentAttachmentValidation:
@@ -273,7 +304,6 @@ class TestMembershipFeePaymentAttachmentValidation:
                 "amount": "5",
                 "method": "cash",
                 "paid_on": "2026-09-20",
-                "pin": PIN,
                 "attachment": attachment,
             },
             format="multipart",
@@ -359,7 +389,7 @@ class TestSponsorSignatureView:
 
         response = client.post(
             reverse("clubs:application-sponsor-sign"),
-            {"application_id": application.id, "pin": PIN},
+            {"application_id": application.id},
         )
 
         assert response.status_code == status.HTTP_200_OK
@@ -376,24 +406,27 @@ class TestSponsorSignatureView:
 
         response = client.post(
             reverse("clubs:application-sponsor-sign"),
-            {"application_id": application.id, "pin": PIN},
+            {"application_id": application.id},
         )
 
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_pin_bloque_apres_trois_echecs_renvoie_423(self):
+    def test_signature_reussit_sans_pin_auteur_dans_le_journal(self):
         ctx = build_context()
         _membership, application = add_player(ctx)
         application = pay(ctx, application)
         client = _authenticated_client(ctx.sponsor.user)
 
-        for _ in range(3):
-            response = client.post(
-                reverse("clubs:application-sponsor-sign"),
-                {"application_id": application.id, "pin": WRONG_PIN},
-            )
+        response = client.post(
+            reverse("clubs:application-sponsor-sign"),
+            {"application_id": application.id, "pin": "ignore"},
+        )
 
-        assert response.status_code == status.HTTP_423_LOCKED
+        assert response.status_code == status.HTTP_200_OK
+        log = AuditLog.objects.get(
+            action_type="clubs.membership_application.sponsor_signed", object_id=str(application.pk)
+        )
+        assert log.actor_id == ctx.sponsor.user_id
 
     def test_falsifier_un_dossier_dun_autre_club_est_sans_effet(self):
         """Complement demande en revue independante (tache 1.4bt), point 6 :
@@ -411,7 +444,7 @@ class TestSponsorSignatureView:
 
         response = client.post(
             reverse("clubs:application-sponsor-sign"),
-            {"application_id": other_application.id, "pin": PIN},
+            {"application_id": other_application.id},
         )
 
         assert response.status_code == status.HTTP_404_NOT_FOUND
@@ -562,7 +595,6 @@ class TestMembershipApplicationCancellationView:
                 "application_id": application.id,
                 "reason": "Aucun autre parrain",
                 "disposition": MembershipApplication.FeeDisposition.KEPT,
-                "pin": PIN,
             },
         )
 
@@ -585,7 +617,6 @@ class TestMembershipApplicationCancellationView:
                 "application_id": application.id,
                 "reason": "Motif",
                 "disposition": MembershipApplication.FeeDisposition.KEPT,
-                "pin": PIN,
             },
         )
 
@@ -608,7 +639,6 @@ class TestMembershipApplicationCancellationView:
                 "application_id": other_application.id,
                 "reason": "Motif",
                 "disposition": MembershipApplication.FeeDisposition.KEPT,
-                "pin": PIN,
             },
         )
 
@@ -627,7 +657,6 @@ class TestMembershipApplicationCancellationView:
                 "application_id": application.id,
                 "reason": "Motif",
                 "disposition": MembershipApplication.FeeDisposition.KEPT,
-                "pin": PIN,
             },
         )
 
@@ -665,7 +694,6 @@ class TestParcoursComplet:
                 "amount": "5",
                 "method": "cash",
                 "paid_on": "2026-09-20",
-                "pin": PIN,
             },
         )
         assert pay_response.status_code == status.HTTP_200_OK
@@ -676,9 +704,89 @@ class TestParcoursComplet:
         sponsor_client = _authenticated_client(ctx.sponsor.user)
         sign_response = sponsor_client.post(
             reverse("clubs:application-sponsor-sign"),
-            {"application_id": application_id, "pin": PIN},
+            {"application_id": application_id},
         )
         assert sign_response.status_code == status.HTTP_200_OK
 
         membership = Membership.all_objects.get(pk=membership_id)
         assert membership.status == Membership.Status.ACTIVE
+
+
+class TestMembershipFeePaymentIdempotence:
+    """Correctif M4 : ``client_uuid`` facultatif, anti-doublon du paiement
+    des frais d'adhesion."""
+
+    URL = "clubs:application-fee-payment"
+
+    @staticmethod
+    def _payload(application, **extra):
+        return {"application_id": application.id, "amount": "5", "method": "cash", "paid_on": "2026-09-20", **extra}
+
+    def test_rejeu_un_seul_paiement_un_seul_journal_une_seule_notification(self):
+        import uuid
+
+        from apps.notifications.models import Notification
+
+        ctx = build_context()
+        membership, application = add_player(ctx)
+        client = _authenticated_client(ctx.treasurer.user)
+        payload = self._payload(application, client_uuid=str(uuid.uuid4()))
+
+        first = client.post(reverse(self.URL), payload)
+        assert first.status_code == status.HTTP_200_OK
+        payments = Payment.all_objects.filter(club=ctx.club, membership=membership).count()
+        logs = AuditLog.objects.filter(action_type="clubs.membership_application.fee_payment_recorded").count()
+        notifications = Notification.objects.filter(recipient=ctx.sponsor.user).count()
+
+        second = client.post(reverse(self.URL), payload)
+
+        assert second.status_code == status.HTTP_200_OK
+        assert second.data["generated_at"] == first.data["generated_at"]
+        assert Payment.all_objects.filter(club=ctx.club, membership=membership).count() == payments == 1
+        assert (
+            AuditLog.objects.filter(action_type="clubs.membership_application.fee_payment_recorded").count()
+            == logs
+            == 1
+        )
+        assert Notification.objects.filter(recipient=ctx.sponsor.user).count() == notifications
+
+    def test_sans_uuid_comportement_inchange(self):
+        ctx = build_context()
+        membership, application = add_player(ctx)
+        client = _authenticated_client(ctx.treasurer.user)
+
+        response = client.post(reverse(self.URL), self._payload(application))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert Payment.all_objects.filter(club=ctx.club, membership=membership).count() == 1
+
+    def test_meme_uuid_contenu_different_renvoie_409(self):
+        import uuid
+
+        ctx = build_context()
+        membership, application = add_player(ctx)
+        client = _authenticated_client(ctx.treasurer.user)
+        key = str(uuid.uuid4())
+        assert client.post(reverse(self.URL), self._payload(application, client_uuid=key)).status_code == 200
+
+        response = client.post(reverse(self.URL), self._payload(application, client_uuid=key, amount="3"))
+
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert response.data["code"] == "client_uuid_conflict"
+        assert Payment.all_objects.filter(club=ctx.club, membership=membership).count() == 1
+
+    def test_etancheite_uuid_identique_dans_deux_clubs(self):
+        import uuid
+
+        key = str(uuid.uuid4())
+        ctx = build_context()
+        other = build_context()
+        _m1, app1 = add_player(ctx)
+        _m2, app2 = add_player(other)
+
+        r1 = _authenticated_client(ctx.treasurer.user).post(reverse(self.URL), self._payload(app1, client_uuid=key))
+        r2 = _authenticated_client(other.treasurer.user).post(reverse(self.URL), self._payload(app2, client_uuid=key))
+
+        assert r1.status_code == r2.status_code == status.HTTP_200_OK
+        assert Payment.all_objects.filter(club=ctx.club, client_uuid=key).count() == 1
+        assert Payment.all_objects.filter(club=other.club, client_uuid=key).count() == 1

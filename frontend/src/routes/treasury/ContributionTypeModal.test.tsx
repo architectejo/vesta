@@ -29,6 +29,7 @@ function renderModal(props: Partial<React.ComponentProps<typeof ContributionType
     <ContributionTypeModal
       open
       canEdit
+      currency="USD"
       isSubmitting={false}
       onClose={onClose}
       onSubmit={onSubmit}
@@ -55,6 +56,17 @@ describe("ContributionTypeModal", () => {
 
     expect(screen.getByText("Saisissez un montant supérieur à 0.")).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("accepte la virgule décimale et envoie le montant avec un point", async () => {
+    const { onSubmit } = renderModal();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Nom"), "Mensuelle");
+    await user.type(screen.getByLabelText("Montant"), "10,50");
+    expect(screen.getByLabelText("Montant")).toHaveValue("10,50");
+    await user.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ amount: "10.50" }));
   });
 
   it("exige un jour d'échéance entre 1 et 28 pour une périodicité mensuelle", async () => {

@@ -80,7 +80,7 @@ class LicenceTerminateInputSerializer(serializers.Serializer):
 
     def validate_reason(self, value: str) -> str:
         if not value.strip():
-            raise serializers.ValidationError("Le motif de resiliation est obligatoire (10.2 n26).")
+            raise serializers.ValidationError("Le motif de résiliation est obligatoire.")
         return value
 
 
@@ -115,5 +115,5 @@ class SupportSessionStartInputSerializer(serializers.Serializer):
 
     def validate_reason(self, value: str) -> str:
         if not value.strip():
-            raise serializers.ValidationError("Le motif de la session de support est obligatoire (CDC 4.18).")
+            raise serializers.ValidationError("Le motif de la session de support est obligatoire.")
         return value

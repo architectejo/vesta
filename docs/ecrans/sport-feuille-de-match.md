@@ -30,7 +30,7 @@ Route `/matchs/{id}`. Depuis la modale « Match » (espace coach, accueil, page 
 | Composition en brouillon | « Publier la composition » | « Modifier la composition » |
 | Jour du match | « Ouvrir le pointage » (défile vers la section) | « Modifier la composition » |
 | Après le match, sans score | « Saisir le score » | — |
-| Score saisi | « Publier le résultat sur le fil » (4.8, une fois) | « Modifier le score » |
+| Score saisi | « Publier le résultat sur le fil » (4.8, une fois) | « Modifier le score » (jour du match seulement) |
 
 Menu « … » (Coach) : « Modifier le match », « Rattacher un plan tactique ».
 
@@ -147,6 +147,8 @@ Champs de « Créer un match » (`sport-espace-coach.md` §4.2), adversaire non 
 - **10.2 n° 17 (réécrit le 25/09/2026)** : le n° 10 est **caduc**. Il n'y a jamais de club sans Médecin : le Président nomme toujours un joueur à ce rôle (« Médecin / référent santé »). Le Coach ne fixe jamais l'aptitude ; sur cet écran, il voit seulement l'aptitude et la date de retour (CLAUDE.md §2.11). *Corrige la version précédente de cette spec, qui citait le n° 10.*
 - **10.2 n° 16** appliquée : un joueur composé devenu non sélectionnable apparaît « Indisponible », sans motif, pour les joueurs qui ne sont pas du staff.
 - **10.2 n° 25 et n° 38** appliquées au pointage du match : mêmes règles que la séance (`sport-seance.md` §7).
+
+**Décision du 16/11/2026 (CDC 10.3 n° 180) : score verrouillé après minuit.** Le score n'est plus modifiable après minuit (fuseau du club) : l'API refuse avec 409 et le code `event_locked` (« Ce match est verrouillé depuis minuit : son score ne peut plus être modifié. Seul le support peut le corriger, à la demande du Président. »). Le Superuser en session de support reste autorisé. Les buts et passes restent modifiables après coup (4.8). Le score d'un match joué le jour D se saisit donc jusqu'à minuit le jour D. Si le résultat est déjà publié, toute modification du score (avant minuit) ou d'un but met à jour le post existant (même publication, visibilité « Club »), journalisé `sport.match_result_post_updated`.
 
 **Points ouverts ajoutés le 29/09/2026 (à trancher par le client) :**
 

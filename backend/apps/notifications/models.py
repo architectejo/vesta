@@ -80,11 +80,12 @@ class Notification(models.Model):
         arriveront -- CDC 4.17, `docs/lot0/schema-donnees.md` §11.1.
         """
 
-        PAYMENT_VALIDATED = "payment_validated", "Paiement valide"
-        DEBT_DUE = "debt_due", "Dette constatee a l'echeance"
-        I_PAID_DECLARED = "i_paid_declared", "Declaration « J'ai paye »"
-        EXPENSE_SUBMITTED = "expense_submitted", "Depense saisie"
-        EXPENSE_BLOCKING = "expense_blocking", "Depense non justifiee, blocage"
+        PAYMENT_VALIDATED = "payment_validated", "Paiement validé"
+        DEBT_DUE = "debt_due", "Dette constatée à l'échéance"
+        I_PAID_DECLARED = "i_paid_declared", "Déclaration « J'ai payé »"
+        I_PAID_REJECTED = "i_paid_rejected", "Déclaration « J'ai payé » refusée"
+        EXPENSE_SUBMITTED = "expense_submitted", "Dépense saisie"
+        EXPENSE_BLOCKING = "expense_blocking", "Dépense non justifiée, blocage"
         SOCIAL_ASSISTANCE_REQUEST = "social_assistance_request", "Demande d'assistance sociale"
         MEMBERSHIP_SIGNATURE_PENDING = (
             "membership_signature_pending",
@@ -99,16 +100,16 @@ class Notification(models.Model):
             "Parrain sans réponse depuis 7 jours",
         )  # cable tache 1.7
         SPONSOR_REFUSED = "sponsor_refused", "Refus du parrain"  # cable tache 1.7
-        EVENT_CREATED = "event_created", "Seance ou match cree"
-        COMPOSITION_OR_PLAN_PUBLISHED = "composition_or_plan_published", "Composition ou plan publie"
+        EVENT_CREATED = "event_created", "Séance ou match créé"
+        COMPOSITION_OR_PLAN_PUBLISHED = "composition_or_plan_published", "Composition ou plan publié"
         CARD_OR_SUSPENSION = "card_or_suspension", "Carton, suspension"
-        INJURY_DECLARED = "injury_declared", "Blessure declaree"
+        INJURY_DECLARED = "injury_declared", "Blessure déclarée"
         TRANSFER_OFFER = "transfer_offer", "Offre de transfert"
         ASSEMBLY_CONVENED = "assembly_convened", "Convocation d'AG"
-        ASSEMBLY_REMINDER = "assembly_reminder", "Rappel d'assemblee generale"
+        ASSEMBLY_REMINDER = "assembly_reminder", "Rappel d'assemblée générale"
         ROLE_APPOINTED_OR_REVOKED = "role_appointed_or_revoked", "Nomination ou révocation"  # cable tache 1.7
         LICENCE_EXPIRING = "licence_expiring", "Licence proche de l'expiration"
-        INVENTORY_OPEN_ALERT = "inventory_open_alert", "Inventaire non cloture"
+        INVENTORY_OPEN_ALERT = "inventory_open_alert", "Inventaire non clôturé"
         POST_REPORTED = "post_reported", "Signalement d'une publication"
         # CDC 5.3 / 5.5 : alerte au Superuser en cas de rupture de la
         # chaine financiere d'un club (tache 2.3, commande
@@ -128,13 +129,20 @@ class Notification(models.Model):
         # a la publication d'un communique, mais cette ligne manque au
         # tableau CDC 4.17 -- cablee ici par defaut, point ouvert signale au
         # compte rendu (a ajouter au 4.17 ou a retirer du message de succes).
-        ANNOUNCEMENT_PUBLISHED = "announcement_published", "Communique publie"
+        ANNOUNCEMENT_PUBLISHED = "announcement_published", "Communiqué publié"
+        # Tests de performance (sport-statistiques-seance.md C7, question C-Q9,
+        # position provisoire) : une notification par joueur et par séance,
+        # 1 h après la dernière mesure (commande cron).
+        PERFORMANCE_RESULTS_AVAILABLE = (
+            "performance_results_available",
+            "Mesures de performance disponibles",
+        )
 
     class EmailStatus(models.TextChoices):
         NOT_APPLICABLE = "not_applicable", "Sans objet"
         PENDING = "pending", "En attente"
-        SENT = "sent", "Envoye"
-        FAILED = "failed", "Echoue"
+        SENT = "sent", "Envoyé"
+        FAILED = "failed", "Échoué"
 
     club = models.ForeignKey(
         "clubs.Club",

@@ -6,7 +6,7 @@ import { ClubBrandingProvider, type ClubBranding } from "../context/ClubBranding
 import { ThemeProvider, type ThemeName } from "../context/ThemeContext";
 
 const LONG_NAME_FIRST = "Jean-Baptiste-Emmanuel"; // avec le nom, atteint ~40 caractères
-const LONG_NAME_LAST = "Nkulu-Mwamba-Ilunga";
+const LONG_NAME_LAST = "Nkulu-Makasi-Ilunga";
 
 // Couleurs synthétiques (donnée de test, jamais dans le code, CLAUDE.md §3).
 const NAVY_RED_BRANDING: ClubBranding = {
@@ -167,7 +167,7 @@ describe("PlayerTradingCard", () => {
     expect(screen.getByText("12")).toBeInTheDocument();
     expect(screen.getByText("1 jaune, 0 rouge")).toBeInTheDocument();
     expect(screen.getByText("85 %")).toBeInTheDocument();
-    expect(screen.getByText("7.4 sur 10")).toBeInTheDocument();
+    expect(screen.getByText("7,4 sur 10")).toBeInTheDocument();
   });
 
   it("taille « sm » : pas de grille de statistiques, pas de logo ni de poste précis", () => {

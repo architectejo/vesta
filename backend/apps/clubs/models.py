@@ -67,7 +67,7 @@ class Club(models.Model):
     def clean(self):
         if self.founder_membership_id and self.founder_membership.club_id != self.id:
             raise ValidationError(
-                "Le fondateur du club doit etre une adhesion de ce club (CDC 2.3)."
+                "Le fondateur du club doit être une adhésion de ce club."
             )
 
     def save(self, *args, **kwargs):
@@ -200,7 +200,7 @@ class Membership(TenantModel):
 
     class Position(models.TextChoices):
         GOALKEEPER = "goalkeeper", "Gardien"
-        DEFENDER = "defender", "Defenseur"
+        DEFENDER = "defender", "Défenseur"
         MIDFIELDER = "midfielder", "Milieu"
         FORWARD = "forward", "Attaquant"
 
@@ -301,12 +301,12 @@ class Membership(TenantModel):
     def clean(self):
         if self.user_id and getattr(self.user, "is_superuser", False):
             raise ValidationError(
-                "Un Superuser ne peut pas avoir de fiche joueur (CLAUDE.md regle n1)."
+                "Un Superuser ne peut pas avoir de fiche joueur."
             )
         if self.sponsor_id and self.club_id and self.sponsor.club_id != self.club_id:
-            raise ValidationError("Le parrain doit appartenir au meme club que le filleul.")
+            raise ValidationError("Le parrain doit appartenir au même club que le filleul.")
         if self.left_on and not self.left_reason:
-            raise ValidationError("Une raison de depart est requise quand une date de depart est renseignee.")
+            raise ValidationError("Une raison de départ est requise quand une date de départ est renseignée.")
 
 
 class MembershipRole(TenantModel):
@@ -348,7 +348,9 @@ class MembershipRole(TenantModel):
         TREASURER = "treasurer", "Trésorier"
         ASSISTANT_TREASURER = "assistant_treasurer", "Trésorier adjoint"
         STEWARD = "steward", "Intendant"
+        SECRETARY = "secretary", "Secrétaire"
         COACH = "coach", "Coach"
+        ASSISTANT_COACH = "assistant_coach", "Assistant du Coach"
         CAPTAIN = "captain", "Capitaine"
         DOCTOR = "doctor", "Médecin"
         PLAYER_RECRUITER = "player_recruiter", "Joueur autorisé à ajouter des joueurs"
@@ -385,20 +387,20 @@ class MembershipRole(TenantModel):
 
     def clean(self):
         if self.membership_id and self.club_id and self.membership.club_id != self.club_id:
-            raise ValidationError("Le role doit porter le meme club que l'adhesion concernee.")
+            raise ValidationError("Le rôle doit appartenir au même club que l'adhésion concernée.")
 
         if self.role == self.Role.DOCTOR:
             if self.is_qualified_professional is None:
                 raise ValidationError(
-                    "La nomination au role Medecin exige un choix explicite du "
-                    "President (qualifie ou non professionnellement), pour "
-                    "determiner le libelle affiche -- « Medecin » ou "
-                    "« Medecin / referent sante » (CDC 10.2 n17)."
+                    "La nomination au rôle de Médecin exige un choix explicite du "
+                    "Président (qualifié ou non professionnellement), pour "
+                    "déterminer le libellé affiché : « Médecin » ou "
+                    "« Médecin / référent santé »."
                 )
         elif self.is_qualified_professional is not None:
             raise ValidationError(
                 "Le champ de qualification professionnelle ne s'applique qu'au "
-                "role Medecin (CDC 10.2 n17)."
+                "rôle de Médecin."
             )
 
         if self.revoked_at is None and self.club_id and self.role == self.Role.PRESIDENT:
@@ -416,16 +418,20 @@ class MembershipRole(TenantModel):
             )
             if active_other_presidents:
                 raise ValidationError(
-                    "Ce club a deja un President actif (CDC 2.3). Revoquez-le "
-                    "d'abord (passation de presidence) avant d'en nommer un "
+                    "Ce club a déjà un Président actif. Révoquez-le "
+                    "d'abord (passation de présidence) avant d'en nommer un "
                     "autre."
                 )
 
         if (
             self.revoked_at is None
             and self.club_id
-            and self.role not in (self.Role.PRESIDENT, self.Role.PLAYER_RECRUITER)
+            and self.role
+            not in (self.Role.PRESIDENT, self.Role.PLAYER_RECRUITER, self.Role.ASSISTANT_COACH)
         ):
+            # L'Assistant du Coach n'est pas plafonne par `board_seats_per_role` :
+            # sa cardinalite est « un seul par Coach » (CDC 10.3 n179), garantie
+            # par `apps.clubs.services.appoint_assistant_coach`.
             # Cardinalite configurable par club (CDC 2.3, 10.2 n3/n24) :
             # au plus `board_seats_per_role` titulaires ACTIFS par role.
             # Le President (garanti par ailleurs, voir docstring de
@@ -448,12 +454,18 @@ class MembershipRole(TenantModel):
             )
             if active_others >= max_seats:
                 raise ValidationError(
-                    "Le nombre maximal de titulaires actifs pour ce role est "
-                    f"deja atteint dans ce club ({max_seats} titulaire(s) -- "
-                    "CDC 10.2 n24). Revoquez un titulaire existant avant d'en "
-                    "nommer un nouveau, ou augmentez le nombre de titulaires "
-                    "autorises dans les parametres du club."
+                    "Le nombre maximal de titulaires actifs pour ce rôle est "
+                    f"déjà atteint dans ce club ({max_seats} titulaire(s)). "
+                    "Révoquez un titulaire existant avant d'en nommer un "
+                    "nouveau, ou augmentez le nombre de titulaires autorisés "
+                    "dans les paramètres du club."
                 )
+
+
+#: Staff technique : le Coach ET son Assistant ont exactement les memes droits
+#: (CDC 10.3 n179), sauf nommer/retirer un assistant (reserve au Coach). Toute
+#: matrice qui inclut le Coach doit utiliser cet ensemble, jamais `COACH` seul.
+COACHING_STAFF_ROLES = frozenset({MembershipRole.Role.COACH, MembershipRole.Role.ASSISTANT_COACH})
 
 
 class MembershipApplication(TenantModel):
@@ -558,13 +570,13 @@ class MembershipApplication(TenantModel):
 
     def clean(self):
         if self.membership_id and self.club_id and self.membership.club_id != self.club_id:
-            raise ValidationError("Le dossier d'adhesion doit porter le meme club que l'adhesion concernee.")
+            raise ValidationError("Le dossier d'adhésion doit appartenir au même club que l'adhésion concernée.")
         if self.membership_fee_payment_id and (
             self.membership_fee_payment.club_id != self.club_id
             or self.membership_fee_payment.membership_id != self.membership_id
         ):
             raise ValidationError(
-                "Le paiement des frais d'adhesion doit etre celui du joueur concerne, dans le meme club."
+                "Le paiement des frais d'adhésion doit être celui du joueur concerné, dans le même club."
             )
 
 
@@ -626,17 +638,16 @@ class PresidencyTransfer(TenantModel):
             and self.to_membership_id
             and self.from_membership.club_id != self.to_membership.club_id
         ):
-            raise ValidationError("Les deux adhesions doivent appartenir au meme club.")
+            raise ValidationError("Les deux adhésions doivent appartenir au même club.")
         if self.club_id and self.from_membership_id and self.from_membership.club_id != self.club_id:
-            raise ValidationError("La passation doit porter le meme club que les adhesions concernees.")
+            raise ValidationError("La passation doit appartenir au même club que les adhésions concernées.")
         if self.method == self.Method.SUPERUSER_OVERRIDE and not self.superuser_id:
             raise ValidationError(
-                "Une intervention Superuser doit identifier l'identite reelle du Superuser (Ghost Mode)."
+                "Une intervention du Superuser doit identifier le Superuser réel."
             )
         if self.method == self.Method.SUPERUSER_OVERRIDE and not (self.reason or "").strip():
             raise ValidationError(
-                "Une intervention Superuser doit porter un motif ecrit, comme "
-                "toute intervention Ghost Mode (CDC 2.5)."
+                "Une intervention du Superuser doit porter un motif écrit."
             )
 
 

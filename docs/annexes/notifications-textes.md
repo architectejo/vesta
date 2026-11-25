@@ -74,7 +74,7 @@ corriger, pas une tolérance.
 **Texte validé**
 
 - Titre : `Fiche d'adhésion à signer`
-- Corps : `{recrue} attend votre parrainage. Ouvrez sa fiche d'adhésion pour la signer avec votre code PIN, ou pour refuser en indiquant un motif.`
+- Corps : `{recrue} attend votre parrainage. Ouvrez sa fiche d'adhésion pour la signer, ou pour refuser en indiquant un motif.`
 
 Justification : le parrain doit savoir qu'il peut refuser (le code le permet,
 `refuse_sponsor_application`, motif obligatoire) ; sans cette mention, un parrain
@@ -96,7 +96,7 @@ le joueur, `add_player_with_sponsor`, ou le Président, `reassign_sponsor`).
 **Texte validé**
 
 - Titre : `Rappel : fiche d'adhésion à signer`
-- Corps : `La fiche d'adhésion de {recrue} attend votre réponse depuis 3 jours. Signez-la avec votre code PIN, ou refusez en indiquant un motif.`
+- Corps : `La fiche d'adhésion de {recrue} attend votre réponse depuis 3 jours. Signez-la, ou refusez en indiquant un motif.`
 
 « Depuis 3 jours » est fidèle au seuil du code (`SPONSOR_REMINDER_DELAY`). Le
 mot « Rappel » passe dans le titre, le corps n'a plus à le répéter.
@@ -273,8 +273,8 @@ données : elle doit être créée et réversible (CLAUDE.md §9).
 
 | # | Fonction | Titre (`title=`) | Corps (`message=`) |
 | --- | --- | --- | --- |
-| 1 | `clubs.services.notify_sponsor` (première notification) | `Fiche d'adhésion à signer` | `{recrue} attend votre parrainage. Ouvrez sa fiche d'adhésion pour la signer avec votre code PIN, ou pour refuser en indiquant un motif.` |
-| 2 | `clubs.services.notify_sponsor` (rappel) | `Rappel : fiche d'adhésion à signer` | `La fiche d'adhésion de {recrue} attend votre réponse depuis 3 jours. Signez-la avec votre code PIN, ou refusez en indiquant un motif.` |
+| 1 | `clubs.services.notify_sponsor` (première notification) | `Fiche d'adhésion à signer` | `{recrue} attend votre parrainage. Ouvrez sa fiche d'adhésion pour la signer, ou pour refuser en indiquant un motif.` |
+| 2 | `clubs.services.notify_sponsor` (rappel) | `Rappel : fiche d'adhésion à signer` | `La fiche d'adhésion de {recrue} attend votre réponse depuis 3 jours. Signez-la, ou refusez en indiquant un motif.` |
 | 3 | `clubs.services.notify_president_of_sponsor_refusal` | `Parrainage refusé` | `{parrain} a refusé de parrainer {recrue}. Motif : « {motif} ». Désignez un autre parrain ou annulez l'adhésion.` |
 | 4 | `clubs.services.notify_president_of_no_response` | `Parrain sans réponse` | `{parrain} n'a toujours pas signé la fiche d'adhésion de {recrue}, 7 jours après l'avoir reçue. Un rappel lui a déjà été envoyé.` |
 | 5a | `clubs.services.notify_role_change` (`appointed`) | `Nouveau rôle` | `Vous avez désormais le rôle « {rôle} » au sein de {club}.` |
@@ -311,3 +311,20 @@ données : elle doit être créée et réversible (CLAUDE.md §9).
    `apps/clubs/tests/test_services_roles.py`, `apps/notifications/tests/test_services.py`
    et `apps/notifications/tests/factories.py` comparent désormais la chaîne
    exacte de cette annexe (plus aucune recherche par mot-clé). Point clos.
+
+## 10. Mesures de performance disponibles (tests de performance, Lot 3)
+
+| | |
+| --- | --- |
+| Ligne 4.17 | « Mesures de performance disponibles » — Joueur mesuré — In-app |
+| Déclencheur réel | Commande `notify_performance_results` : une notification par joueur mesuré et par séance, **une heure après la dernière mesure** de la séance (les corrections et annulations d'une mesure retardent l'envoi tant qu'elles se produisent dans l'heure) ; jamais deux fois pour le même joueur et la même séance (idempotente) ; seuls les joueurs inscrits sont notifiés ; fenêtre de rattrapage de 14 jours |
+| Code | `backend/apps/sport/performance.py`, `notify_performance_results`, `event_type=PERFORMANCE_RESULTS_AVAILABLE` (valeur technique `performance_results_available`) ; commande `backend/apps/sport/management/commands/notify_performance_results.py` ; libellé de l'événement dans la migration `notifications/0008_performance_results_event.py` |
+| Cron | Toutes les 5 à 15 minutes : `python manage.py notify_performance_results` (option `--club <id>` pour un seul club) |
+| Canal | In-app seulement |
+| Clic | Mène à la séance concernée (cible : l'événement) |
+| Titre | `Mesures de performance disponibles` (libellé de l'événement, repli automatique) |
+| Corps | `Vos mesures de la séance du {date} sont disponibles.` |
+
+Variable : `{date}` = date de la séance au format `JJ/MM/AAAA`.
+Décision provisoire du client en attente (question C-Q9 de `sport-statistiques-seance.md`) : le
+délai d'une heure et la fenêtre de 14 jours sont des valeurs par défaut.

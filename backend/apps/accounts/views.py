@@ -9,6 +9,7 @@ temporaire, desambiguisation du club actif...) vit dans
 from __future__ import annotations
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -24,7 +25,12 @@ from apps.accounts.throttling import (
     PasswordResetEmailRateThrottle,
     PasswordResetRateThrottle,
 )
-from apps.core.permissions import IsSuperuser
+from apps.core.permissions import (
+    HasAcceptedLatestTerms,
+    HasCompletedPasswordSetup,
+    HasUsableLicence,
+    IsSuperuser,
+)
 
 
 def _serialize_club(club, request) -> dict | None:
@@ -111,8 +117,8 @@ class LoginView(APIView):
                 {
                     "code": "account_locked",
                     "detail": (
-                        "Trop de tentatives. Pour proteger votre compte, la connexion "
-                        "est bloquee pendant 15 minutes."
+                        "Trop de tentatives. Pour protéger votre compte, la connexion "
+                        "est bloquée pendant 15 minutes."
                     ),
                     "locked_until": exc.locked_until,
                 },
@@ -141,22 +147,22 @@ class LoginView(APIView):
                 {
                     "code": "temporary_password_expired",
                     "detail": (
-                        "Ce mot de passe temporaire a expire. Faites une nouvelle "
-                        "demande avec « Mot de passe oublie ? »."
+                        "Ce mot de passe temporaire a expiré. Faites une nouvelle "
+                        "demande avec « Mot de passe oublié ? »."
                     ),
                 },
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         except services.AccountDisabledError:
             return Response(
-                {"code": "account_disabled", "detail": "Ce compte est desactive. Contactez le support Vesta."},
+                {"code": "account_disabled", "detail": "Ce compte est désactivé. Contactez le support Vesta."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         except services.NoClubMembershipError:
             return Response(
                 {
                     "code": "no_club_membership",
-                    "detail": "Votre compte n'est rattache a aucun club pour l'instant.",
+                    "detail": "Votre compte n'est rattaché à aucun club pour l'instant.",
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
@@ -165,13 +171,15 @@ class LoginView(APIView):
                 {
                     "code": "club_disambiguation_required",
                     "detail": (
-                        "Plusieurs clubs sont associes a ce compte : precisez lequel "
+                        "Plusieurs clubs sont associés à ce compte : précisez lequel "
                         "(adresse /c/<slug>)."
                     ),
                     "clubs": [{"slug": m.club.slug, "name": m.club.name} for m in exc.candidates],
                 },
                 status=status.HTTP_409_CONFLICT,
             )
+
+        from apps.clubs.profile_services import can_view_board_dashboard, default_landing_for_membership
 
         user = result.user
         refresh = RefreshToken.for_user(user)
@@ -187,6 +195,10 @@ class LoginView(APIView):
                 ),
                 "must_change_password": user.must_change_password,
                 "terms_acceptance_required": pending_terms is not None,
+                # Destination d'arrivee calculee a partir des roles ACTIFS, a chaque
+                # connexion (jamais figee dans le jeton, regle n9).
+                "default_landing": default_landing_for_membership(result.membership),
+                "capabilities": {"can_view_board_dashboard": can_view_board_dashboard(result.membership)},
             },
             status=status.HTTP_200_OK,
         )
@@ -222,7 +234,7 @@ class ForcedPasswordChangeView(APIView):
         except DjangoValidationError as exc:
             return Response({"detail": exc.messages}, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response({"detail": "Mot de passe modifie."}, status=status.HTTP_200_OK)
+        return Response({"detail": "Mot de passe modifié."}, status=status.HTTP_200_OK)
 
 
 class LogoutView(APIView):
@@ -243,7 +255,7 @@ class LogoutView(APIView):
             services.logout(user=request.user, refresh_token=serializer.validated_data["refresh"])
         except services.InvalidRefreshTokenError:
             return Response(
-                {"detail": "Jeton de renouvellement invalide ou deja invalide."},
+                {"detail": "Jeton de renouvellement invalide ou déjà invalidé."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -305,7 +317,7 @@ class SuperuserPasswordResetView(APIView):
             )
         except User.DoesNotExist:
             return Response(
-                {"detail": "Aucun compte ne correspond a cette adresse email."},
+                {"detail": "Aucun compte ne correspond à cette adresse e-mail."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
@@ -346,8 +358,11 @@ class SuperuserAccountDeactivateView(APIView):
         except User.DoesNotExist:
             return Response({"detail": "Ce compte n'existe pas."}, status=status.HTTP_404_NOT_FOUND)
 
-        services.deactivate_account(superuser=request.user, target_user=target_user, reason=data["reason"])
-        return Response({"detail": "Compte desactive."}, status=status.HTTP_200_OK)
+        try:
+            services.deactivate_account(superuser=request.user, target_user=target_user, reason=data["reason"])
+        except services.AccountDeactivationRefusedError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"detail": "Compte désactivé."}, status=status.HTTP_200_OK)
 
 
 class SuperuserPendingPasswordResetsView(APIView):
@@ -371,7 +386,9 @@ class PendingTermsView(APIView):
     def get(self, request):
         pending = services.get_pending_terms_version(request.user)
         if pending is None:
-            return Response(None, status=status.HTTP_200_OK)
+            # Littéral JSON `null` (et non un corps vide) : le client le lit comme « aucune version ».
+            # (le rendu DRF d'un `None` produit un corps vide : on répond explicitement.)
+            return HttpResponse(b"null", content_type="application/json", status=status.HTTP_200_OK)
         return Response(serializers.TermsVersionSerializer(pending).data, status=status.HTTP_200_OK)
 
 
@@ -431,7 +448,31 @@ class MyPersonalInfoUpdateView(APIView):
             weight_kg=data.get("weight_kg"),
             height_cm=data.get("height_cm"),
         )
-        return Response({"detail": "Profil mis a jour."}, status=status.HTTP_200_OK)
+        return Response({"detail": "Profil mis à jour."}, status=status.HTTP_200_OK)
+
+
+class MyPersonalDataExportView(APIView):
+    """« Telecharger mes donnees » (CDC 7.5) : export JSON des seules
+    donnees du joueur connecte. Garde-fous globaux conserves (voir
+    ``MyPersonalInfoUpdateView``). Jamais de parametre designant un autre
+    compte : l'utilisateur est toujours ``request.user``."""
+
+    # Declaration explicite (CLAUDE.md §7) ; valeur identique aux garde-fous
+    # globaux (comportement inchange, y compris HasUsableLicence : le droit
+    # d'export pendant une suspension de licence n'est pas tranche ici).
+    permission_classes = [
+        IsAuthenticated,
+        HasCompletedPasswordSetup,
+        HasAcceptedLatestTerms,
+        HasUsableLicence,
+    ]
+
+    def get(self, request):
+        data = services.export_personal_data(user=request.user)
+        response = Response(data, status=status.HTTP_200_OK)
+        response["Content-Disposition"] = 'attachment; filename="mes-donnees-vesta.json"'
+        response["Cache-Control"] = "no-store"
+        return response
 
 
 class MyCredentialsUpdateView(APIView):
@@ -462,35 +503,7 @@ class MyCredentialsUpdateView(APIView):
         except DjangoValidationError as exc:
             return Response({"detail": exc.messages}, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response({"detail": "Identifiants mis a jour."}, status=status.HTTP_200_OK)
-
-
-class MyPinUpdateView(APIView):
-    """Onglet « Code PIN » (CDC 7.2 ; comptes-mon-profil.md §4.1) : point
-    d'entree HTTP de ``apps.accounts.services.redefine_pin`` (deja
-    construit tache 1.4b).
-
-    Pas d'override de ``permission_classes`` : les garde-fous globaux
-    (``HasCompletedPasswordSetup``, ``HasAcceptedLatestTerms``, voir
-    ``apps.core.permissions``) doivent s'appliquer ici (CDC 4.1, 7.5).
-    """
-
-    def post(self, request):
-        serializer = serializers.ProfilePinUpdateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-
-        try:
-            services.redefine_pin(
-                user=request.user,
-                password=data["current_password"],
-                new_pin=data["new_pin"],
-                confirm_new_pin=data["confirm_new_pin"],
-            )
-        except services.PinError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-
-        return Response({"detail": "Code PIN enregistre."}, status=status.HTTP_200_OK)
+        return Response({"detail": "Identifiants mis à jour."}, status=status.HTTP_200_OK)
 
 
 class MyProfilePhotoView(APIView):
@@ -506,7 +519,7 @@ class MyProfilePhotoView(APIView):
         serializer.is_valid(raise_exception=True)
 
         services.update_profile_photo(user=request.user, photo=serializer.validated_data["photo"])
-        return Response({"detail": "Photo mise a jour."}, status=status.HTTP_200_OK)
+        return Response({"detail": "Photo mise à jour."}, status=status.HTTP_200_OK)
 
     def delete(self, request):
         services.remove_profile_photo(user=request.user)

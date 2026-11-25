@@ -8,7 +8,7 @@ Quand vous êtes connecté avec le rôle Coach, votre écran d'accueil devient v
 - **Évaluations à faire** : une ligne par séance/match des dernières 48 h avec des joueurs non encore évalués.
 - **Discipline** : suspensions en cours et derniers incidents (cartons).
 - **Capitaine actuel**, avec un bouton pour en choisir un autre parmi les joueurs.
-- **Plans tactiques** : les 5 derniers, avec un bouton « Nouveau plan ».
+- **Plans tactiques** : les 5 derniers, avec un bouton « Nouveau plan » (les plans se gèrent dans Vestiaire du jour, onglet « Plans »).
 - Boutons principaux : « Créer une séance » et « Créer un match ».
 
 ## Séances (menu « … » → ou depuis « Vestiaire du jour »)
@@ -27,7 +27,7 @@ Quand vous êtes connecté avec le rôle Coach, votre écran d'accueil devient v
 
 ## Plan tactique et tableau noir
 
-- « Plan tactique » (menu Sport) liste vos plans ; ouvrir un plan affiche le terrain et les consignes en lecture seule.
+- L'onglet « Plans » du Vestiaire du jour (menu Sport) liste vos plans ; ouvrir un plan affiche le terrain et les consignes en lecture seule.
 - Depuis un plan, « Modifier sur le tableau noir » ouvre l'éditeur plein écran : glissez-déposez les joueurs sur le terrain, ajoutez des flèches/zones, publiez le plan.
 - Un joueur en dette, suspendu ou inapte ne peut pas être placé sur le terrain.
 

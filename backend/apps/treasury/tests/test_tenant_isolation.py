@@ -9,7 +9,7 @@ from apps.clubs.tests.factories import MembershipApplicationFactory
 from apps.core.tenant import NoActiveClubError, TenantMismatchError, active_club
 from apps.treasury import services
 from apps.treasury.models import ContributionType, ContributionTypeRate, Payment, PaymentReversal, Transaction
-from apps.treasury.tests.conftest import PIN, past_day
+from apps.treasury.tests.conftest import past_day
 
 pytestmark = pytest.mark.django_db
 
@@ -21,7 +21,6 @@ def pay(ctx, membership=None, validated_by=None):
         method="cash",
         paid_on=past_day(),
         validated_by=(validated_by or ctx.treasurer).user,
-        pin=PIN,
     )
 
 
@@ -89,7 +88,7 @@ def test_president_d_un_autre_club_ne_peut_approuver_une_annulation(ctx, fee_typ
         payment=pay(ctx), reason="Erreur", requested_by=ctx.treasurer.user
     )
     with pytest.raises(services.TreasuryPermissionError):
-        services.approve_payment_reversal(reversal=reversal, approved_by=other_ctx.president.user, pin=PIN)
+        services.approve_payment_reversal(reversal=reversal, approved_by=other_ctx.president.user)
 
 
 def test_type_de_cotisation_d_un_autre_club_refuse_par_le_modele(ctx, other_ctx, other_fee_type):

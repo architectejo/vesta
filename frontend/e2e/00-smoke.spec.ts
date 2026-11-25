@@ -6,7 +6,7 @@ test("président se connecte et voit l'accueil de Fc Malaïka", async ({ page })
   page.on("pageerror", (err) => console.log("[pageerror]", err.message));
 
   console.log("t0", Date.now());
-  const session = await loginAs(page, "jonathan777t@gmail.com");
+  const session = await loginAs(page, "president@example.org");
   console.log("t1 after loginAs", Date.now());
   expect(session.club?.slug).toBe("fc-malaika");
   console.log("t2 before toHaveURL", Date.now());

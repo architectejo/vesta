@@ -123,14 +123,6 @@ class User(AbstractBaseUser):
     )
     is_active = models.BooleanField(default=True, help_text="Desactivation par un Superuser (CDC 4.18).")
 
-    pin_hash = models.CharField(
-        max_length=255,
-        blank=True,
-        help_text="Hache du code PIN (CDC 7.2). Jamais stocke en clair. Defini a la premiere action sensible.",
-    )
-    pin_failed_attempts = models.PositiveSmallIntegerField(default=0)
-    pin_locked_until = models.DateTimeField(null=True, blank=True, help_text="Blocage 30 min apres 3 echecs (CDC 7.2).")
-
     failed_login_attempts = models.PositiveSmallIntegerField(default=0)
     login_locked_until = models.DateTimeField(null=True, blank=True, help_text="Blocage 15 min apres 5 echecs (CDC 7.1).")
 
@@ -276,7 +268,7 @@ class PasswordResetRequest(models.Model):
     def clean(self):
         if self.status == self.Status.DONE and not (self.handled_by_id and self.handled_at):
             raise ValidationError(
-                "Une demande traitee doit indiquer qui l'a traitee et quand (CDC 4.1, 10.2 n21)."
+                "Une demande traitée doit indiquer qui l'a traitée et quand."
             )
         if self.handled_by_id and not getattr(self.handled_by, "is_superuser", False):
             raise ValidationError(

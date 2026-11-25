@@ -5,7 +5,7 @@
 ## Accueil et fil d'actualité
 
 - **Accueil** : votre tableau de bord personnel (statut de cotisation, prochaines échéances, dernières activités).
-- **Fil d'actualité** (menu « Fil d'actualité ») : publications du club, réactions, commentaires, signalement d'une publication inappropriée (sans code PIN).
+- **Fil d'actualité** (menu « Fil d'actualité ») : publications du club, réactions, commentaires, signalement d'une publication inappropriée.
 
 ## Mon profil
 
@@ -25,7 +25,7 @@
 ## Sport
 
 - **Vestiaire du jour** : la séance ou le match du jour, avec un lien direct vers son détail.
-- **Plan tactique** : consultation des plans publiés par le Coach (terrain et consignes), en lecture seule.
+- **Plans tactiques** : dans « Vestiaire du jour », onglet « Plans » : consultation des plans publiés par le Coach (terrain et consignes), en lecture seule.
 - Vous voyez les compositions publiées de vos matchs, jamais les brouillons.
 
 ## Ce que vous ne voyez pas

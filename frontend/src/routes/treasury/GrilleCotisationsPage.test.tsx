@@ -167,6 +167,7 @@ function makeCapabilities(overrides: Partial<TreasuryCapabilities> = {}): { curr
       can_submit_expenses: false,
       can_validate_expenses: false,
       can_derogate: false,
+      can_decide_payment_reversal: false,
       can_upload_expense_receipts: false,
       can_manage_assistance_scales: false,
       can_process_assistance_requests: false,

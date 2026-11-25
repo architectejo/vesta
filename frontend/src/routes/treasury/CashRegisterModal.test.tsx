@@ -63,8 +63,9 @@ describe("CashRegisterFlow", () => {
     vi.mocked(getCurrentCashSession).mockResolvedValue({ session: null });
     renderFlow();
 
-    expect(await screen.findByRole("dialog", { name: "Ouvrir une session de caisse" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Votre code PIN")).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Ouvrir une session de caisse ?" })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/PIN/i)).not.toBeInTheDocument();
+    expect(openCashSession).not.toHaveBeenCalled();
   });
 
   it("ouvre la caisse après une session ouverte avec succès", async () => {
@@ -74,9 +75,10 @@ describe("CashRegisterFlow", () => {
     const user = userEvent.setup();
     renderFlow();
 
-    const pinInput = await screen.findByLabelText("Votre code PIN");
-    await user.type(pinInput, "1234");
+    await screen.findByRole("dialog", { name: "Ouvrir une session de caisse ?" });
+    expect(openCashSession).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Ouvrir la session" }));
+    expect(openCashSession).toHaveBeenCalledWith();
 
     // Le toast de succès porte le même texte que le bandeau de la caisse :
     // on cible le bandeau à l'intérieur de la modale pour éviter l'ambiguïté.

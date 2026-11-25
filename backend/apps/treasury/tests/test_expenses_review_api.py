@@ -3,9 +3,9 @@
 Couvre ce que ``test_views_expenses.py`` ne couvrait pas : matrice 2.4 complète
 (fonctions sans droit, joueur « En attente », joueur parti, cumul, rôle révoqué,
 Superuser), étanchéité entre clubs sur CHAQUE endpoint (lecture, action,
-fichier, listes, résumé), PIN par l'API (absent, mal formé, verrouillé, jamais
-renvoyé), jour d'échéance J+7 et fuseau vus par l'API, affectation de masse,
-fichiers refusés et en-têtes de téléchargement.
+fichier, listes, résumé), absence de PIN par l'API (décision client du
+11/10/2026 : un ``pin`` envoyé est ignoré, jamais renvoyé), jour d'échéance
+J+7 et fuseau vus par l'API, affectation de masse, fichiers refusés et en-têtes de téléchargement.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import pytest
 from django.contrib.auth.hashers import make_password
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -35,7 +36,7 @@ from apps.treasury.models import (
     SocialAssistanceScale,
     Transaction,
 )
-from apps.treasury.tests.conftest import PIN, WRONG_PIN
+from apps.treasury.tests.conftest import PIN, WRONG_PIN, assert_logged_by
 from apps.treasury.tests.expense_helpers import (
     PDF_CONTENT,
     club_today,
@@ -227,10 +228,10 @@ def endpoints(w: World) -> list[Endpoint]:
         Endpoint("expense summary GET", "get", url("expense-summary"), READERS, mutating=False),
         Endpoint("expense detail GET", "get", url("expense-detail", w.pending.pk), READERS, mutating=False),
         Endpoint("expense refuse POST", "post", url("expense-refuse", w.pending.pk), VALIDATORS, {"reason": "Non"}),
-        Endpoint("expense release POST", "post", url("expense-release", w.pending.pk), VALIDATORS, {"pin": PIN}),
+        Endpoint("expense release POST", "post", url("expense-release", w.pending.pk), VALIDATORS, {}),
         Endpoint(
             "expense derogation POST", "post", url("expense-derogation", w.pending.pk), DEROGATORS,
-            {"pin": PIN, "reason": "Urgence"},
+            {"reason": "Urgence"},
         ),
         Endpoint(
             "expense receipt POST", "post", url("expense-receipt", w.released.pk), RECORDERS,
@@ -462,8 +463,8 @@ class TestCrossClubIsolation:
             ("category archive", "post", url("expense-category-detail", f.spare_category.pk), {"action": "archive"}, "president"),
             ("expense detail", "get", url("expense-detail", f.pending.pk), None, "president"),
             ("expense refuse", "post", url("expense-refuse", f.pending.pk), {"reason": "Piraté"}, "president"),
-            ("expense release", "post", url("expense-release", f.pending.pk), {"pin": PIN}, "president"),
-            ("expense derogation", "post", url("expense-derogation", f.pending.pk), {"pin": PIN, "reason": "Piraté"}, "president"),
+            ("expense release", "post", url("expense-release", f.pending.pk), {}, "president"),
+            ("expense derogation", "post", url("expense-derogation", f.pending.pk), {"reason": "Piraté"}, "president"),
             ("expense receipt", "post", url("expense-receipt", (f.overdue or f.released).pk), "file", "treasurer"),
             ("expense receipt (released)", "post", url("expense-receipt", f.released.pk), "file", "assistant_treasurer"),
             ("expense attachment", "get", url("expense-attachment-download", f.pending_attachment.pk), None, "president"),
@@ -620,14 +621,12 @@ class TestCrossClubIsolation:
             assert response.status_code in (400, 403, 404), path
             assert "results" not in getattr(response, "data", {}) or response.data["results"] == []
 
-    def test_foreign_president_cannot_release_even_with_a_correct_pin_and_pin_counter_is_untouched(self, ctx, other_ctx, world, foreign):
-        response = client_for(ctx.president.user).post(url("expense-release", foreign.pending.pk), {"pin": PIN}, format="json")
-        assert response.status_code == 404
+    def test_foreign_president_cannot_release_another_club_expense(self, ctx, other_ctx, world, foreign):
+        for body in ({}, {"pin": WRONG_PIN}):
+            response = client_for(ctx.president.user).post(url("expense-release", foreign.pending.pk), body, format="json")
+            assert response.status_code == 404
         assert not Transaction.all_objects.filter(expense=foreign.pending).exists()
-        # Wrong PIN on a foreign object must not burn an attempt either (404 avant tout contrôle de PIN).
-        client_for(ctx.president.user).post(url("expense-release", foreign.pending.pk), {"pin": WRONG_PIN}, format="json")
-        ctx.president.user.refresh_from_db()
-        assert ctx.president.user.pin_failed_attempts == 0
+        assert Expense.all_objects.get(pk=foreign.pending.pk).status == Expense.Status.PENDING
 
     def test_cron_style_marking_only_touches_the_requested_club(self, ctx, other_ctx, world, foreign):
         assert foreign.overdue.status == Expense.Status.RELEASED
@@ -641,93 +640,77 @@ class TestCrossClubIsolation:
 
 
 # ---------------------------------------------------------------------------
-# PIN par l'API (CDC 7.2)
+# Plus de PIN par l'API (décision client du 11/10/2026, CLAUDE.md règle 7) :
+# un ``pin`` envoyé par un ancien client est ignoré ; l'auteur est journalisé.
 # ---------------------------------------------------------------------------
 
 
-class TestPinThroughTheApi:
+class TestNoPinThroughTheApi:
     def _release(self, client, expense, **body):
         return client.post(url("expense-release", expense.pk), body, format="json")
 
-    def test_missing_empty_and_oversized_pin_are_rejected_before_any_attempt_is_counted(self, ctx, world):
-        client = client_for(ctx.vice_president.user)
-        for body in ({}, {"pin": ""}, {"pin": "1" * 13}, {"pin": None}, {"pin": ["2468"]}):
-            response = self._release(client, world.pending, **body)
-            assert response.status_code == 400, body
-        ctx.vice_president.user.refresh_from_db()
-        assert ctx.vice_president.user.pin_failed_attempts == 0
-        assert Expense.all_objects.get(pk=world.pending.pk).status == Expense.Status.PENDING
+    def test_release_without_pin_succeeds_and_the_author_is_journalised(self, ctx, world):
+        response = self._release(client_for(ctx.vice_president.user), world.pending)
+        assert response.status_code == 200, response.data
+        assert Expense.all_objects.get(pk=world.pending.pk).status == Expense.Status.RELEASED
+        assert_logged_by("treasury.expense.released", ctx.vice_president.user, club=ctx.club, obj=world.pending)
 
-    @pytest.mark.parametrize("bad", ["abcd", "24", "24681", "246 8", "٢٤٦٨", "0000"])
-    def test_malformed_or_wrong_pins_never_release(self, ctx, world, bad):
-        response = self._release(client_for(ctx.president.user), world.pending, pin=bad)
-        assert response.status_code == 400
-        assert Expense.all_objects.get(pk=world.pending.pk).status == Expense.Status.PENDING
-        assert not Transaction.all_objects.filter(expense=world.pending).exists()
+    @pytest.mark.parametrize("body", [{"pin": ""}, {"pin": "1" * 13}, {"pin": None}, {"pin": ["2468"]}, {"pin": "0000"}])
+    def test_any_pin_sent_by_an_old_client_is_ignored(self, ctx, world, body):
+        response = self._release(client_for(ctx.president.user), world.pending, **body)
+        assert response.status_code == 200, response.data
+        assert "attempts_remaining" not in response.data and "locked_until" not in response.data
+        ctx.president.user.refresh_from_db()
 
-    def test_attempts_remaining_then_423_lock_then_even_the_right_pin_is_refused(self, ctx, world):
-        client = client_for(ctx.president.user)
-        first = self._release(client, world.pending, pin=WRONG_PIN)
-        second = self._release(client, world.pending, pin=WRONG_PIN)
-        third = self._release(client, world.pending, pin=WRONG_PIN)
-        fourth = self._release(client, world.pending, pin=PIN)
-        assert (first.status_code, first.data["attempts_remaining"]) == (400, 2)
-        assert (second.status_code, second.data["attempts_remaining"]) == (400, 1)
-        assert third.status_code == 423 and third.data["locked_until"]
-        assert fourth.status_code == 423
-        assert Expense.all_objects.get(pk=world.pending.pk).status == Expense.Status.PENDING
-
-    def test_the_lock_also_blocks_the_derogation_endpoint(self, ctx, world):
+    def test_derogation_without_pin_succeeds_and_the_author_is_journalised(self, ctx, world):
         release(ctx, make_expense(ctx, world.category, amount="3"), now=days_ago(10))
         client = client_for(ctx.president.user)
-        for _ in range(3):
-            client.post(url("expense-derogation", world.pending.pk), {"pin": WRONG_PIN, "reason": "U"}, format="json")
-        response = client.post(url("expense-derogation", world.pending.pk), {"pin": PIN, "reason": "U"}, format="json")
-        assert response.status_code == 423
-        assert not ExpenseDerogation.all_objects.exists()
+        response = client.post(
+            url("expense-derogation", world.pending.pk), {"pin": WRONG_PIN, "reason": "U"}, format="json"
+        )
+        assert response.status_code == 200, response.data
+        assert ExpenseDerogation.all_objects.get(expense=world.pending).granted_by_id == ctx.president.user_id
+        assert_logged_by("treasury.expense.derogation_granted", ctx.president.user, club=ctx.club)
 
-    def test_user_without_a_pin_gets_a_clear_french_error(self, ctx, world):
-        User.objects.filter(pk=ctx.vice_president.user_id).update(pin_hash="")
-        response = self._release(client_for(ctx.vice_president.user), world.pending, pin=PIN)
-        assert response.status_code == 400 and "PIN" in response.data["detail"]
-        assert Expense.all_objects.get(pk=world.pending.pk).status == Expense.Status.PENDING
-
-    def test_blocked_release_answers_409_before_the_pin_is_examined(self, ctx, world):
+    def test_blocked_release_answers_409(self, ctx, world):
         release(ctx, make_expense(ctx, world.category, amount="3"), now=days_ago(10))
         client = client_for(ctx.vice_president.user)
-        assert self._release(client, world.pending, pin=WRONG_PIN).status_code == 409
-        ctx.vice_president.user.refresh_from_db()
-        assert ctx.vice_president.user.pin_failed_attempts == 0
+        assert self._release(client, world.pending).status_code == 409
+        assert Expense.all_objects.get(pk=world.pending.pk).status == Expense.Status.PENDING
 
-    def test_derogation_requires_reason_and_pin_and_only_when_blocked(self, ctx, world):
+    def test_derogation_requires_a_reason_and_only_when_blocked(self, ctx, world):
         client = client_for(ctx.president.user)
         path = url("expense-derogation", world.pending.pk)
-        assert client.post(path, {"pin": PIN, "reason": "Urgence"}, format="json").status_code == 400  # pas bloqué
+        assert client.post(path, {"reason": "Urgence"}, format="json").status_code == 400  # pas bloqué
         release(ctx, make_expense(ctx, world.category, amount="3"), now=days_ago(10))
-        assert client.post(path, {"pin": PIN}, format="json").status_code == 400
-        assert client.post(path, {"pin": PIN, "reason": "   "}, format="json").status_code == 400
-        assert client.post(path, {"reason": "Urgence"}, format="json").status_code == 400
+        assert client.post(path, {}, format="json").status_code == 400
+        assert client.post(path, {"reason": "   "}, format="json").status_code == 400
         assert not ExpenseDerogation.all_objects.exists()
-        ok = client.post(path, {"pin": PIN, "reason": "Blessé à soigner"}, format="json")
+        ok = client.post(path, {"reason": "Blessé à soigner"}, format="json")
         assert ok.status_code == 200 and ok.data["derogation"]["reason"] == "Blessé à soigner"
 
-    def test_neither_responses_nor_journal_ever_contain_the_pin(self, ctx, world):
+    def test_neither_responses_nor_journal_ever_contain_a_pin(self, ctx, world):
         client = client_for(ctx.president.user)
-        bodies = []
-        for pin in (WRONG_PIN, PIN):
-            response = self._release(client, world.pending, pin=pin)
-            bodies.append(response.content.decode())
+        bodies = [self._release(client, world.pending, pin=WRONG_PIN).content.decode()]
         release(ctx, make_expense(ctx, world.category, amount="3"), now=days_ago(10))
         urgent = make_expense(ctx, make_category(ctx, name="Urgence"))
-        response = client.post(url("expense-derogation", urgent.pk), {"pin": PIN, "reason": "Décès"}, format="json")
+        response = client.post(url("expense-derogation", urgent.pk), {"reason": "Décès", "pin": PIN}, format="json")
         bodies.append(response.content.decode())
         for body in bodies:
             assert f'"{PIN}"' not in body and f'"{WRONG_PIN}"' not in body and '"pin"' not in body
-        pin_hash = User.objects.get(pk=ctx.president.user_id).pin_hash
         for entry in AuditLog.objects.all():
             text = dump(entry.before) + dump(entry.after)
-            assert f'"{PIN}"' not in text and f'"{WRONG_PIN}"' not in text and pin_hash not in text
+            assert f'"{PIN}"' not in text and f'"{WRONG_PIN}"' not in text
             assert "pin" not in {key.lower() for key in walk_keys(entry.after)}
+
+
+class TestLedgerFrozenCode:
+    def test_release_during_a_ledger_freeze_answers_409_with_the_ledger_frozen_code(self, ctx, world):
+        services.freeze_ledger(club=ctx.club, reason="Rupture simulée", actor=None)
+        response = client_for(ctx.president.user).post(url("expense-release", world.pending.pk), {}, format="json")
+        assert response.status_code == 409
+        assert response.data["code"] == "ledger_frozen"
+        assert Expense.all_objects.get(pk=world.pending.pk).status == Expense.Status.PENDING
 
 
 # ---------------------------------------------------------------------------
@@ -742,7 +725,7 @@ class TestDeadlineThroughTheApi:
         second = make_expense(ctx, make_category(ctx, name="Autre"))
 
         set_now(utc(2026, 9, 20, 12))  # 13h locale, échéance = 2026-09-27
-        response = client_for(ctx.president.user).post(url("expense-release", first.pk), {"pin": PIN}, format="json")
+        response = client_for(ctx.president.user).post(url("expense-release", first.pk), {}, format="json")
         assert response.status_code == 200 and response.data["justification_deadline"] == datetime.date(2026, 9, 27)
 
         set_now(utc(2026, 9, 27, 22, 59))  # 23h59 locale : dernier instant valide
@@ -754,25 +737,25 @@ class TestDeadlineThroughTheApi:
         assert client.get(url("expense-detail", first.pk)).data["is_overdue"] is True
         summary = client.get(url("expense-summary")).data
         assert summary["can_release"] is False and summary["blocking_expense_ids"] == [first.pk]
-        blocked = client.post(url("expense-release", second.pk), {"pin": PIN}, format="json")
+        blocked = client.post(url("expense-release", second.pk), {}, format="json")
         assert blocked.status_code == 409 and blocked.data["code"] == "expense_release_blocked"
 
     def test_blocking_lifts_through_the_receipt_endpoint_and_the_next_release_passes(self, ctx, world):
         late = release(ctx, make_expense(ctx, world.category, amount="4"), now=days_ago(10))
         target = make_expense(ctx, make_category(ctx, name="Autre"))
         vp = client_for(ctx.vice_president.user)
-        assert vp.post(url("expense-release", target.pk), {"pin": PIN}, format="json").status_code == 409
+        assert vp.post(url("expense-release", target.pk), {}, format="json").status_code == 409
         upload_response = client_for(ctx.assistant_treasurer.user).post(
             url("expense-receipt", late.pk), {"file": pdf_file("facture.pdf")}, format="multipart"
         )
         assert upload_response.status_code == 200 and upload_response.data["status"] == "justified"
-        assert vp.post(url("expense-release", target.pk), {"pin": PIN}, format="json").status_code == 200
+        assert vp.post(url("expense-release", target.pk), {}, format="json").status_code == 200
 
     def test_actions_on_a_final_expense_answer_400_and_do_not_change_it(self, ctx, world):
         client = client_for(ctx.president.user)
         client.post(url("expense-refuse", world.pending.pk), {"reason": "Non"}, format="json")
         for path, body in [
-            (url("expense-release", world.pending.pk), {"pin": PIN}),
+            (url("expense-release", world.pending.pk), {}),
             (url("expense-refuse", world.pending.pk), {"reason": "Encore"}),
         ]:
             assert client.post(path, body, format="json").status_code == 400

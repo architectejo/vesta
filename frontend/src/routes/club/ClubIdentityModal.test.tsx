@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../design-system";
 import type { ClubIdentity } from "../../api/clubs";
+import { ApiError } from "../../api/client";
 import { ClubIdentityModal } from "./ClubIdentityModal";
 
 vi.mock("../../api/clubs", async () => {
@@ -30,14 +31,15 @@ const EXISTING: ClubIdentity = {
   currency: "USD",
   currency_locked: false,
   timezone: "Africa/Kinshasa",
+  debt_tolerance_days: 7,
 };
 
-function renderModal(identity: ClubIdentity = EXISTING) {
+function renderModal(identity: ClubIdentity = EXISTING, canEditDebtTolerance = true) {
   const onClose = vi.fn();
   const onUpdated = vi.fn();
   render(
     <ToastProvider>
-      <ClubIdentityModal identity={identity} onClose={onClose} onUpdated={onUpdated} />
+      <ClubIdentityModal identity={identity} canEditDebtTolerance={canEditDebtTolerance} onClose={onClose} onUpdated={onUpdated} />
     </ToastProvider>,
   );
   return { onClose, onUpdated };
@@ -220,5 +222,47 @@ describe("ClubIdentityModal : couleurs proposées à partir du logo", () => {
     await Promise.resolve();
     expect(screen.getByLabelText("Couleur principale")).toHaveValue("#112233");
     expect(screen.getByLabelText("Couleur secondaire")).toHaveValue("#445566");
+  });
+});
+
+describe("ClubIdentityModal : tolérance de dette", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const LABEL = "Jours de tolérance avant qu'un retard devienne une dette";
+
+  it("permet au Président de modifier et d'enregistrer la tolérance", async () => {
+    vi.mocked(updateClubIdentity).mockResolvedValue({ ...EXISTING, debt_tolerance_days: 15 });
+    const user = userEvent.setup();
+    const { onUpdated } = renderModal();
+
+    expect(screen.getByText("0 = la dette naît le lendemain de l'échéance")).toBeInTheDocument();
+    const field = screen.getByLabelText(LABEL);
+    expect(field).toHaveValue(7);
+    await user.clear(field);
+    await user.type(field, "15");
+    await user.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    await waitFor(() => {
+      expect(updateClubIdentity).toHaveBeenCalledWith(expect.objectContaining({ debt_tolerance_days: 15 }));
+      expect(onUpdated).toHaveBeenCalled();
+    });
+  });
+
+  it("n'affiche pas de champ éditable aux autres rôles et n'envoie rien", () => {
+    renderModal(EXISTING, false);
+    expect(screen.queryByLabelText(LABEL)).not.toBeInTheDocument();
+    expect(screen.getByText("7 jour(s)")).toBeInTheDocument();
+  });
+
+  it("affiche l'erreur 400 de l'API", async () => {
+    vi.mocked(updateClubIdentity).mockRejectedValue(
+      new ApiError(400, { debt_tolerance_days: ["Le délai doit être compris entre 0 et 90 jours."] }),
+    );
+    const user = userEvent.setup();
+    renderModal();
+    await user.click(screen.getByRole("button", { name: "Enregistrer" }));
+    expect((await screen.findAllByText("Le délai doit être compris entre 0 et 90 jours.")).length).toBeGreaterThan(0);
   });
 });

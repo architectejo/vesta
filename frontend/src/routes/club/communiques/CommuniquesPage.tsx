@@ -1,7 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { getMyProfile } from "../../../api/clubs";
+import { getAccueilAccess } from "../../accueil/accueilAccess";
 import { listAnnouncements, type Announcement } from "../../../api/social";
-import { Avatar, Button, EmptyState, Skeleton, useClubBranding } from "../../../design-system";
+import { Avatar, Button, EmptyState, IconPin, Skeleton, useClubBranding } from "../../../design-system";
+import { useDeepLink } from "../../../hooks/useDeepLink";
 import { AnnouncementDetailModal } from "./AnnouncementDetailModal";
 import { PublishAnnouncementModal } from "./PublishAnnouncementModal";
 
@@ -14,12 +17,7 @@ function formatDateShort(iso: string): string {
 }
 
 function PinIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
-      <path d="M14 2l1 1-2 6 4 4-1 1-4-1-5 5-1-1 5-5-1-4 6-2 1-1z" />
-      <title>Épinglé</title>
-    </svg>
-  );
+  return <IconPin aria-hidden="true" className="h-4 w-4" />;
 }
 
 function AnnouncementRow({ announcement, onOpen }: { announcement: Announcement; onOpen: () => void }) {
@@ -63,12 +61,17 @@ export function CommuniquesPage() {
   const queryClient = useQueryClient();
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [openId, setOpenId] = useState<number | null>(null);
+  // Lien depuis une notification de communiqué (`?communique=<id>`).
+  useDeepLink("communique", setOpenId);
   const [publishOpen, setPublishOpen] = useState(false);
 
   const pinnedQuery = useQuery({ queryKey: ["social", "announcements", "pinned"], queryFn: () => listAnnouncements({ pinned: true }) });
   const allQuery = useQuery({ queryKey: ["social", "announcements", "all", limit], queryFn: () => listAnnouncements({ limit }) });
 
-  const canManage = allQuery.data?.results.some((a) => a.read_summary !== null) ?? false;
+  const profileQuery = useQuery({ queryKey: ["profile", "me"], queryFn: getMyProfile, staleTime: 60_000 });
+  const canManage =
+    (allQuery.data?.results.some((a) => a.read_summary !== null) ?? false) ||
+    getAccueilAccess(profileQuery.data?.roles).canPublishAnnouncement;
   const unreadCount = allQuery.data?.results.filter((a) => !a.is_read_by_me).length ?? 0;
 
   function invalidate(): void {

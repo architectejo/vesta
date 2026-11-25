@@ -1,5 +1,8 @@
 # Écran — Matériel (logistique)
 
+> **Note de révision du 17/11/2026 — évolution proposée, en attente de validation du client (circuit 9.4).**
+> Le registre d'intendance remis par le club pilote fait apparaître des besoins absents du CDC 4.13 : détenteurs et stock par détenteur, provenances (donateur, date d'acquisition parfois inconnue), tenues V / C / B, état « Non renseigné », déclassement en deux temps, nouvelles catégories, import du registre, registre imprimable (PDF / CSV), inventaire par détenteur. Tout est décrit dans **`logistique-intendance-registre.md`**. Les sections de cette fiche concernées portent la mention « Révision 17/11 (proposée) ». **Tant que le client n'a pas validé, cette fiche reste la référence d'implémentation telle qu'elle était avant la note.** Le point ouvert n° 7 (stock initial) trouverait sa réponse dans le type d'entrée « Reprise du registre ».
+
 Sources : CDC 3.1 à 3.6, 2.2 (Intendant), 2.4 (ligne « Matériel et inventaires »), 4.5.2 (dépenses), 4.8 (équipements reçus pour un match), 4.13, 4.17, 5.2 (« Logistique » journalisée), 6.5 (cron), 6.6 ; CLAUDE.md §2 (règles 6, 8, 13 à 20) ; `docs/lot0/schema-donnees.md` §7 (`Article`, `StockMovement`, `Inventory`, `InventoryLine`) et §17 (`inventory_open_alert`) ; `docs/lot0/design-system.md`. Écrans liés : `sport-feuille-de-match.md` §3 point 7 et §4.5 (équipements reçus), `tresorerie-depenses-assistance.md` §3.3 (détail d'une dépense).
 
 Composants : `PageHeader`, `Banner`, `Card`, `ListSection`, `DataTable`, `StatusBadge`, `Modal`, `ConfirmDialog`, `PlayerSearch`, `NumberField`, `SegmentedControl`, `EmptyState`, `Skeleton`, `Toast`. Un seul composant nouveau : `ArticleSearch` (§4.8), variante du combobox de `PlayerSearch` (design system §3.4, « variantes du même composant »).
@@ -41,6 +44,8 @@ Les actions non autorisées sont **masquées**, pas désactivées. Les droits vi
 
 Footer.
 
+> Révision 17/11 (proposée) : cartes « Où est le matériel » (2e position) et « À déclasser » (après « Catalogue ») ; bouton secondaire « Registre de l'intendance » dans l'en-tête ; menu « … » enrichi (« Déplacer du matériel », « Signaler à déclasser », « Importer le registre (CSV) ») ; bandeau « Matériel non localisé » (Intendant). Voir `logistique-intendance-registre.md` §3.2, §3.3, §7.2, §9.2, §10.1, §15.
+
 ### 3.1 Carte « Catalogue »
 
 - En-tête de carte : « Catalogue » + compteur « {n} articles ». Action de carte (Intendant) : « Ajouter un article » (bouton `sm` secondaire).
@@ -52,6 +57,7 @@ Footer.
 - Le stock affiché est **toujours la valeur renvoyée par l'API**. Elle est calculée à partir des mouvements et n'est jamais stockée (schéma §7.1). L'interface ne fait aucune addition.
 - Stock à 0 : la valeur « 0 » s'affiche normalement, sans couleur d'alerte. Aucun seuil d'alerte n'est prévu au 4.13.
 - Clic sur une ligne → modale « Article » (§4.1).
+- Révision 17/11 (proposée) : colonnes « Chez » et « À déclasser », filtre « Détenteur », catégories étendues (puces défilantes) — `logistique-intendance-registre.md` §3.4 et §8.
 
 ### 3.2 Carte « Sortis pour un match »
 
@@ -88,6 +94,7 @@ Toutes les modales de formulaire suivent le design system §3.2 : fermeture par 
 - Menu « … » de l'en-tête (Intendant) : « Modifier l'article » (§4.2) ; « Archiver l'article » ou « Réactiver l'article ».
   - « Archiver l'article » → `ConfirmDialog` « Archiver {nom} ? » — texte « L'article n'apparaîtra plus dans les choix de mouvement ni dans les prochains inventaires. Son historique est conservé. » — « Annuler » / « Archiver ». Succès : « Article archivé. »
   - Si l'API refuse l'archivage, son motif s'affiche dans le bandeau d'erreur du `ConfirmDialog` (par exemple un stock non nul, si le client retient cette règle : point ouvert n° 6).
+- Révision 17/11 (proposée) : valeur clé « À déclasser », sections « Répartition » (par détenteur, action « Déplacer ») et « Provenances » — `logistique-intendance-registre.md` §5.3.
 
 ### 4.2 « Ajouter un article » / « Modifier l'article » — taille `md`
 
@@ -97,6 +104,8 @@ Toutes les modales de formulaire suivent le design system §3.2 : fermeture par 
 | Catégorie | SegmentedControl sur deux lignes à 360 px (« Maillots », « Bas », « Bottines », « Ballons », « Matériel divers ») ; `Select` natif à partir de 640 px | Oui | « Choisissez une catégorie. » |
 | Unité | TextField, prérempli « pièce » | Oui | 20 caractères max. ; aide « Par exemple : pièce, paire, lot. » |
 | État | SegmentedControl « Neuf » / « Bon état » / « Usé » / « Abîmé » | Oui, « Neuf » par défaut | — |
+
+Révision 17/11 (proposée) : « Catégorie » en `<select>` natif à toutes les largeurs (10 catégories, §8 de `logistique-intendance-registre.md`) ; « État » avec la valeur « Non renseigné » ; champs facultatifs « Tenue » et « Pièce » si Q11 est confirmée (§6).
 
 Aide sous le formulaire (création seulement) : « Le stock démarre à 0. Enregistrez ensuite une entrée (achat, dotation) pour indiquer les quantités. » La quantité ne se saisit pas ici : le stock est toujours la somme des mouvements (schéma §7.1).
 
@@ -125,6 +134,7 @@ Pied : « Annuler » / « Enregistrer ». Succès (création) : toast « Article
 | Dépense liée (facultatif) | Champ de recherche « Rechercher une dépense » (même combobox, §4.8) | Non | Affiché seulement pour « Achat ». Aide : « Rattachez l'achat à la dépense saisie par la trésorerie. » |
 | Motif (facultatif) | TextArea | Non | 500 caractères max. |
 
+- Révision 17/11 (proposée) : type d'entrée « Reprise du registre » ; champ « Chez » (détenteur qui reçoit ou d'où sort le matériel) ; bloc « Provenance » (origine, donateur, date d'acquisition éventuellement inconnue, état à l'entrée) ; saisie d'un jeu V / C / B — `logistique-intendance-registre.md` §4.4, §5.2, §6.
 - Aucune règle de stock n'est calculée dans l'interface. Le contrôle de quantité est fait par l'API ; l'erreur s'affiche sous « Quantité ».
 - Pied : « Annuler » / « Enregistrer le mouvement ». Succès : toast « Mouvement enregistré. Stock de {article} : {n} {unité}. » (valeur renvoyée par l'API). Le catalogue et le registre se mettent à jour sans rechargement.
 - Hors connexion : bouton de pied désactivé, aide « Cette action nécessite une connexion. » Le 6.6 ne cite pas la logistique, et le stock est contrôlé par le serveur.
@@ -144,6 +154,7 @@ Cette modale complète `sport-feuille-de-match.md` §4.5. Le rapport de la tâch
 - Le mouvement est de type « Prêt pour un match », lié au match, et « Saisi par » = le Coach (4.13 : « les équipements reçus par le Coach créent une sortie »).
 - Si une ligne est refusée par l'API (stock insuffisant, article archivé entre-temps), l'erreur s'affiche sur cette ligne et **rien n'est enregistré**. Proposition : enregistrement tout ou rien, pour ne pas laisser une sortie partielle que le Coach n'aurait pas vue (point ouvert n° 10).
 - Hors connexion : bouton désactivé, « Cette action nécessite une connexion. » (déjà proposé dans la feuille de match, §7 point 4).
+- Révision 17/11 (proposée) : sur chaque ligne, « Chez {détenteur proposé par l'API} · Changer » ; au retour, « Retour chez {détenteur} · Changer » — `logistique-intendance-registre.md` §4.4. À reporter dans `sport-feuille-de-match.md` §4.5 si validé.
 
 ### 4.6 « Équipements du match » (détail) — taille `md`
 
@@ -206,6 +217,7 @@ La recherche de dépense n'expose **que** la date, la catégorie, le montant et 
 - Succès : toast « Comptage enregistré : {n} article(s). {e} écart(s) à justifier. » La modale se ferme et la carte « Inventaire trimestriel » montre les écarts.
 - Si le stock compté d'un article déjà justifié change, l'écart est recalculé par l'API. Si la valeur de l'écart change, la justification est effacée et la ligne repasse « À justifier » (proposition, point ouvert n° 8). Toast complémentaire : « {n} justification(s) à refaire après modification. »
 - Hors connexion : bouton de pied désactivé, « Cette action nécessite une connexion. » Les valeurs saisies restent dans la modale tant qu'elle n'est pas fermée.
+- Révision 17/11 (proposée) : puces « Chez » pour compter détenteur par détenteur (comptage à l'aveugle conservé), ajout d'un article trouvé chez un détenteur, sous-lignes par détenteur dans le détail (§4.9) et « Écart de localisation » enregistrable comme déplacement — `logistique-intendance-registre.md` §11.
 
 ## 5. Lien avec les dépenses et avec les matchs
 
@@ -256,7 +268,7 @@ Condition d'affichage : l'API signale que l'inventaire d'un trimestre est toujou
 **Clôturer l'inventaire** :
 
 - Désactivé tant que l'API ne l'autorise pas. L'aide sous le bouton reprend la raison de l'API, par exemple « Comptez tous les articles et justifiez chaque écart avant de clôturer. ({c} à compter, {e} à justifier) ».
-- Autorisé → `ConfirmDialog` « Clôturer l'inventaire du {3e trimestre 2026} ? » — texte « Les comptages et les justifications ne pourront plus être modifiés. L'inventaire du trimestre suivant pourra ensuite être ouvert. » — « Annuler » / « Clôturer ». Pas de code PIN : la clôture ne figure pas dans la liste du 7.2.
+- Autorisé → `ConfirmDialog` « Clôturer l'inventaire du {3e trimestre 2026} ? » — texte « Les comptages et les justifications ne pourront plus être modifiés. L'inventaire du trimestre suivant pourra ensuite être ouvert. » — « Annuler » / « Clôturer ».
 - Succès : « Inventaire du {3e trimestre 2026} clôturé. » Le bandeau §6.1 disparaît. L'inventaire rejoint « Inventaires passés ».
 
 ### 6.3 Alerte hebdomadaire au Président (4.13, schéma §17 `inventory_open_alert`)
@@ -298,9 +310,9 @@ Condition d'affichage : l'API signale que l'inventaire d'un trimestre est toujou
 
 ## 9. Libellés et statuts
 
-- Catégories : « Maillots », « Bas », « Bottines », « Ballons », « Matériel divers ».
-- États d'article : « Neuf », « Bon état », « Usé », « Abîmé » (texte simple, pas de badge de statut).
-- Types de mouvement : « Achat », « Dotation », « Retour » (entrées) ; « Distribution », « Prêt pour un match », « Usure », « Perte » (sorties).
+- Catégories : « Maillots », « Bas », « Bottines », « Ballons », « Matériel divers ». Révision 17/11 (proposée) : + « Culottes », « Chasubles », « Arbitrage », « Accessoires », « Mobilier ».
+- États d'article : « Neuf », « Bon état », « Usé », « Abîmé » (texte simple, pas de badge de statut). Révision 17/11 (proposée) : + « Non renseigné ».
+- Types de mouvement : « Achat », « Dotation », « Retour » (entrées) ; « Distribution », « Prêt pour un match », « Usure », « Perte » (sorties). Révision 17/11 (proposée) : + « Reprise du registre », « Transfert reçu » (entrées) ; « Transfert », « Déclassement » (sorties).
 - Causes d'écart : « Vol », « Usure », « Oubli », « Perte ».
 - Trimestre : « {1er / 2e / 3e / 4e} trimestre {année} » en toutes lettres, « T{n} {année} » dans les titres de notification. Libellés fournis par l'API.
 
@@ -340,7 +352,7 @@ Clés de `StatusBadge` à ajouter à `statusMap.ts` (propositions, design system
 4. **Qui enregistre le retour des équipements d'un match ?** Déjà ouvert dans `sport-feuille-de-match.md` §7. Proposition reprise : Coach et Intendant.
 5. **Correction d'un mouvement erroné.** Le 4.13 ne dit pas si un mouvement peut être modifié ou supprimé. Position provisoire, la plus prudente : aucune modification ni suppression dans l'interface, puisque le registre sert de base au stock et à l'inventaire. Le mode de correction reste à décider : mouvement inverse avec motif, ou modification journalisée.
 6. **Archivage d'un article dont le stock n'est pas nul.** Autorisé ou refusé ? L'interface affiche la réponse de l'API.
-7. **Stock existant au démarrage.** Le club pilote possède déjà du matériel. Aucun type de mouvement ne correspond à un « stock initial » : achat et dotation faussent l'historique, et un premier inventaire créerait des écarts « Oubli » artificiels. Faut-il un type d'entrée « Stock initial » ? Ce serait un ajout à faire passer par le circuit 9.4.
+7. **Stock existant au démarrage.** (Révision 17/11 : réponse proposée, type « Reprise du registre » et import du registre, `logistique-intendance-registre.md` §5.2 et §9.) Le club pilote possède déjà du matériel. Aucun type de mouvement ne correspond à un « stock initial » : achat et dotation faussent l'historique, et un premier inventaire créerait des écarts « Oubli » artificiels. Faut-il un type d'entrée « Stock initial » ? Ce serait un ajout à faire passer par le circuit 9.4.
 8. **Déroulé du comptage.** Trois propositions de présentation, sans règle métier nouvelle, à valider : (a) comptage à l'aveugle, sans afficher le stock théorique pendant la saisie ; (b) chaque article actif doit être compté avant clôture (à confirmer côté API) ; (c) si le comptage d'une ligne change et que l'écart change, la justification est à refaire.
 9. **Date d'un mouvement dans le futur.** Proposition : refusée (message standard). À confirmer.
 10. **Sortie d'équipements pour un match à plusieurs lignes.** Proposition : tout ou rien, si une ligne est refusée.

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useClosingState } from "../../hooks/useClosingState";
 import { useClubBranding } from "../context/ClubBrandingContext";
 import { THEME_LABELS, useTheme, type ThemeName } from "../context/ThemeContext";
+import { IconClose, IconMenu, IconMore } from "../icons";
 import { Avatar } from "./Avatar";
 import { IconButton } from "./IconButton";
 import { Skeleton } from "./Skeleton";
@@ -180,6 +182,8 @@ function UserBar({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const { mounted: menuMounted, dataState: menuDataState, onAnimationEnd: onMenuAnimationEnd } =
+    useClosingState(menuOpen, 200);
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -213,17 +217,15 @@ function UserBar({
           variant="sidebar"
           aria-label="Ouvrir le menu utilisateur"
           onClick={() => setMenuOpen((v) => !v)}
-          icon={
-            <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
-              <circle cx="5" cy="12" r="1.5" />
-              <circle cx="12" cy="12" r="1.5" />
-              <circle cx="19" cy="12" r="1.5" />
-            </svg>
-          }
+          icon={<IconMore aria-hidden="true" className="h-4 w-4" />}
         />
       </div>
-      {menuOpen ? (
-        <div className="absolute bottom-full left-2 right-2 mb-1 rounded-md border border-border bg-surface py-1 shadow-elevated">
+      {menuMounted ? (
+        <div
+          data-state={menuDataState}
+          onAnimationEnd={onMenuAnimationEnd}
+          className="vesta-anim-menu vesta-anim-menu--bottom-left absolute bottom-full left-2 right-2 mb-1 rounded-md border border-border bg-surface py-1 shadow-elevated"
+        >
           <button
             type="button"
             onClick={() => {
@@ -264,6 +266,8 @@ export function Sidebar({
   topbarRight,
 }: SidebarProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const { mounted: drawerMounted, dataState: drawerDataState, onAnimationEnd: onDrawerAnimationEnd } =
+    useClosingState(drawerOpen, 200);
 
   useEffect(() => {
     if (!drawerOpen) return undefined;
@@ -287,36 +291,33 @@ export function Sidebar({
           variant="sidebar"
           aria-label="Ouvrir le menu"
           onClick={() => setDrawerOpen(true)}
-          icon={
-            <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2}>
-              <path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" />
-            </svg>
-          }
+          icon={<IconMenu aria-hidden="true" className="h-5 w-5" />}
         />
         <ClubBrand size={28} loading={brandLoading} />
         <div className="ml-auto flex items-center gap-1">{topbarRight}</div>
       </header>
 
       {/* Tiroir mobile */}
-      {drawerOpen ? (
+      {drawerMounted ? (
         <div className="fixed inset-0 z-40 lg:hidden">
           <div
-            className="absolute inset-0 bg-overlay"
+            data-state={drawerDataState}
+            className="vesta-anim-overlay absolute inset-0 bg-overlay"
             onClick={() => setDrawerOpen(false)}
             aria-hidden="true"
           />
-          <div className="relative flex h-full w-[280px] max-w-[85vw] flex-col bg-sidebar-bg">
+          <div
+            data-state={drawerDataState}
+            onAnimationEnd={onDrawerAnimationEnd}
+            className="vesta-anim-drawer relative flex h-full w-[280px] max-w-[85vw] flex-col bg-sidebar-bg"
+          >
             <div className="flex items-center justify-between p-3">
               <ClubBrand size={40} loading={brandLoading} />
               <IconButton
                 variant="sidebar"
                 aria-label="Fermer"
                 onClick={() => setDrawerOpen(false)}
-                icon={
-                  <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2}>
-                    <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
-                  </svg>
-                }
+                icon={<IconClose aria-hidden="true" className="h-4 w-4" />}
               />
             </div>
             <NavList groups={groups} currentPath={currentPath} onNavigate={handleNavigate} />

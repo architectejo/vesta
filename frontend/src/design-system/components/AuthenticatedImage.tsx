@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { DownloadResult } from "../../api/client";
+import { IconImage } from "../icons";
 
 export interface AuthenticatedImageProps {
   /** Identifiant stable de l'image : seul déclencheur d'un nouveau chargement. */
@@ -59,17 +60,14 @@ export function AuthenticatedImage({
         aria-label="Image indisponible"
         className={["flex flex-col items-center justify-center gap-1 bg-surface-muted", className].join(" ")}
       >
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 text-text-muted" fill="none" stroke="currentColor" strokeWidth={1.5}>
-          <rect x="4" y="5" width="16" height="14" rx="2" />
-          <path d="M8 15l3-3 2 2 3-4 3 5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        <IconImage aria-hidden="true" className="h-5 w-5 text-text-muted" strokeWidth={1.5} />
         <span className="text-xs text-text-muted">Image indisponible</span>
       </div>
     );
   }
 
   if (state === "loading" || !objectUrl) {
-    return <div aria-hidden="true" className={["bg-skeleton motion-safe:animate-pulse", className].join(" ")} />;
+    return <div aria-hidden="true" className={["bg-skeleton motion-safe:animate-skeleton", className].join(" ")} />;
   }
 
   return (

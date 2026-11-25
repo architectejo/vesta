@@ -21,25 +21,19 @@ production, jamais dans les migrations) :
   un seul compte synthetique est cree (voir ci-dessous), explicitement
   nomme comme tel.
 
-Blocage code PIN (CLAUDE.md regle n7) : plusieurs actions exigent un PIN
-valide d'un role precis (encaissement, ouverture de Caisse Terrain
-Express, liberation de depense, signature de PV d'AG). Cette commande ne
-tente JAMAIS de deviner, reinitialiser ou contourner le PIN d'un compte
-REEL du club pilote. La ou un PIN est necessaire pour des actions qui ne
-concernent que le Tresorier/Tresorier adjoint (encaissement, Caisse
-Terrain Express), un compte de demonstration synthetique dedie est cree
-(nom et email explicitement « Demo/Simulation », PIN nouvellement
-defini car ce compte n'en a encore aucun -- usage legitime de
-``apps.accounts.services.define_pin``, reserve aux comptes sans PIN
-existant). La ou l'action est structurellement reservee au President/
-Vice-president du club (signature du PV d'AG, liberation d'une depense),
-aucun compte de substitution n'est utilise : l'etape reste volontairement
-non executee et clairement documentee en sortie de commande.
+Plus de code PIN (decision client du 11/10/2026, CLAUDE.md regle 7) : les
+actions sensibles se confirment par une modale cote interface et l'auteur
+est ecrit au journal. Pour les actions du Tresorier adjoint (encaissement,
+Caisse Terrain Express), un compte de demonstration synthetique dedie est
+cree (nom et email explicitement « Demo/Simulation »). La liberation d'une
+depense et la signature du PV d'AG sont jouees par le President du club
+cible via les services reels (journalises comme toute action).
 """
 
 from __future__ import annotations
 
 import datetime
+import os
 from decimal import Decimal
 from pathlib import Path
 
@@ -47,6 +41,8 @@ from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
+
+from ._guards import refuse_outside_development
 from django.utils import timezone
 
 from apps.accounts import services as accounts_services
@@ -83,18 +79,25 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--club", required=True, help="Slug du club a peupler.")
+        parser.add_argument(
+            "--superuser-email",
+            default=None,
+            help=(
+                "Email du Superuser qui deverrouille les seances/matchs passes. Defaut : variable "
+                "d'environnement VESTA_SIMULATION_SUPERUSER_EMAIL, sinon le premier Superuser de la base."
+            ),
+        )
 
     def handle(self, *args, **options):
-        if not settings.DEBUG:
-            raise CommandError(
-                "seed_simulation est reserve au developpement : refuse car settings.DEBUG=False "
-                "(CLAUDE.md : jamais de simulation en production)."
-            )
+        refuse_outside_development("seed_simulation")
         try:
             club = Club.objects.get(slug=options["club"])
         except Club.DoesNotExist:
             raise CommandError(f"Aucun club avec le slug « {options['club']} ».") from None
 
+        self.superuser_email = (
+            options.get("superuser_email") or os.environ.get("VESTA_SIMULATION_SUPERUSER_EMAIL") or ""
+        ).strip()
         with active_club(club):
             self._run(club)
 
@@ -116,7 +119,7 @@ class Command(BaseCommand):
             Membership.all_objects.filter(club=club, status=Membership.Status.ACTIVE)
             .exclude(user=self.president)
             .exclude(user__last_name="À définir")
-            .exclude(user__email="demo.tresorier.adjoint@simulation.vesta.local")
+            .exclude(user__email="tresorier.adjoint@example.org")
             .select_related("user")
             .order_by("pk")
         )
@@ -179,10 +182,9 @@ class Command(BaseCommand):
 
         # Compte de démonstration synthétique, explicitement nommé comme tel
         # (pas une vraie personne), pour porter le rôle Trésorier adjoint et
-        # son PIN -- seul moyen légitime de démontrer l'encaissement/la
-        # Caisse Terrain Express sans toucher au PIN d'un compte réel
-        # (CLAUDE.md règle n7 ; voir docstring du module).
-        demo_email = "demo.tresorier.adjoint@simulation.vesta.local"
+        # -- permet de démontrer l'encaissement/la Caisse Terrain Express sans
+        # utiliser le compte d'une vraie personne (voir docstring du module).
+        demo_email = "tresorier.adjoint@example.org"
         existing_demo = Membership.all_objects.filter(club=club, user__email=demo_email).first()
         if existing_demo is None:
             result = clubs_services.create_or_update_player(
@@ -195,15 +197,9 @@ class Command(BaseCommand):
                 president_user=self.president, target_membership=self.demo_assistant_membership,
                 role=MembershipRole.Role.ASSISTANT_TREASURER, now=_dt(2026, 9, 1),
             )
-            self.demo_pin = "4815"
-            accounts_services.define_pin(user=self.demo_assistant_membership.user, pin=self.demo_pin, confirm_pin=self.demo_pin)
-            self.stdout.write(
-                f"  Compte démo créé : {demo_email}, rôle Trésorier adjoint (role id={role.pk}), "
-                f"PIN de simulation défini (« {self.demo_pin} », à usage de démonstration uniquement)."
-            )
+            self.stdout.write(f"  Compte démo créé : {demo_email}, rôle Trésorier adjoint (role id={role.pk}).")
         else:
             self.demo_assistant_membership = existing_demo
-            self.demo_pin = "4815"
             self.stdout.write("  Compte démo Trésorier adjoint déjà présent.")
         self.demo_assistant = self.demo_assistant_membership.user
 
@@ -271,10 +267,10 @@ class Command(BaseCommand):
                     self.paid_membership_ids.add(membership.pk)
                     continue
                 if not demo_cash_session_done:
-                    session, _ = treasury_services.open_cash_session(club=club, user=self.demo_assistant, pin=self.demo_pin, now=_dt(2026, 9, 14, 15, 0))
+                    session, _ = treasury_services.open_cash_session(club=club, user=self.demo_assistant, now=_dt(2026, 9, 14, 15, 0))
                     treasury_services.record_payment(
                         membership=membership, contribution_type=ctype, amount=str(ctype.amount * 2), method="cash",
-                        paid_on=datetime.date(2026, 9, 14), recorded_by=self.demo_assistant, pin=self.demo_pin,
+                        paid_on=datetime.date(2026, 9, 14), recorded_by=self.demo_assistant,
                         reference="", now=_dt(2026, 9, 14, 15, 5),
                     )
                     self.stdout.write(f"  Encaissement via Caisse Terrain Express (session id={session.pk}) pour {membership.user.email}.")
@@ -282,7 +278,7 @@ class Command(BaseCommand):
                 else:
                     treasury_services.record_payment(
                         membership=membership, contribution_type=ctype, amount=str(ctype.amount * 2), method="cash",
-                        paid_on=datetime.date(2026, 9, 12), recorded_by=self.demo_assistant, pin=self.demo_pin,
+                        paid_on=datetime.date(2026, 9, 12), recorded_by=self.demo_assistant,
                         reference="", now=_dt(2026, 9, 12),
                     )
                 self.paid_membership_ids.add(membership.pk)
@@ -293,12 +289,9 @@ class Command(BaseCommand):
 
         # NOTE : au fil des relances successives de cette commande pendant sa
         # mise au point, TOUS les joueurs rattachés (y compris le débiteur
-        # désigné ci-dessus) ont fini par être réglés intégralement -- aucun
-        # moyen légitime de les remettre en dette sans un PIN Président (la
-        # seule annulation de paiement existe via
-        # ``approve_payment_reversal``, réservée au Président avec PIN,
-        # volontairement non tentée ici, même principe que la libération de
-        # dépense et la signature du PV). Pour garantir malgré tout un cas de
+        # désigné ci-dessus) ont fini par être réglés intégralement -- et un
+        # paiement validé n'est jamais supprimé (règle 4) : on ne remet pas
+        # en dette par une annulation de paiement. Pour garantir malgré tout un cas de
         # dette réel et visible (et non contourné), un type de cotisation
         # obligatoire SUPPLÉMENTAIRE, jamais payé par personne, est créé et
         # rattaché au seul débiteur désigné -- toujours via les vrais
@@ -347,7 +340,18 @@ class Command(BaseCommand):
                 club=club, created_by=self.treasurer, category=category, amount="20", beneficiary_name="Kiosque à eau",
                 reason="Eau pour l'entraînement", expense_date=datetime.date(2026, 9, 23), now=_dt(2026, 9, 23),
             )
-            self.stdout.write("  2 dépenses créées (une justifiée à la saisie, une en attente de justificatif). Libération (PIN Président/VP) non tentée -- voir points ouverts.")
+            self.stdout.write("  2 dépenses créées (une justifiée à la saisie, une en attente de justificatif).")
+
+        # Libération par le Président (plus de PIN : confirmation en modale
+        # côté interface, auteur écrit au journal). Idempotent : seule une
+        # dépense encore « En attente » est libérée.
+        transport = Expense.all_objects.filter(club=club, reason="Transport pour le match du 27/09/2026").first()
+        if transport is not None and transport.status == Expense.Status.PENDING:
+            try:
+                treasury_services.release_expense(expense=transport, released_by=self.president, now=_dt(2026, 9, 27))
+                self.stdout.write("  Dépense « Transport pour le match du 27/09/2026 » libérée par le Président.")
+            except treasury_services.TreasuryError as exc:
+                self.stdout.write(f"  (libération de la dépense non effectuée : {exc})")
 
         # Assistance sociale.
         assistance_category, _ = ExpenseCategory.all_objects.get_or_create(
@@ -428,7 +432,11 @@ class Command(BaseCommand):
                 event.delete()
             self.stdout.write(f"  Nettoyage de {len(existing_sessions)} séance(s)/{len(existing_matches)} match(s) partiel(s) d'une exécution précédente.")
 
-        superuser = accounts_services.User.objects.filter(email="architecte@vesta.hub", is_superuser=True).first()
+        superusers = accounts_services.User.objects.filter(is_superuser=True)
+        if self.superuser_email:
+            superuser = superusers.filter(email__iexact=self.superuser_email).first()
+        else:
+            superuser = superusers.order_by("pk").first()
         if superuser is None:
             self.stdout.write("  Aucun Superuser trouvé : les séances/matchs passés resteront verrouillés (non peuplés).")
             return
@@ -718,10 +726,17 @@ class Command(BaseCommand):
             content="Assemblée générale ordinaire du 20/09/2026. Bilan présenté et approuvé à l'unanimité.",
             now=_dt(2026, 9, 20, 11, 30),
         )
+        # Signature du PV par le Président (plus de PIN : confirmation en modale
+        # côté interface, auteur écrit au journal). Idempotent : l'AG n'est
+        # traitée qu'à sa création (retour anticipé plus haut si elle existe).
+        try:
+            assemblies_services.sign_minutes(assembly=assembly, actor=self.president, now=_dt(2026, 9, 20, 12, 0))
+            signature_note = "PV signé par le Président."
+        except Exception as exc:  # noqa: BLE001 - on veut continuer les autres sections
+            signature_note = f"signature du PV non effectuée ({exc})."
         self.stdout.write(
             f"  AG convoquée (id={assembly.pk}), quorum {quorum.present}/{quorum.total} ({quorum.percentage}% >= {quorum.threshold}% : "
-            f"{'atteint' if quorum.reached else 'NON atteint'}), décision enregistrée, PV en brouillon. "
-            "Signature du PV NON effectuée (PIN du Président réel requis, hors périmètre -- voir points ouverts)."
+            f"{'atteint' if quorum.reached else 'NON atteint'}), décision enregistrée, PV rédigé ; {signature_note}"
         )
 
     # ------------------------------------------------------------------

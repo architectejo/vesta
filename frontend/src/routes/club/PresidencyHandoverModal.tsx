@@ -9,11 +9,8 @@ import type { PlayerSearchResult } from "../../design-system";
  * 2.3), Président uniquement. `PlayerSearch` bornée aux joueurs inscrits
  * (`status: "active"`).
  *
- * Point ouvert signalé par la spec (§7) : la transmission n'exige pas de
- * code PIN dans la liste du 7.2 alors qu'elle est irréversible pour le
- * Président sortant. Proposition par défaut appliquée : confirmation simple
- * (`ConfirmDialog`), sans PIN, conformément au CDC ; à confirmer avec le
- * client.
+ * Transmission irréversible pour le Président sortant : confirmation
+ * explicite (`ConfirmDialog`), comme toute action sensible (CDC 7.2).
  */
 export function PresidencyHandoverModal({
   onClose,

@@ -1,23 +1,34 @@
 import { useMemo, useState, type ReactNode } from "react";
 import {
   Avatar,
+  BarChart,
   Button,
+  ChartCard,
   ClubBrandingProvider,
   DataTable,
   EmptyState,
   Footer,
+  FormStrip,
   IconButton,
+  IconNotifications,
+  KpiTile,
+  LineChart,
   Loader,
   Modal,
+  PeriodPicker,
   PlayerMultiSearch,
   PlayerSearch,
+  RadarChart,
   Sidebar,
+  StackedBar,
   StatusBadge,
   ThemeProvider,
   THEME_LABELS,
   useTheme,
+  type ChartCardState,
   type ClubBranding,
   type DataTableColumn,
+  type PeriodValue,
   type PlayerSearchResult,
   type SidebarNavGroup,
   type StatusKey,
@@ -225,12 +236,7 @@ function ButtonsSection() {
         </Button>
         <IconButton
           aria-label="Notifications"
-          icon={
-            <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2}>
-              <path d="M6 8a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M10 20a2 2 0 004 0" strokeLinecap="round" />
-            </svg>
-          }
+          icon={<IconNotifications aria-hidden="true" className="h-5 w-5" />}
         />
       </div>
     </Section>
@@ -473,6 +479,204 @@ function SidebarSection() {
 }
 
 // ---------------------------------------------------------------------------
+// Graphiques (données fictives : aucun nom de club réel)
+// ---------------------------------------------------------------------------
+
+const DEMO_PERIOD_SEASONS = [
+  { id: "demo-2", label: "2026-2027" },
+  { id: "demo-1", label: "2025-2026" },
+];
+const DEMO_SESSIONS = ["3 nov.", "10 nov.", "17 nov.", "24 nov."];
+const DEMO_MONTHS = ["juin", "juil.", "août", "sept.", "oct.", "nov."];
+const DEMO_RADAR_AXES = [
+  { label: "Vitesse" },
+  { label: "Endurance physique" },
+  { label: "Technique" },
+  { label: "Frappe" },
+  { label: "Défense" },
+  { label: "Passes" },
+];
+const CARD_STATE_LABELS: Record<ChartCardState, string> = {
+  ready: "Normal",
+  loading: "Chargement",
+  error: "Erreur",
+  empty: "Vide",
+};
+
+function ChartsSection() {
+  const [period, setPeriod] = useState<PeriodValue>({ mode: "month", month: "2026-11" });
+  const [cardState, setCardState] = useState<ChartCardState>("ready");
+  const [selected, setSelected] = useState("Aucune sélection");
+
+  return (
+    <Section title="Graphiques (SVG maison, données fictives)">
+      <PeriodPicker value={period} onChange={setPeriod} seasons={DEMO_PERIOD_SEASONS} />
+      <div className="flex flex-wrap gap-2">
+        {(Object.keys(CARD_STATE_LABELS) as ChartCardState[]).map((state) => (
+          <Button
+            key={state}
+            size="sm"
+            variant={cardState === state ? "primary" : "secondary"}
+            onClick={() => setCardState(state)}
+          >
+            {CARD_STATE_LABELS[state]}
+          </Button>
+        ))}
+      </div>
+      <p className="text-xs text-text-muted" aria-live="polite">
+        Dernière interaction : {selected}
+      </p>
+
+      <div className="grid grid-cols-2 gap-3">
+        <KpiTile label="Taux de recouvrement" value="82 %" hint="Types obligatoires" />
+        <KpiTile
+          label="Joueurs suspendus"
+          value={2}
+          family="suspended"
+          statusLabel="À surveiller"
+          onClick={() => setSelected("Tuile : suspendus")}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <ChartCard
+          title="Présences"
+          periodLabel="novembre 2026"
+          value="74 % de présence moyenne"
+          caption="Dernière séance 72 % · 4 séances"
+          state={cardState}
+          emptyMessage="Aucune séance sur la période."
+          onRetry={() => setCardState("ready")}
+          onOpen={() => setSelected("Carte : présences")}
+        >
+          <LineChart
+            title="Taux de présence par séance"
+            labels={DEMO_SESSIONS}
+            series={[{ name: "Présence", values: [60, 80, 70, 72] }]}
+            yMin={0}
+            yMax={100}
+            unit="%"
+            reference={{ value: 74, label: "Moyenne" }}
+          />
+        </ChartCard>
+
+        <ChartCard
+          title="Cotisations"
+          periodLabel="6 derniers mois"
+          value="82 % recouvré"
+          caption="1 240 $ encaissés"
+          state={cardState}
+          emptyMessage="Aucune cotisation due sur la période."
+          onRetry={() => setCardState("ready")}
+          onOpen={() => setSelected("Carte : cotisations")}
+        >
+          <BarChart
+            title="Encaissé par mois"
+            categories={DEMO_MONTHS}
+            series={[{ name: "Encaissé", values: [180, 220, 150, 0, 300, 390] }]}
+            unit="$"
+            reference={{ value: 250, label: "Dû" }}
+          />
+        </ChartCard>
+
+        <ChartCard
+          title="Situation de l'effectif"
+          periodLabel="Aujourd'hui"
+          state={cardState}
+          onRetry={() => setCardState("ready")}
+          onOpen={() => setSelected("Carte : effectif")}
+        >
+          <StackedBar
+            title="Répartition de l'effectif"
+            segments={[
+              { label: "En ordre", value: 24, family: "success" },
+              { label: "En dette", value: 6, family: "danger" },
+              { label: "En attente", value: 2, family: "warning" },
+              { label: "Suspendus", value: 1, family: "suspended" },
+            ]}
+          />
+        </ChartCard>
+
+        <ChartCard
+          title="Résultats"
+          periodLabel="novembre 2026"
+          caption="7 V · 2 N · 3 D · 24 buts marqués, 15 encaissés"
+          state={cardState}
+          onRetry={() => setCardState("ready")}
+          onOpen={() => setSelected("Carte : résultats")}
+        >
+          <FormStrip
+            results={[
+              { outcome: "win", opponent: "Équipe fictive A", score: "3-1" },
+              { outcome: "draw", opponent: "Équipe fictive B", score: "1-1" },
+              { outcome: "loss", opponent: "Équipe fictive C", score: "0-2" },
+              { outcome: "win", opponent: "Équipe fictive D", score: "2-0" },
+              { outcome: "win", opponent: "Équipe fictive E", score: "4-2" },
+            ]}
+          />
+        </ChartCard>
+      </div>
+
+      <p className="text-sm font-medium text-text">
+        Graphiques interactifs (clic, Entrée, Espace ; deux séries ; empilé ; horizontal ; radar)
+      </p>
+      <div className="space-y-4">
+        <LineChart
+          title="Encaissé et dû par séance"
+          labels={DEMO_SESSIONS}
+          series={[
+            { name: "Encaissé", values: [100, 140, null, 180] },
+            { name: "Dû", values: [120, 120, 150, 150] },
+          ]}
+          unit="$"
+          height={220}
+          onSelect={(i) => setSelected(`Courbe : ${DEMO_SESSIONS[i] ?? ""}`)}
+        />
+        <BarChart
+          title="Caisse : encaissé et dépensé"
+          categories={DEMO_MONTHS}
+          series={[
+            { name: "Encaissé", values: [180, 220, 150, 40, 300, 390] },
+            { name: "Dépensé", values: [90, 60, 150, 20, 110, 80] },
+          ]}
+          unit="$"
+          height={220}
+          onSelect={(i) => setSelected(`Barres : ${DEMO_MONTHS[i] ?? ""}`)}
+        />
+        <BarChart
+          title="Cartons par mois"
+          stacked
+          categories={DEMO_MONTHS}
+          series={[
+            { name: "Jaunes", values: [4, 2, 0, 3, 5, 2] },
+            { name: "Rouges", values: [0, 1, 0, 0, 1, 0] },
+          ]}
+          height={220}
+        />
+        <BarChart
+          title="Dépenses par catégorie"
+          orientation="horizontal"
+          categories={["Équipement sportif et entretien du terrain", "Transport", "Arbitrage", "Autres"]}
+          series={[{ name: "Montant", values: [900, 420, 180, 60] }]}
+          unit="$"
+          onSelect={(i) => setSelected(`Catégorie ${i + 1}`)}
+        />
+        <RadarChart
+          title="Comparaison de deux joueurs fictifs"
+          axes={DEMO_RADAR_AXES}
+          maxValue={10}
+          series={[
+            { name: "Joueur Un", values: [8, 6, 7, 5, 4, 7] },
+            { name: "Joueur Deux", values: [5, 7, 6, 8, 9, 5] },
+          ]}
+          onSelect={(i) => setSelected(`Axe : ${DEMO_RADAR_AXES[i]?.label ?? ""}`)}
+        />
+      </div>
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -501,6 +705,7 @@ export function DesignSystemDemoPage() {
           <ModalSection />
           <DataTableSection />
           <PlayerSearchSection />
+          <ChartsSection />
           <SidebarSection />
         </div>
       </ThemeProvider>

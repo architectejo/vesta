@@ -770,7 +770,7 @@ class TestImportUploadRejections:
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "CSV" in _first_error_text(response)
-        assert "type reel incorrect" in _first_error_text(response)
+        assert "type réel incorrect" in _first_error_text(response)
         assert not ImportBatch.all_objects.filter(club=club).exists()
 
     @pytest.mark.parametrize(
@@ -1004,3 +1004,35 @@ class TestProfilePhotoUploadRejections:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         user.refresh_from_db()
         assert user.photo.name == previous_name
+
+
+# ---------------------------------------------------------------------------
+# 7. Type de reponse fixe cote serveur (jamais celui du client)
+# ---------------------------------------------------------------------------
+
+
+class TestServerFixedResponseHeaders:
+    @pytest.mark.parametrize("url_name", ["clubs:import-source-download", "clubs:import-report-download"])
+    def test_import_csv_is_served_as_csv_attachment_with_nosniff(self, url_name):
+        club = ClubFactory()
+        president = _member(club, MembershipRole.Role.PRESIDENT)
+        batch = _batch_with_files(club)
+
+        response = _authenticated_client(president.user).get(reverse(url_name, kwargs={"pk": batch.pk}))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response["Content-Type"].startswith("text/csv")
+        assert response["X-Content-Type-Options"] == "nosniff"
+        assert response["Content-Disposition"].startswith("attachment")
+
+    def test_application_pdf_has_nosniff(self):
+        club = ClubFactory()
+        president = _member(club, MembershipRole.Role.PRESIDENT)
+        application = _application_with_pdf(club)
+
+        response = _authenticated_client(president.user).get(
+            reverse("clubs:application-pdf-download", kwargs={"pk": application.pk})
+        )
+
+        assert response["Content-Type"] == "application/pdf"
+        assert response["X-Content-Type-Options"] == "nosniff"

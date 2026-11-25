@@ -1,5 +1,5 @@
-"""Ecritures d'annulation (CDC 4.3 cas limite « refus du parrain », 4.4.4, 7.2 ;
-10.2 n° 36 ; schema-treasury.md §5.3 ; decisions D9, D10, D11 -- a confirmer).
+"""Ecritures d'annulation (CDC 4.3 cas limite « refus du parrain », 4.4.4 ;
+10.2 n° 36 ; plus de PIN depuis le 11/10/2026, CLAUDE.md regle 7 ; schema-treasury.md §5.3 ; decisions D9, D10, D11 -- a confirmer).
 """
 
 from __future__ import annotations
@@ -8,11 +8,10 @@ from decimal import Decimal
 
 import pytest
 
-from apps.accounts.services import InvalidPinError
 from apps.audit.models import AuditLog
 from apps.treasury import services
 from apps.treasury.models import LedgerImmutableError, PaymentReversal, Transaction
-from apps.treasury.tests.conftest import PIN, WRONG_PIN, past_day
+from apps.treasury.tests.conftest import WRONG_PIN, assert_logged_by, past_day
 
 pytestmark = pytest.mark.django_db
 
@@ -24,7 +23,6 @@ def pay(ctx, amount="5", days_ago=5):
         method="cash",
         paid_on=past_day(days_ago),
         validated_by=ctx.treasurer.user,
-        pin=PIN,
     )
 
 
@@ -59,6 +57,24 @@ class TestDemande:
         with pytest.raises(services.TreasuryValidationError):
             request(ctx, pay(ctx), reason="   ")
 
+    def test_conflit_d_unicite_concurrent_devient_un_message_clair(self, ctx, fee_type, monkeypatch):
+        """Deux demandes concurrentes : la contrainte d'unicite en base ne doit
+        jamais remonter en erreur 500 mais en message francais clair."""
+
+        from django.db import IntegrityError
+
+        def boom(**kwargs):
+            raise IntegrityError("UNIQUE constraint failed")
+
+        payment = pay(ctx)
+        monkeypatch.setattr(services, "_create_reversal", boom)
+        with pytest.raises(services.TreasuryValidationError, match="fait déjà l'objet d'une annulation"):
+            request(ctx, payment)
+        with pytest.raises(services.TreasuryValidationError, match="fait déjà l'objet d'une annulation"):
+            services.refund_membership_fee(
+                membership=ctx.pending_member, reason="Refus", president=ctx.president.user
+            )
+
     def test_un_paiement_ne_s_annule_qu_une_fois(self, ctx, fee_type):
         payment = pay(ctx)
         request(ctx, payment)
@@ -86,10 +102,10 @@ class TestDemande:
 
 
 class TestApprobation:
-    def test_president_approuve_avec_pin_ecriture_negative_chainee(self, ctx, fee_type):
+    def test_president_approuve_ecriture_negative_chainee(self, ctx, fee_type):
         payment = pay(ctx, days_ago=5)
         reversal = request(ctx, payment)
-        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=PIN)
+        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user)
 
         reversal.refresh_from_db()
         assert reversal.status == PaymentReversal.Status.APPROVED
@@ -121,25 +137,27 @@ class TestApprobation:
     def test_seul_le_president_approuve(self, ctx, fee_type, who):
         reversal = request(ctx, pay(ctx))
         with pytest.raises(services.TreasuryPermissionError):
-            services.approve_payment_reversal(reversal=reversal, approved_by=getattr(ctx, who).user, pin=PIN)
+            services.approve_payment_reversal(reversal=reversal, approved_by=getattr(ctx, who).user)
         reversal.refresh_from_db()
         assert reversal.status == PaymentReversal.Status.PENDING_APPROVAL
 
-    def test_pin_incorrect(self, ctx, fee_type):
+    def test_approbation_reussit_sans_pin_et_journalise_l_auteur(self, ctx, fee_type):
+        """Decision client du 11/10/2026 (CLAUDE.md regle 7) : plus aucun PIN ;
+        l'auteur de l'approbation est ecrit dans le journal."""
+
         reversal = request(ctx, pay(ctx))
-        with pytest.raises(InvalidPinError):
-            services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=WRONG_PIN)
+        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user)
         reversal.refresh_from_db()
-        assert reversal.status == PaymentReversal.Status.PENDING_APPROVAL
-        assert services.has_paid_membership_fee(ctx.pending_member) is True
+        assert reversal.status == PaymentReversal.Status.APPROVED
+        assert services.has_paid_membership_fee(ctx.pending_member) is False
+        assert_logged_by("treasury.payment_reversal.approved", ctx.president.user, club=ctx.club)
         ctx.president.user.refresh_from_db()
-        assert ctx.president.user.pin_failed_attempts == 1
 
     def test_approbation_unique(self, ctx, fee_type):
         reversal = request(ctx, pay(ctx))
-        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=PIN)
+        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user)
         with pytest.raises(services.TreasuryValidationError):
-            services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=PIN)
+            services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user)
         assert Transaction.all_objects.filter(kind=Transaction.Kind.PAYMENT_REVERSAL).count() == 1
 
     def test_club_gele(self, ctx, fee_type):
@@ -148,13 +166,13 @@ class TestApprobation:
         reversal = request(ctx, pay(ctx))
         services.freeze_ledger(club=ctx.club, reason="Analyse", actor=SuperuserFactory())
         with pytest.raises(services.LedgerFrozenError):
-            services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=PIN)
+            services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user)
         reversal.refresh_from_db()
         assert reversal.status == PaymentReversal.Status.PENDING_APPROVAL
 
     def test_annulation_approuvee_immuable(self, ctx, fee_type):
         reversal = request(ctx, pay(ctx))
-        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=PIN)
+        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user)
         reversal.refresh_from_db()
         reversal.reason = "autre motif"
         with pytest.raises(LedgerImmutableError):
@@ -165,7 +183,7 @@ class TestApprobation:
     def test_correction_de_montant_par_annulation_puis_nouvelle_saisie(self, ctx, fee_type):
         wrong = pay(ctx, amount="50")
         reversal = request(ctx, wrong, reason="Montant errone")
-        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=PIN)
+        services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user)
         pay(ctx, amount="5")
         assert services.has_paid_membership_fee(ctx.pending_member) is True
         assert services.verify_chain(ctx.club).ok is True
@@ -198,7 +216,7 @@ class TestRejet:
 
 class TestRemboursementApresRefusDuParrain:
     """CDC 4.3 : « Le sort du paiement (remboursement ou conservation) est
-    enregistre » ; 10.2 n° 36 (PIN) ; D9 (annulation `refund` validee par le
+    enregistre » ; 10.2 n° 36 (PIN supprime le 11/10/2026) ; D9 (annulation `refund` validee par le
     President) -- a confirmer par le client."""
 
     def test_remboursement_annule_tous_les_paiements_d_adhesion_en_une_fois(self, ctx, fee_type):
@@ -208,7 +226,6 @@ class TestRemboursementApresRefusDuParrain:
             membership=ctx.pending_member,
             reason="Refus du parrain, adhesion annulee",
             president=ctx.president.user,
-            pin=PIN,
         )
         assert {r.payment_id for r in reversals} == {p1.pk, p2.pk}
         for r in reversals:
@@ -218,23 +235,34 @@ class TestRemboursementApresRefusDuParrain:
         assert services.has_paid_membership_fee(ctx.pending_member) is False
         assert services.verify_chain(ctx.club).ok is True
 
-    def test_remboursement_exige_le_president_et_son_pin(self, ctx, fee_type):
+    def test_remboursement_reserve_au_president(self, ctx, fee_type):
         pay(ctx)
         with pytest.raises(services.TreasuryPermissionError):
             services.refund_membership_fee(
-                membership=ctx.pending_member, reason="Refus", president=ctx.treasurer.user, pin=PIN
-            )
-        with pytest.raises(InvalidPinError):
-            services.refund_membership_fee(
-                membership=ctx.pending_member, reason="Refus", president=ctx.president.user, pin=WRONG_PIN
+                membership=ctx.pending_member, reason="Refus", president=ctx.treasurer.user
             )
         assert not PaymentReversal.all_objects.exists()
         assert services.has_paid_membership_fee(ctx.pending_member) is True
 
+    def test_remboursement_sans_pin_et_auteur_journalise(self, ctx, fee_type):
+        """Plus aucun parametre ``pin`` ; l'auteur est journalise."""
+
+        pay(ctx)
+        with pytest.raises(TypeError):
+            services.refund_membership_fee(
+                membership=ctx.pending_member, reason="Refus", president=ctx.president.user, pin=WRONG_PIN
+            )
+        reversals = services.refund_membership_fee(
+            membership=ctx.pending_member, reason="Refus", president=ctx.president.user
+        )
+        assert len(reversals) == 1
+        assert services.has_paid_membership_fee(ctx.pending_member) is False
+        assert_logged_by("treasury.payment_reversal.approved", ctx.president.user, club=ctx.club)
+
     def test_remboursement_sans_paiement(self, ctx, fee_type):
         with pytest.raises(services.TreasuryValidationError):
             services.refund_membership_fee(
-                membership=ctx.pending_member, reason="Refus", president=ctx.president.user, pin=PIN
+                membership=ctx.pending_member, reason="Refus", president=ctx.president.user
             )
 
     def test_remboursement_par_le_president_d_un_autre_club_refuse(self, ctx, fee_type, other_ctx, other_fee_type):
@@ -248,7 +276,6 @@ class TestRemboursementApresRefusDuParrain:
                 membership=ctx.pending_member,
                 reason="Refus du parrain",
                 president=other_ctx.president.user,
-                pin=PIN,
             )
         assert not PaymentReversal.all_objects.exists()
         assert services.has_paid_membership_fee(ctx.pending_member) is True
@@ -258,9 +285,9 @@ class TestRemboursementApresRefusDuParrain:
     def test_paiement_deja_rembourse_ignore(self, ctx, fee_type):
         pay(ctx)
         services.refund_membership_fee(
-            membership=ctx.pending_member, reason="Refus", president=ctx.president.user, pin=PIN
+            membership=ctx.pending_member, reason="Refus", president=ctx.president.user
         )
         with pytest.raises(services.TreasuryValidationError):
             services.refund_membership_fee(
-                membership=ctx.pending_member, reason="Refus", president=ctx.president.user, pin=PIN
+                membership=ctx.pending_member, reason="Refus", president=ctx.president.user
             )

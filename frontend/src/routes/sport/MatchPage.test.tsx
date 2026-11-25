@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MyProfile, ClubPlayerListItem } from "../../api/clubs";
 import type { MatchDetail } from "../../api/sport";
@@ -14,11 +15,18 @@ vi.mock("../../api/clubs", async () => {
 
 vi.mock("../../api/sport", async () => {
   const actual = await vi.importActual<typeof import("../../api/sport")>("../../api/sport");
-  return { ...actual, getMatch: vi.fn(), listEventIncidents: vi.fn() };
+  return { ...actual, getMatch: vi.fn(), listEventIncidents: vi.fn(), publishMatchResult: vi.fn() };
+});
+
+vi.mock("../../api/logistics", async () => {
+  const actual = await vi.importActual<typeof import("../../api/logistics")>("../../api/logistics");
+  return { ...actual, getMatchEquipment: vi.fn().mockResolvedValue({ lines: [] }) };
 });
 
 import { getMyProfile, listClubPlayers } from "../../api/clubs";
-import { getMatch, listEventIncidents } from "../../api/sport";
+import { getMatchEquipment } from "../../api/logistics";
+import { ApiError } from "../../api/client";
+import { getMatch, listEventIncidents, publishMatchResult } from "../../api/sport";
 
 function makeProfile(...roles: string[]): MyProfile {
   return {
@@ -113,5 +121,103 @@ describe("MatchPage", () => {
     renderPage();
     expect(await screen.findByText("Club de test – FC Espoir")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Composer l'équipe" })).not.toBeInTheDocument();
+  });
+
+  it("n'appelle pas GET equipment pour un simple joueur (rôle non habilité)", async () => {
+    vi.mocked(getMatchEquipment).mockClear();
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile());
+    vi.mocked(getMatch).mockResolvedValue(makeMatch());
+    renderPage();
+    expect(await screen.findByText("Club de test – FC Espoir")).toBeInTheDocument();
+    expect(screen.queryByText("Équipements reçus")).not.toBeInTheDocument();
+    expect(getMatchEquipment).not.toHaveBeenCalled();
+  });
+
+  it("charge les équipements pour le Coach", async () => {
+    vi.mocked(getMatchEquipment).mockClear();
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile("coach"));
+    vi.mocked(getMatch).mockResolvedValue(makeMatch());
+    renderPage();
+    expect(await screen.findByText("Équipements reçus")).toBeInTheDocument();
+    expect(getMatchEquipment).toHaveBeenCalledWith(5);
+  });
+});
+
+describe("MatchPage : publication du résultat", () => {
+  const sheet = { score_home: 2, score_away: 1, goals: [] } as unknown as MatchDetail["sheet"];
+  const BUTTON = "Publier le résultat sur le fil";
+
+  beforeEach(() => {
+    vi.mocked(listClubPlayers).mockResolvedValue(makeRoster());
+    vi.mocked(listEventIncidents).mockResolvedValue({ count: 0, next_offset: null, results: [] });
+    vi.mocked(publishMatchResult).mockReset();
+  });
+
+  it("affiche le bouton au Coach quand le score est saisi et le résultat non publié", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile("coach"));
+    vi.mocked(getMatch).mockResolvedValue(makeMatch({ sheet, result_published: false }));
+    renderPage();
+    expect(await screen.findByRole("button", { name: BUTTON })).toBeInTheDocument();
+  });
+
+  it("affiche le bouton à l'assistant du Coach", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile("assistant_coach"));
+    vi.mocked(getMatch).mockResolvedValue(makeMatch({ sheet, result_published: false }));
+    renderPage();
+    expect(await screen.findByRole("button", { name: BUTTON })).toBeInTheDocument();
+  });
+
+  it("masque le bouton à un simple joueur, sans score, ou si déjà publié", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile());
+    vi.mocked(getMatch).mockResolvedValue(makeMatch({ sheet, result_published: false }));
+    const first = renderPage();
+    expect(await screen.findByText("Club de test – FC Espoir")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: BUTTON })).not.toBeInTheDocument();
+    first.unmount();
+
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile("coach"));
+    vi.mocked(getMatch).mockResolvedValue(makeMatch({ sheet: null, result_published: false }));
+    const second = renderPage();
+    expect(await screen.findByText("Club de test – FC Espoir")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: BUTTON })).not.toBeInTheDocument();
+    second.unmount();
+
+    vi.mocked(getMatch).mockResolvedValue(makeMatch({ sheet, result_published: true }));
+    renderPage();
+    expect(await screen.findByText("Résultat publié sur le fil")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: BUTTON })).not.toBeInTheDocument();
+  });
+
+  it("demande confirmation avant d'envoyer, puis affiche la mention", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile("coach"));
+    vi.mocked(getMatch)
+      .mockResolvedValueOnce(makeMatch({ sheet, result_published: false }))
+      .mockResolvedValue(makeMatch({ sheet, result_published: true }));
+    vi.mocked(publishMatchResult).mockResolvedValue(makeMatch({ sheet, result_published: true }));
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: BUTTON }));
+    expect(screen.getByText(/Publier le résultat de ce match sur le fil du club \?/)).toBeInTheDocument();
+    expect(publishMatchResult).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Publier" }));
+    await waitFor(() => expect(publishMatchResult).toHaveBeenCalledWith(5));
+    expect(await screen.findByText("Résultat publié sur le fil")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: BUTTON })).not.toBeInTheDocument();
+  });
+
+  it("affiche l'erreur 400 de l'API telle quelle", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile("coach"));
+    vi.mocked(getMatch).mockResolvedValue(makeMatch({ sheet, result_published: false }));
+    vi.mocked(publishMatchResult).mockRejectedValue(
+      new ApiError(400, { detail: "Le résultat de ce match est déjà publié." }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: BUTTON }));
+    await user.click(screen.getByRole("button", { name: "Publier" }));
+    expect(await screen.findByText("Le résultat de ce match est déjà publié.")).toBeInTheDocument();
   });
 });

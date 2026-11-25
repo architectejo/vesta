@@ -160,3 +160,27 @@ def test_plan_of_another_club_is_not_found(ctx, other_ctx):
     response = client_for(ctx.player.user).get(reverse("sport:tactical-plan-detail", args=[other_plan.pk]))
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+def test_patch_placement_partial_keeps_position_and_refuses_duplicate_number(ctx):
+    """D4 (champ absent = inchangé) et D5 (numéro unique dans le club -> 400 français)."""
+    created = client_for(ctx.coach.user).post(reverse("sport:tactical-plan-list"), _plan_payload())
+    plan_id = created.data["id"]
+    placed = client_for(ctx.coach.user).post(
+        reverse("sport:tactical-plan-placement-create", args=[plan_id]),
+        {"membership_id": ctx.player.pk, "x_coord": "50", "y_coord": "80"},
+    )
+    url = reverse("sport:placement-detail", args=[placed.data["id"]])
+    first = client_for(ctx.coach.user).patch(url, {"jersey_number": 10, "position": "midfielder"})
+    assert first.status_code == status.HTTP_200_OK, first.data
+    only_number = client_for(ctx.coach.user).patch(url, {"jersey_number": 11})
+    assert only_number.status_code == status.HTTP_200_OK
+    ctx.player.refresh_from_db()
+    assert ctx.player.jersey_number == 11
+    assert ctx.player.position == "midfielder"
+
+    ctx.captain.jersey_number = 4
+    ctx.captain.save()
+    dup = client_for(ctx.coach.user).patch(url, {"jersey_number": 4})
+    assert dup.status_code == status.HTTP_400_BAD_REQUEST
+    assert "déjà porté" in dup.data["detail"]

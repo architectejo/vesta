@@ -93,7 +93,7 @@ class Licence(models.Model):
 
     def clean(self):
         if self.created_by_id and not getattr(self.created_by, "is_superuser", False):
-            raise ValidationError("Une licence est creee/geree uniquement par un Superuser (CDC 2.5).")
+            raise ValidationError("Une licence est créée et gérée uniquement par un Superuser.")
 
 
 class LicenceEvent(models.Model):
@@ -211,9 +211,9 @@ class SupportSession(models.Model):
                 "Une session de support est toujours ouverte par un Superuser (CDC 2.5, 4.18)."
             )
         if not (self.reason or "").strip():
-            raise ValidationError("Le motif de la session de support est obligatoire (CDC 4.18).")
+            raise ValidationError("Le motif de la session de support est obligatoire.")
         if self.ended_at is not None and self.started_at is not None and self.ended_at < self.started_at:
-            raise ValidationError("La fin anticipee ne peut pas preceder le debut de la session.")
+            raise ValidationError("La fin anticipée ne peut pas précéder le début de la session.")
 
     def save(self, *args, **kwargs):
         if self.started_at is None:

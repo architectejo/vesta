@@ -1,4 +1,5 @@
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { IconLoading } from "../icons";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 export type ButtonSize = "sm" | "md";
@@ -68,10 +69,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       {...rest}
     >
       {loading ? (
-        <span
-          aria-hidden="true"
-          className="h-4 w-4 shrink-0 rounded-full border-2 border-current border-t-transparent motion-safe:animate-spin"
-        />
+        <IconLoading aria-hidden="true" className="h-4 w-4 shrink-0 motion-safe:animate-icon-spin" />
       ) : (
         icon
       )}

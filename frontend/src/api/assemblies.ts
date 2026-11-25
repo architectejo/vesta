@@ -61,6 +61,8 @@ export interface Assembly {
   quorum: Quorum;
   minutes: Minutes | null;
   can_manage: boolean;
+  /** Président, VP, Secrétaire (CDC 4.15, 10.3 n° 170) : décidé par l'API. */
+  can_convene: boolean;
   can_sign_president: boolean;
   can_sign_vice_president: boolean;
 }
@@ -147,8 +149,8 @@ export function draftMinutes(assemblyId: number, content: string) {
   return apiPut<Minutes>(`/assemblies/${assemblyId}/minutes/`, { content });
 }
 
-export function signMinutes(assemblyId: number, pin: string) {
-  return apiPost<Minutes>(`/assemblies/${assemblyId}/minutes/sign/`, { pin });
+export function signMinutes(assemblyId: number) {
+  return apiPost<Minutes>(`/assemblies/${assemblyId}/minutes/sign/`, {});
 }
 
 export function downloadMinutesPdf(assemblyId: number): Promise<DownloadResult> {
@@ -161,4 +163,95 @@ export function getQuorumThreshold() {
 
 export function updateQuorumThreshold(percentage: number) {
   return apiPut<{ percentage: string }>("/assemblies/quorum-threshold/", { percentage });
+}
+
+
+// ---------------------------------------------------------------------------
+// Archive des documents officiels (CDC 4.15.1 ; docs/ecrans/club-archives.md).
+// ---------------------------------------------------------------------------
+
+export type ArchiveCategory = "pv_reunion" | "convocation" | "autre";
+export type ArchiveStatus = "active" | "withdrawn";
+
+export interface ArchivedDocument {
+  id: number;
+  category: ArchiveCategory;
+  category_label: string;
+  title: string;
+  document_date: string;
+  status: ArchiveStatus;
+  status_label: string;
+  uploaded_by_name: string;
+  uploaded_at: string;
+  withdrawn_by_name: string;
+  withdrawn_at: string | null;
+  withdrawn_reason: string;
+  replaces_id: number | null;
+  replaced_by_id: number | null;
+  file_name: string;
+  file_size: number | null;
+  download_url: string;
+}
+
+export interface ArchivedDocumentListResponse {
+  results: ArchivedDocument[];
+  count: number;
+  next_offset: number | null;
+}
+
+export interface ListArchivedDocumentsParams {
+  category?: ArchiveCategory;
+  year?: string;
+  includeWithdrawn?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export function listArchivedDocuments(params: ListArchivedDocumentsParams = {}) {
+  const query = new URLSearchParams();
+  if (params.category) query.set("category", params.category);
+  if (params.year) query.set("year", params.year);
+  if (params.includeWithdrawn) query.set("include_withdrawn", "1");
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.offset !== undefined) query.set("offset", String(params.offset));
+  const suffix = query.toString();
+  return apiGet<ArchivedDocumentListResponse>(`/assemblies/documents/${suffix ? `?${suffix}` : ""}`);
+}
+
+export function getArchivedDocument(id: number) {
+  return apiGet<ArchivedDocument>(`/assemblies/documents/${id}/`);
+}
+
+export interface ArchivedDocumentInput {
+  category: ArchiveCategory;
+  title: string;
+  document_date: string;
+  file: File;
+}
+
+function toDocumentFormData(input: ArchivedDocumentInput): FormData {
+  const form = new FormData();
+  form.append("category", input.category);
+  form.append("title", input.title);
+  form.append("document_date", input.document_date);
+  form.append("file", input.file);
+  return form;
+}
+
+export function uploadArchivedDocument(input: ArchivedDocumentInput) {
+  return apiPost<ArchivedDocument>("/assemblies/documents/", toDocumentFormData(input));
+}
+
+/** L'ancien document est retiré et conservé ; le nouveau le référence. */
+export function replaceArchivedDocument(id: number, input: ArchivedDocumentInput) {
+  return apiPost<ArchivedDocument>(`/assemblies/documents/${id}/replace/`, toDocumentFormData(input));
+}
+
+export function withdrawArchivedDocument(id: number, reason: string) {
+  return apiPost<ArchivedDocument>(`/assemblies/documents/${id}/withdraw/`, { reason });
+}
+
+/** Téléchargement authentifié (CDC 6.7, règle n° 10) : jamais d'adresse publique. */
+export function downloadArchivedDocument(id: number): Promise<DownloadResult> {
+  return apiDownload(`/assemblies/documents/${id}/file/`, `archive-${id}`);
 }

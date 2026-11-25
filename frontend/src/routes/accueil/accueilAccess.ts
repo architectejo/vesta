@@ -12,11 +12,12 @@ function hasAnyRole(roles: ProfileRole[] | undefined, required: readonly string[
   return roles.some((r) => required.includes(r.role));
 }
 
-const ANNOUNCEMENT_PUBLISHER = ["president", "vice_president"] as const;
+const ANNOUNCEMENT_PUBLISHER = ["president", "vice_president", "secretary"] as const;
 
 export interface AccueilAccess {
   canPublishAnnouncement: boolean;
   isPresident: boolean;
+  isCoach: boolean;
 }
 
 /**
@@ -28,5 +29,6 @@ export function getAccueilAccess(roles: ProfileRole[] | undefined): AccueilAcces
   return {
     canPublishAnnouncement: hasAnyRole(roles, ANNOUNCEMENT_PUBLISHER),
     isPresident: hasAnyRole(roles, ["president"]),
+    isCoach: hasAnyRole(roles, ["coach", "assistant_coach"]),
   };
 }

@@ -30,6 +30,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.clubs.models import Membership, MembershipRole
+from apps.core.private_files import rename_upload_to_real_type
 from apps.core.roles import has_any_role
 from apps.core.services import log_action
 from apps.social.models import (
@@ -93,17 +94,34 @@ class SocialPermissionError(SocialError, PermissionError):
 # ---------------------------------------------------------------------------
 
 
+def create_auto_result_post(*, club, actor, body: str) -> Post:
+    """Publication automatique du résultat d'un match (CDC 4.8).
+
+    Visibilité « Club » : jamais publique sans consentement (10.2 n° 160).
+    L'appelant (``apps.sport.services``) est responsable de la règle
+    « une seule publication par match » et de la journalisation métier.
+    """
+
+    return Post.all_objects.create(
+        club=club,
+        author=actor,
+        body=(body or "").strip(),
+        visibility=Post.Visibility.CLUB_ONLY,
+        post_kind=Post.PostKind.AUTO_RESULT,
+    )
+
+
 def create_post(*, club, actor, body: str, visibility: str, images: Optional[list] = None, now=None) -> Post:
     now = now or timezone.now()
     body = (body or "").strip()
     images = images or []
 
     if not body and not images:
-        raise SocialValidationError("Ecrivez un texte ou ajoutez au moins une image.")
+        raise SocialValidationError("Écrivez un texte ou ajoutez au moins une image.")
     if len(images) > MAX_POST_IMAGES:
         raise SocialValidationError("4 images au maximum.")
     if visibility not in Post.Visibility.values:
-        raise SocialValidationError("Visibilite invalide.")
+        raise SocialValidationError("Visibilité invalide.")
 
     with transaction.atomic():
         post = Post.all_objects.create(
@@ -114,6 +132,7 @@ def create_post(*, club, actor, body: str, visibility: str, images: Optional[lis
             post_kind=Post.PostKind.MANUAL,
         )
         for index, uploaded in enumerate(images, start=1):
+            rename_upload_to_real_type(uploaded)
             PostImage.all_objects.create(club=club, post=post, file=uploaded, order=index)
 
     log_action(
@@ -135,7 +154,7 @@ def can_delete_post(*, user, post: Post) -> bool:
 def delete_post(*, post: Post, actor, now=None) -> Post:
     now = now or timezone.now()
     if not can_delete_post(user=actor, post=post):
-        raise SocialPermissionError("Vous n'etes pas autorise a supprimer cette publication (CDC 4.16).")
+        raise SocialPermissionError("Vous n'êtes pas autorisé à supprimer cette publication.")
     if post.deleted_at is not None:
         return post
 
@@ -216,10 +235,10 @@ def get_visible_posts(*, active_club, scope: str):
 def add_comment(*, post: Post, actor, body: str, active_club, now=None) -> Comment:
     now = now or timezone.now()
     if not can_interact_with_post(user=actor, post=post, active_club=active_club):
-        raise SocialPermissionError("Vous n'avez pas acces a cette publication.")
+        raise SocialPermissionError("Vous n'avez pas accès à cette publication.")
     body = (body or "").strip()
     if not body:
-        raise SocialValidationError("Ecrivez un commentaire.")
+        raise SocialValidationError("Écrivez un commentaire.")
 
     comment = Comment.all_objects.create(club=post.club, post=post, author=actor, body=body)
     log_action(actor=actor, club=post.club, action_type="social.comment.created", obj=comment)
@@ -235,7 +254,7 @@ def can_delete_comment(*, user, comment: Comment) -> bool:
 def delete_comment(*, comment: Comment, actor, now=None) -> Comment:
     now = now or timezone.now()
     if not can_delete_comment(user=actor, comment=comment):
-        raise SocialPermissionError("Vous n'etes pas autorise a supprimer ce commentaire.")
+        raise SocialPermissionError("Vous n'êtes pas autorisé à supprimer ce commentaire.")
     if comment.deleted_at is not None:
         return comment
 
@@ -260,7 +279,7 @@ def toggle_like(*, post: Post, actor, active_club, now=None) -> bool:
 
     now = now or timezone.now()
     if not can_interact_with_post(user=actor, post=post, active_club=active_club):
-        raise SocialPermissionError("Vous n'avez pas acces a cette publication.")
+        raise SocialPermissionError("Vous n'avez pas accès à cette publication.")
 
     like = Like.all_objects.filter(post=post, user=actor).first()
     if like is not None:
@@ -280,7 +299,7 @@ def report_post(*, post: Post, actor, reason: str, active_club, now=None) -> Pos
 
     now = now or timezone.now()
     if not can_interact_with_post(user=actor, post=post, active_club=active_club):
-        raise SocialPermissionError("Vous n'avez pas acces a cette publication.")
+        raise SocialPermissionError("Vous n'avez pas accès à cette publication.")
 
     try:
         with transaction.atomic():
@@ -293,7 +312,7 @@ def report_post(*, post: Post, actor, reason: str, active_club, now=None) -> Pos
         # avant meme d'atteindre le moteur de base de donnees) : les deux
         # traduisent la meme violation de la contrainte unique
         # ``(post, reported_by)`` (10.2 n° 23, proposition point ouvert F.3).
-        raise SocialValidationError("Vous avez deja signale cette publication.") from None
+        raise SocialValidationError("Vous avez déjà signalé cette publication.") from None
 
     log_action(
         actor=actor,
@@ -311,7 +330,7 @@ def _notify_superusers_of_report(*, post: Post, report: PostReport, now) -> None
     from apps.notifications.models import Notification
     from apps.notifications.services import create_notification
 
-    message = f"Publication signalee dans le club {post.club.name}"
+    message = f"Publication signalée dans le club {post.club.name}"
     for superuser in User.objects.filter(is_superuser=True):
         create_notification(
             recipient=superuser,
@@ -348,6 +367,7 @@ def create_announcement(
             club=club, title=title, body=body, published_by=actor, pinned=bool(pinned)
         )
         for index, uploaded in enumerate(images, start=1):
+            rename_upload_to_real_type(uploaded)
             AnnouncementImage.all_objects.create(club=club, announcement=announcement, file=uploaded, order=index)
 
     log_action(
@@ -365,7 +385,7 @@ def _notify_all_active_members_of_announcement(club, announcement: Announcement,
     from apps.notifications.models import Notification
     from apps.notifications.services import create_notification
 
-    message = f"Nouveau communique : {announcement.title}"
+    message = f"Nouveau communiqué : {announcement.title}"
     memberships = Membership.all_objects.filter(club=club, status=Membership.Status.ACTIVE).select_related("user")
     for membership in memberships:
         create_notification(
@@ -381,7 +401,7 @@ def _notify_all_active_members_of_announcement(club, announcement: Announcement,
 def mark_announcement_read(*, announcement: Announcement, membership: Membership, now=None) -> AnnouncementRead:
     now = now or timezone.now()
     if membership.club_id != announcement.club_id:
-        raise SocialPermissionError("Vous n'avez pas acces a ce communique.")
+        raise SocialPermissionError("Vous n'avez pas accès à ce communiqué.")
 
     read, created = AnnouncementRead.all_objects.get_or_create(
         club=announcement.club, announcement=announcement, membership=membership, defaults={"read_at": now}
@@ -446,12 +466,14 @@ def can_access_channel(*, user, channel: ChatChannel) -> bool:
 def send_chat_message(*, channel: ChatChannel, actor, body: str = "", image=None, now=None) -> ChatMessage:
     now = now or timezone.now()
     if not can_access_channel(user=actor, channel=channel):
-        raise SocialPermissionError("Vous n'avez pas acces a ce canal.")
+        raise SocialPermissionError("Vous n'avez pas accès à ce canal.")
 
     body = (body or "").strip()
     if not body and not image:
-        raise SocialValidationError("Ecrivez un message ou ajoutez une image.")
+        raise SocialValidationError("Écrivez un message ou ajoutez une image.")
 
+    if image:
+        rename_upload_to_real_type(image)
     message = ChatMessage.all_objects.create(club=channel.club, channel=channel, sender=actor, body=body, image=image)
     log_action(
         actor=actor,

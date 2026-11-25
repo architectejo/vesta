@@ -19,6 +19,7 @@ import {
   StatusBadge,
   type DataTableColumn,
 } from "../../design-system";
+import { canAccessMedicalPage } from "../sport/sportAccess";
 import { HealthRecordModal } from "./HealthRecordModal";
 import { InjuryDetailModal } from "./InjuryDetailModal";
 import { InjuryReportModal } from "./InjuryReportModal";
@@ -46,16 +47,17 @@ export function MedicalPage() {
 
   const profileQuery = useQuery({ queryKey: ["profile", "me"], queryFn: getMyProfile, staleTime: 60_000 });
   const isDoctor = hasRole(profileQuery.data, "doctor");
-  const isCoach = hasRole(profileQuery.data, "coach");
+  const isCoach = hasRole(profileQuery.data, "coach") || hasRole(profileQuery.data, "assistant_coach");
   const isPresident = hasRole(profileQuery.data, "president");
 
   // Le vrai contrôle d'accès vient de l'API (`CanAccessMedicalPage`, mêmes
   // rôles que ce garde) : cette requête sert aussi de sonde d'accès —
   // un 403 affiche l'état vide unique du §3, jamais reconstruit ici.
+  const roleAllowed = canAccessMedicalPage(profileQuery.data?.roles);
   const unfitQuery = useQuery({
     queryKey: ["medical", "page", "unfit"],
     queryFn: listUnfitAndRestricted,
-    enabled: !profileQuery.isLoading,
+    enabled: !profileQuery.isLoading && roleAllowed,
   });
 
   const toCompleteQuery = useQuery({
@@ -76,7 +78,9 @@ export function MedicalPage() {
     enabled: isDoctor || isPresident,
   });
 
-  const accessDenied = unfitQuery.isError && unfitQuery.error instanceof ApiError && unfitQuery.error.status === 403;
+  const accessDenied =
+    (!profileQuery.isLoading && !profileQuery.isError && !roleAllowed) ||
+    (unfitQuery.isError && unfitQuery.error instanceof ApiError && unfitQuery.error.status === 403);
 
   function invalidateAll(): void {
     void queryClient.invalidateQueries({ queryKey: ["medical"] });
@@ -121,7 +125,7 @@ export function MedicalPage() {
     });
   }, [rosterQuery.data, rosterFitness]);
 
-  if (profileQuery.isLoading || unfitQuery.isLoading) {
+  if (profileQuery.isLoading || (roleAllowed && unfitQuery.isLoading)) {
     return <Loader loading variant="page" />;
   }
 

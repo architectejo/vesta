@@ -25,7 +25,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.clubs.models import Membership, MembershipRole, Season
+from apps.clubs.models import COACHING_STAFF_ROLES, Membership, MembershipRole, Season
 from apps.clubs.permissions import IsActiveClubMember, IsClubCoach
 from apps.core.permissions import HasAcceptedLatestTerms, HasCompletedPasswordSetup, HasUsableLicence, IsSuperuser
 from apps.core.roles import has_any_role
@@ -55,6 +55,7 @@ from apps.sport.permissions import (
     CanManageMatch,
     CanRecordAttendance,
     CanRecordIncident,
+    EVALUATOR_ROLES,
     INCIDENT_FULL_VISIBILITY_ROLES,
 )
 
@@ -152,6 +153,14 @@ class EventUnlockView(APIView):
     permission_classes = _GATE + [IsSuperuser]
 
     def post(self, request, pk):
+        if get_active_club() is None:
+            return Response(
+                {
+                    "detail": "Le déverrouillage exige une session de support active : "
+                    "ouvrez une session sur le club concerné (Ghost Mode)."
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         try:
             event = Event.objects.get(pk=pk)
         except Event.DoesNotExist:
@@ -433,6 +442,60 @@ class SessionAttendanceExcuseView(APIView):
         return Response(serializers_mod.serialize_attendance(attendance, viewer=request.user, request=request))
 
 
+def _bulk_attendance_response(request, event):
+    """Corps commun des deux endpoints de pointage groupé. Une erreur de
+    lot (verrou, droit, heure, taille) refuse tout ; sinon chaque joueur
+    a son résultat (succès partiel, 200)."""
+
+    serializer = serializers_mod.BulkAttendanceSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
+    try:
+        if data["action"] == "excuse":
+            result = services.excuse_absences_bulk(
+                event=event,
+                items=data["items"],
+                actor=request.user,
+                reason_code=data["reason_code"],
+                reason_detail=data.get("reason_detail", ""),
+            )
+        else:
+            result = services.mark_arrivals_bulk(
+                event=event, items=data["items"], actor=request.user, arrived_at=data.get("arrived_at")
+            )
+    except services.SportError as exc:
+        return _sport_error(exc)
+    return Response(serializers_mod.serialize_bulk_attendance_result(result, viewer=request.user, request=request))
+
+
+class SessionAttendanceBulkView(APIView):
+    """Pointage groupé d'une séance (CDC 4.7). Mêmes rôles que le pointage
+    individuel ; ``excuse`` et ``arrived_at`` sont réservés au Coach et à son
+    assistant (contrôlé par le service, 403)."""
+
+    permission_classes = _GATE + [CanRecordAttendance]
+
+    def post(self, request, pk):
+        try:
+            session = Session.objects.select_related("event").get(pk=pk)
+        except Session.DoesNotExist:
+            return _not_found(_SESSION_NOT_FOUND)
+        return _bulk_attendance_response(request, session.event)
+
+
+class MatchAttendanceBulkView(APIView):
+    """Pointage groupé d'un match (CDC 4.8 : mêmes règles que les séances)."""
+
+    permission_classes = _GATE + [CanRecordAttendance]
+
+    def post(self, request, pk):
+        try:
+            match = Match.objects.select_related("event").get(pk=pk)
+        except Match.DoesNotExist:
+            return _not_found(_MATCH_NOT_FOUND)
+        return _bulk_attendance_response(request, match.event)
+
+
 class AttendanceCorrectionView(APIView):
     """Correction de l'heure d'arrivée (CDC 4.7), reservee au Coach."""
 
@@ -658,6 +721,7 @@ class MatchDetailView(APIView):
                 opponent_club=opponent_club,
                 opponent_name=data.get("opponent_name", ""),
                 location=data.get("location", ""),
+                challenge_to_club_id=data.get("challenge_to_club_id"),
             )
         except services.SportError as exc:
             return _sport_error(exc)
@@ -791,6 +855,25 @@ class MatchScoreView(APIView):
         return Response(serializers_mod.serialize_match_detail(match, viewer=request.user, request=request))
 
 
+class MatchPublishResultView(APIView):
+    """Publication du résultat sur le fil, en un clic (CDC 4.8). Réservée aux
+    rôles qui saisissent le score ; visibilité « Club » (10.2 n° 160)."""
+
+    permission_classes = _GATE + [CanManageMatch]
+
+    def post(self, request, pk):
+        try:
+            match = Match.objects.select_related("event").get(pk=pk)
+        except Match.DoesNotExist:
+            return _not_found(_MATCH_NOT_FOUND)
+        try:
+            services.publish_match_result(match=match, published_by=request.user)
+        except services.SportError as exc:
+            return _sport_error(exc)
+        match = Match.objects.select_related("event").get(pk=pk)
+        return Response(serializers_mod.serialize_match_detail(match, viewer=request.user, request=request))
+
+
 class MatchGoalListCreateView(APIView):
     """Buts et passes decisives (CDC 4.8). Lecture : tout membre actif ;
     ecriture : Coach seul. Modifiables apres coup (jamais verrouilles a
@@ -893,7 +976,15 @@ class MatchGoalDetailView(APIView):
 
 
 class EventEvaluationListCreateView(APIView):
-    permission_classes = _GATE + [CanEvaluate]
+    """Lecture : évaluateurs et Directeur sportif (« L ») voient tout ; tout
+    autre joueur actif ne voit QUE ses propres notes (matrice 2.4, « P » ;
+    CDC 4.10), commentaire seulement s'il est marqué visible. Écriture :
+    Coach, Président, Vice-président."""
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [permission() for permission in _GATE + [CanEvaluate]]
+        return [permission() for permission in _GATE + [IsActiveClubMember]]
 
     def get(self, request, pk):
         try:
@@ -901,6 +992,11 @@ class EventEvaluationListCreateView(APIView):
         except Event.DoesNotExist:
             return _not_found(_EVENT_NOT_FOUND)
         queryset = Evaluation.objects.filter(event=event).select_related("membership__user", "evaluator")
+        sees_all = has_any_role(
+            request.user, EVALUATOR_ROLES | {MembershipRole.Role.SPORTS_DIRECTOR}
+        ) or getattr(request.user, "is_superuser", False)
+        if not sees_all:
+            queryset = queryset.filter(membership__user=request.user)
         membership_id = request.query_params.get("membership_id")
         if membership_id:
             if not membership_id.isdigit():
@@ -914,7 +1010,10 @@ class EventEvaluationListCreateView(APIView):
         }
         return Response(
             {
-                "results": [serializers_mod.serialize_evaluation(item, request=request) for item in evaluations],
+                "results": [
+                    serializers_mod.serialize_evaluation(item, request=request, as_player=not sees_all)
+                    for item in evaluations
+                ],
                 "averages": averages,
                 "is_locked": services.is_evaluation_locked(event),
                 "locks_at": services.evaluation_locks_at(event),
@@ -966,7 +1065,7 @@ class TacticalPlanListCreateView(APIView):
 
     def get(self, request):
         queryset = TacticalPlan.objects.select_related("match__event").order_by("-updated_at", "-pk")
-        is_coach = has_any_role(request.user, {MembershipRole.Role.COACH})
+        is_coach = has_any_role(request.user, COACHING_STAFF_ROLES)
         if not is_coach:
             queryset = queryset.filter(is_published=True)
         else:
@@ -1026,7 +1125,7 @@ class TacticalPlanDetailView(APIView):
             plan = TacticalPlan.objects.get(pk=pk)
         except TacticalPlan.DoesNotExist:
             return _not_found(_PLAN_NOT_FOUND)
-        if not plan.is_published and not has_any_role(request.user, {MembershipRole.Role.COACH}):
+        if not plan.is_published and not has_any_role(request.user, COACHING_STAFF_ROLES):
             return Response(
                 {"detail": "Vous n'avez pas accès à cette action."}, status=status.HTTP_403_FORBIDDEN
             )
@@ -1170,12 +1269,11 @@ class PlacementDetailView(APIView):
         serializer = serializers_mod.PlacementUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        # Champ non transmis = inchangé (D4).
+        changes = {key: data[key] for key in ("jersey_number", "position") if key in data}
         try:
             placement, warning = services.update_plan_placement_number_and_position(
-                placement=placement,
-                jersey_number=data["jersey_number"],
-                position=data["position"],
-                updated_by=request.user,
+                placement=placement, updated_by=request.user, **changes
             )
         except services.SportError as exc:
             return _sport_error(exc)
@@ -1262,6 +1360,7 @@ class LockerRoomView(APIView):
             viewer_membership = None
         return Response(
             serializers_mod.serialize_locker_room(
+                club=club,
                 session=session,
                 match=match,
                 viewer=request.user,

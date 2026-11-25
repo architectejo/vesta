@@ -11,7 +11,8 @@ les images qui NE sont PAS sur le stockage public (voir docstring de
 
 from __future__ import annotations
 
-from django.http import FileResponse
+from typing import Optional
+
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -19,7 +20,9 @@ from rest_framework.views import APIView
 
 from apps.clubs.models import Membership
 from apps.clubs.permissions import IsActiveClubMember
+from apps.core.private_files import private_file_response
 from apps.core.permissions import HasAcceptedLatestTerms, HasCompletedPasswordSetup, HasUsableLicence
+from apps.core.roles import is_ghost_read_access
 from apps.core.services import resolve_active_membership
 from apps.core.tenant import get_active_club
 from apps.social import serializers as ser
@@ -34,10 +37,10 @@ MAX_PAGE_SIZE = 50
 
 _POST_NOT_FOUND = "Cette publication n'existe plus."
 _COMMENT_NOT_FOUND = "Ce commentaire n'existe pas."
-_ANNOUNCEMENT_NOT_FOUND = "Ce communique n'existe pas dans ce club."
+_ANNOUNCEMENT_NOT_FOUND = "Ce communiqué n'existe pas dans ce club."
 _CHANNEL_NOT_FOUND = "Ce canal n'existe pas dans ce club."
 _INTERACTION_RESTRICTED = (
-    "Commenter, aimer et signaler restent pour l'instant reserves aux publications de votre "
+    "Commenter, aimer et signaler restent pour l'instant réservés aux publications de votre "
     "propre club, y compris quand la publication est Publique (restriction technique provisoire, "
     "voir apps.social.services.can_interact_with_post)."
 )
@@ -67,7 +70,13 @@ def _paginate(request, queryset):
     return items, count, next_offset
 
 
-def _own_membership(request) -> Membership:
+def _own_membership(request) -> Optional[Membership]:
+    """Adhésion du lecteur dans le club actif ; ``None`` pour un Superuser en
+    lecture pendant une session de support (Ghost Mode : pas de fiche joueur,
+    donc ni accusé de lecture ni compteur de non-lus)."""
+
+    if is_ghost_read_access(request):
+        return None
     return resolve_active_membership(request.user, club=get_active_club())
 
 
@@ -232,7 +241,7 @@ class PostReportView(APIView):
         except services.SocialError as exc:
             return _social_error_response(exc)
 
-        return Response({"detail": "Merci. La publication a ete signalee a l'equipe Vesta."}, status=status.HTTP_201_CREATED)
+        return Response({"detail": "Merci. La publication a été signalée à l'équipe Vesta."}, status=status.HTTP_201_CREATED)
 
 
 class PostImageDownloadView(APIView):
@@ -254,9 +263,9 @@ class PostImageDownloadView(APIView):
             return _not_found("Cette image n'existe pas dans ce club.")
 
         if not services.can_read_post(user=request.user, post=image.post, active_club=get_active_club()):
-            return Response({"detail": "Vous n'avez pas acces a cette image."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"detail": "Vous n'avez pas accès à cette image."}, status=status.HTTP_403_FORBIDDEN)
 
-        return FileResponse(image.file.open("rb"), content_type="image/*")
+        return private_file_response(image.file, download_stem=f"image-{image.pk}", as_attachment=False)
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +343,7 @@ class AnnouncementReadView(APIView):
             services.mark_announcement_read(announcement=announcement, membership=_own_membership(request))
         except services.SocialError as exc:
             return _social_error_response(exc)
-        return Response({"detail": "Lecture confirmee."})
+        return Response({"detail": "Lecture confirmée."})
 
 
 class AnnouncementPinView(APIView):
@@ -395,7 +404,7 @@ class AnnouncementImageDownloadView(APIView):
             image = AnnouncementImage.objects.select_related("announcement").get(pk=pk)
         except AnnouncementImage.DoesNotExist:
             return _not_found("Cette image n'existe pas dans ce club.")
-        return FileResponse(image.file.open("rb"), content_type="image/*")
+        return private_file_response(image.file, download_stem=f"image-{image.pk}", as_attachment=False)
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +517,6 @@ class ChatMessageImageDownloadView(APIView):
             return _not_found("Cette image n'existe pas.")
 
         if not services.can_access_channel(user=request.user, channel=message.channel):
-            return Response({"detail": "Vous n'avez plus acces a ce canal."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"detail": "Vous n'avez plus accès à ce canal."}, status=status.HTTP_403_FORBIDDEN)
 
-        return FileResponse(message.image.open("rb"), content_type="image/*")
+        return private_file_response(message.image, download_stem=f"image-{message.pk}", as_attachment=False)

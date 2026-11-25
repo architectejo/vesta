@@ -331,7 +331,7 @@ class TestPlayerImportView:
 
     def test_le_rapport_joint_est_coherent_avec_la_reponse_http(self):
         """Le ``report_file`` attache au lot doit correspondre exactement
-        au detail des echecs renvoye dans la reponse HTTP (CDC 4.1)."""
+        au detail des echecs renvoye dans la reponse HTTP."""
 
         club = ClubFactory()
         president = MembershipFactory(club=club)

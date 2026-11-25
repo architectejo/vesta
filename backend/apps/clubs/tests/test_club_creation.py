@@ -103,6 +103,19 @@ class TestEmailAlreadyUsedError:
         assert not ClubCreationRequest.objects.filter(idempotency_key=data["idempotency_key"]).exists()
 
 
+class TestReservedEmail:
+    def test_refuses_the_reserved_system_email(self):
+        from django.core.exceptions import ValidationError
+
+        data = _payload(email="systeme@vesta.invalid")
+
+        with pytest.raises(ValidationError) as exc_info:
+            club_creation.create_club_with_founder(**data)
+
+        assert "réservée" in exc_info.value.messages[0]
+        assert not Club.objects.filter(name=data["name"]).exists()
+
+
 class TestTermsVersionOutdatedError:
     def test_raises_when_terms_version_id_is_stale(self):
         old_version = TermsVersionFactory(published_at=dj_timezone.now() - datetime.timedelta(days=10))

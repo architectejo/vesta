@@ -15,12 +15,12 @@ class CanReadContributionTypes(HasClubRole):
             MembershipRole.Role.ASSISTANT_TREASURER,
         }
     )
-    message = "Réservé aux membres du bureau autorisés à consulter la trésorerie (CDC 2.4)."
+    message = "Réservé aux membres du bureau autorisés à consulter la trésorerie."
 
 
 class CanWriteContributionTypes(HasClubRole):
     required_roles = frozenset({MembershipRole.Role.PRESIDENT, MembershipRole.Role.TREASURER})
-    message = "Réservé au Président ou au Trésorier (CDC 2.4)."
+    message = "Réservé au Président ou au Trésorier."
 
 
 # Matrice 2.4, ligne « Enregistrement des paiements » : L pour Pdt et VP,
@@ -44,7 +44,7 @@ class CanRecordPayments(HasClubRole):
     Président, en lecture seule sur cette ligne, n'y a pas accès)."""
 
     required_roles = _services.PAYMENT_RECORDERS
-    message = "Seuls le Trésorier et le Trésorier adjoint enregistrent les paiements (CDC 2.4)."
+    message = "Seuls le Trésorier et le Trésorier adjoint enregistrent les paiements."
 
 
 class CanReadContributionGrid(HasClubRole):
@@ -55,7 +55,7 @@ class CanReadContributionGrid(HasClubRole):
     la fiche d'écran, défaut appliqué)."""
 
     required_roles = _services.GRID_READERS
-    message = "Réservé au Président, au Vice-président, au Trésorier et à son adjoint (CDC 2.4)."
+    message = "Réservé au Président, au Vice-président, au Trésorier et à son adjoint."
 
 
 class CanImportContributions(HasClubRole):
@@ -64,14 +64,14 @@ class CanImportContributions(HasClubRole):
     matrice 2.4, colonne É (Trésorier et Trésorier adjoint)."""
 
     required_roles = _services.CONTRIBUTION_IMPORTERS
-    message = "Seuls le Trésorier et le Trésorier adjoint importent des cotisations (CDC 2.4)."
+    message = "Seuls le Trésorier et le Trésorier adjoint importent des cotisations."
 
 
 class CanReadTreasuryDashboard(HasClubRole):
     """Tableau de bord Trésorerie (CDC 4.4.6 ; fiche §2) : Pdt, VP, Trés, Adj."""
 
     required_roles = _services.DASHBOARD_READERS
-    message = "Réservé au Président, au Vice-président, au Trésorier et à son adjoint (CDC 2.4)."
+    message = "Réservé au Président, au Vice-président, au Trésorier et à son adjoint."
 
 
 class CanRequestPaymentReversal(HasClubRole):
@@ -85,8 +85,8 @@ class CanRequestPaymentReversal(HasClubRole):
 
 
 class CanDecidePaymentReversal(HasClubRole):
-    required_roles = _services.PRESIDENT_ONLY
-    message = "Seul le Président valide ou refuse une annulation de paiement (CDC 4.4.4)."
+    required_roles = _services.REVERSAL_DECIDERS
+    message = "Seul le Président valide ou refuse une annulation de paiement."
 
 
 def payments_visible_to(user):
@@ -114,27 +114,27 @@ def payments_visible_to(user):
 
 class CanReadExpenses(HasClubRole):
     required_roles = _services.EXPENSE_READERS
-    message = "Réservé au Président, au Vice-président, au Trésorier et à son adjoint (CDC 2.4)."
+    message = "Réservé au Président, au Vice-président, au Trésorier et à son adjoint."
 
 
 class CanManageExpenseCategories(HasClubRole):
     required_roles = _services.EXPENSE_CATEGORY_MANAGERS
-    message = "Seuls le Président et le Trésorier gèrent les catégories de dépense (CDC 2.4)."
+    message = "Seuls le Président et le Trésorier gèrent les catégories de dépense."
 
 
 class CanSubmitExpenses(HasClubRole):
     required_roles = _services.EXPENSE_RECORDERS
-    message = "Seuls le Trésorier et le Trésorier adjoint saisissent les dépenses (CDC 2.4)."
+    message = "Seuls le Trésorier et le Trésorier adjoint saisissent les dépenses."
 
 
 class CanValidateExpenses(HasClubRole):
     required_roles = _services.EXPENSE_VALIDATORS
-    message = "Seuls le Président et le Vice-président valident les dépenses (CDC 2.4)."
+    message = "Seuls le Président et le Vice-président valident les dépenses."
 
 
 class CanDerogateExpenses(HasClubRole):
     required_roles = _services.PRESIDENT_ONLY
-    message = "Seul le Président peut libérer une dépense par dérogation (CDC 4.5.2)."
+    message = "Seul le Président peut libérer une dépense par dérogation."
 
 
 class CanUploadExpenseReceipts(HasClubRole):
@@ -149,7 +149,7 @@ class CanManageAssistanceScales(HasClubRole):
 
 class CanProcessAssistanceRequests(HasClubRole):
     required_roles = _services.ASSISTANCE_PROCESSORS
-    message = "Seuls le Président et le Vice-président traitent les demandes d'assistance sociale (CDC 4.5.3)."
+    message = "Seuls le Président et le Vice-président traitent les demandes d'assistance sociale."
 
 
 def assistance_requests_visible_to(user):

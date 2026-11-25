@@ -26,3 +26,11 @@ describe("getAccueilAccess", () => {
     expect(access.isPresident).toBe(false);
   });
 });
+
+describe("getAccueilAccess : Secretaire", () => {
+  it("autorise le Secretaire a publier un communique sans etre President", () => {
+    const access = getAccueilAccess([{ role: "secretary" }]);
+    expect(access.canPublishAnnouncement).toBe(true);
+    expect(access.isPresident).toBe(false);
+  });
+});

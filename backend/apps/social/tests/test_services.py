@@ -199,7 +199,7 @@ class TestReportPost:
         with active_club(club):
             post = services.create_post(club=club, actor=author, body="Texte", visibility=Post.Visibility.CLUB_ONLY)
             services.report_post(post=post, actor=reporter, reason="", active_club=club)
-            with pytest.raises(services.SocialValidationError, match="deja signale"):
+            with pytest.raises(services.SocialValidationError, match="déjà signalé"):
                 services.report_post(post=post, actor=reporter, reason="", active_club=club)
 
 
@@ -311,3 +311,22 @@ class TestChat:
         with active_club(club):
             with pytest.raises(services.SocialValidationError):
                 services.send_chat_message(channel=general, actor=sender.user, body="")
+
+
+class TestStoredImageNameFollowsRealType:
+    def test_post_image_keeps_neither_client_name_nor_client_extension(self):
+        club = ClubFactory()
+        author = MembershipFactory(club=club).user
+
+        with active_club(club):
+            post = services.create_post(
+                club=club,
+                actor=author,
+                body="",
+                visibility=Post.Visibility.CLUB_ONLY,
+                images=[_image("secret-nom-client.jpg")],
+            )
+            stored_name = post.images.get().file.name
+
+        assert "secret-nom-client" not in stored_name
+        assert stored_name.endswith(".png")

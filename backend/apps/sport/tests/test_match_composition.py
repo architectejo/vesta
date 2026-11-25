@@ -74,12 +74,9 @@ def test_duplicate_jersey_number_is_rejected_at_db_level(ctx):
         match=match, membership=ctx.player, role=MatchComposition.Role.STARTER, position=Membership.Position.MIDFIELDER,
         jersey_number=7, added_by=ctx.coach.user,
     )
-    from django.core.exceptions import ValidationError
-
-    # Refusé dès `full_clean()` (TenantModel.save(), validation d'unicité
-    # ORM), avant même d'atteindre la contrainte DB
-    # ``composition_unique_jersey_per_match``.
-    with pytest.raises(ValidationError):
+    # Refusé par le service avec un message français (D6b), avant même
+    # `full_clean()` et la contrainte DB ``composition_unique_jersey_per_match``.
+    with pytest.raises(services.SportValidationError, match="déjà attribué"):
         services.add_to_composition(
             match=match, membership=second_player, role=MatchComposition.Role.STARTER, position=Membership.Position.FORWARD,
             jersey_number=7, added_by=ctx.coach.user,
@@ -116,12 +113,10 @@ def test_set_score_and_goals_not_locked_after_event_date(ctx):
     """CDC 4.8 : les buts et passes restent modifiables après coup, à la
     différence du pointage/de la répartition/des incidents."""
 
-    yesterday = timezone.now().date() - datetime.timedelta(days=1)
-    match = services.create_match(
-        club=ctx.club, season=ctx.season, event_date=yesterday, kickoff_time=datetime.time(15, 0),
-        match_type=Match.MatchType.FRIENDLY, venue=Match.Venue.HOME, created_by=ctx.coach.user, opponent_name="FC Test",
-    )
+    match = _create_match(ctx)
     sheet = services.set_match_score(match=match, score_home=2, score_away=1, filled_by=ctx.coach.user)
+    match.event.event_date = services._club_today(ctx.club) - datetime.timedelta(days=1)
+    match.event.save()
     goal = services.add_goal(match_sheet=sheet, created_by=ctx.coach.user, scorer_membership=ctx.player, minute=12)
     assert goal.pk is not None
 

@@ -30,7 +30,7 @@ Route `/coach`. Entrée « Sport › Espace coach ».
 5. **Séances** — 5 dernières (3.3), « Voir plus ». Ligne : date, terrain (« Terrain non précisé » si vide), « {n} présents », badge « Ouverte » / « Verrouillée ». Clic → modale « Séance ».
 6. **Discipline** — « Suspensions en cours » (5 premières, triées par nombre de matchs restants décroissant, « Voir plus », 3.3 : avatar, nom, « encore {n} match(s) ») puis « Derniers incidents » (5, « Voir plus », 4.9) : avatar, nom, type (icône carton jaune/rouge + texte), cause, date. Action de carte (Coach, Capitaine) : « Signaler un incident ». Clic → modale « Incident ».
 7. **Capitaine** — avatar, nom du Capitaine actuel. Action (Coach) : « Changer de capitaine ».
-8. **Plans tactiques** — 5 derniers plans (nom, formation, match rattaché), « Voir plus » (3.3) ; action (Coach) « Nouveau plan » (→ page Plan tactique). Clic → page du plan (lecture seule pour les autres rôles).
+8. **Plans tactiques** — 5 derniers plans (nom, formation, match rattaché), « Voir plus » (3.3) ; action (Coach) « Nouveau plan » (→ Vestiaire › Plans). Clic → modale du plan (lecture seule pour les autres rôles).
 
 Footer.
 
@@ -119,7 +119,7 @@ Onglets « En dette », « Suspendus », « Inaptes », « En attente ». Ligne 
 | Suspensions | 1 ligne | « Aucun joueur suspendu. » | Modèle standard |
 | Derniers incidents | 3 lignes | « Aucun incident pour l'instant. » + (Coach, Cap.) « Signaler un incident » | Modèle standard |
 | Capitaine | 1 ligne | « Aucun capitaine désigné. » + (Coach) « Choisir un capitaine » | Modèle standard |
-| Plans tactiques | 2 lignes | « Aucun plan tactique. » + (Coach) « Nouveau plan » | Modèle standard |
+| Plans tactiques (Vestiaire › Plans) | 2 lignes | « Aucun plan tactique. » + (Coach) « Nouveau plan » | Modèle standard |
 
 ## 6. Mobile (360 px) et ordinateur
 

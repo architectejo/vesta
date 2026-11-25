@@ -20,8 +20,8 @@ export * from "./components/IconButton";
 export * from "./components/Loader";
 export * from "./components/Modal";
 export * from "./components/MoneyField";
+export * from "./components/NotificationBell";
 export * from "./components/NumberField";
-export * from "./components/PinPrompt";
 export * from "./components/PitchBoard";
 export * from "./components/PlayerSearch";
 export * from "./components/PlayerTradingCard";
@@ -36,6 +36,10 @@ export * from "./components/TextArea";
 export * from "./components/TextField";
 export * from "./components/Toast";
 export * from "./components/TransferTimeline";
+
+export * from "./charts";
+
+export * from "./icons";
 
 export * from "./tactics/formations";
 export * from "./tactics/pitchDragBus";

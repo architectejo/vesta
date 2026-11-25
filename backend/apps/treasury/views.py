@@ -2,8 +2,8 @@
 
 import datetime
 
-from django.db.models import Q
-from django.http import FileResponse, HttpResponse
+from django.db.models import Exists, OuterRef, Q
+from django.http import HttpResponse
 from rest_framework import serializers as drf_serializers
 from rest_framework import status
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -12,10 +12,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.clubs.permissions import IsActiveClubMember
+from apps.core.private_files import private_file_response
 from apps.core.permissions import HasAcceptedLatestTerms, HasCompletedPasswordSetup, HasUsableLicence
 from apps.core.services import resolve_active_membership
 from apps.core.tenant import NoActiveClubError, get_active_club
-from apps.accounts.services import InvalidPinError, PinError, PinLockedError
 from apps.clubs.models import Membership
 from apps.treasury import services
 from apps.treasury.models import (
@@ -27,6 +27,8 @@ from apps.treasury.models import (
     PaymentReversal,
     SocialAssistanceRequest,
     SocialAssistanceScale,
+    approved_reversal_exists,
+    reversal_prefetch,
 )
 from apps.treasury import serializers as serializers_mod
 from apps.treasury.permissions import (
@@ -50,6 +52,7 @@ from apps.treasury.permissions import (
     payments_visible_to,
 )
 from apps.treasury.serializers import (
+    ConfirmationSerializer,
     ContributionTypeCreateSerializer,
     ContributionTypeInputSerializer,
     ContributionTypeSerializer,
@@ -60,7 +63,6 @@ from apps.treasury.serializers import (
     ExpenseCreateSerializer,
     ExpenseSerializer,
     MyBalanceSerializer,
-    PinSerializer,
     ReasonSerializer,
     ReceiptUploadSerializer,
     SocialAssistancePreviewQuerySerializer,
@@ -125,14 +127,9 @@ class _PaymentFileDownloadView(APIView):
         if not stored_file:
             return Response({"detail": self.missing_message}, status=status.HTTP_404_NOT_FOUND)
 
-        extension = stored_file.name.rsplit(".", 1)[-1].lower() if "." in stored_file.name else ""
-        if not (extension.isascii() and extension.isalnum() and len(extension) <= 5):
-            extension = "bin"
-        return FileResponse(
-            stored_file.open("rb"),
-            as_attachment=True,
-            filename=self.filename_pattern.format(pk=payment.pk, ext=extension),
-        )
+        # Type et extension deduits du contenu reel (jamais du nom stocke).
+        stem = self.filename_pattern.format(pk=payment.pk, ext="").rstrip(".")
+        return private_file_response(stored_file, download_stem=stem)
 
 
 class PaymentAttachmentDownloadView(_PaymentFileDownloadView):
@@ -263,22 +260,9 @@ def _treasury_error(exc):
             {"detail": str(exc), "code": "expense_release_blocked"}, status=status.HTTP_409_CONFLICT
         )
     if isinstance(exc, services.LedgerFrozenError):
-        return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        return Response({"detail": str(exc), "code": "ledger_frozen"}, status=status.HTTP_409_CONFLICT)
     if isinstance(exc, services.LedgerKeyError):
         return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-
-
-def _pin_error(exc: PinError):
-    """Même traduction que ``apps.clubs.views._pin_error_response`` (CDC 7.2)."""
-
-    if isinstance(exc, PinLockedError):
-        return Response({"detail": str(exc), "locked_until": exc.locked_until}, status=status.HTTP_423_LOCKED)
-    if isinstance(exc, InvalidPinError):
-        return Response(
-            {"detail": str(exc), "attempts_remaining": exc.attempts_remaining},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
     return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -510,8 +494,6 @@ class _ExpenseActionView(APIView):
         serializer.is_valid(raise_exception=True)
         try:
             expense = self.perform(request, expense, serializer.validated_data)
-        except PinError as exc:
-            return _pin_error(exc)
         except services.TreasuryError as exc:
             return _treasury_error(exc)
         return _expense_response(expense)
@@ -521,7 +503,7 @@ class _ExpenseActionView(APIView):
 
 
 class ExpenseRefuseView(_ExpenseActionView):
-    """Refus motivé (Pdt ou VP), sans PIN."""
+    """Refus motivé (Pdt ou VP)."""
 
     action_permission = CanValidateExpenses
     input_serializer = ReasonSerializer
@@ -531,24 +513,26 @@ class ExpenseRefuseView(_ExpenseActionView):
 
 
 class ExpenseReleaseView(_ExpenseActionView):
-    """Validation et libération (Pdt ou VP), code PIN exigé (CDC 7.2)."""
+    """Validation et libération (Pdt ou VP), confirmée par la modale de
+    l'interface (CDC 7.2, décision du 11/10/2026) ; l'auteur est journalisé."""
 
     action_permission = CanValidateExpenses
-    input_serializer = PinSerializer
+    input_serializer = ConfirmationSerializer
 
     def perform(self, request, expense, data):
-        return services.release_expense(expense=expense, released_by=request.user, pin=data["pin"])
+        return services.release_expense(expense=expense, released_by=request.user)
 
 
 class ExpenseDerogationView(_ExpenseActionView):
-    """Libération par dérogation (Président seul), motif + PIN."""
+    """Libération par dérogation (Président seul), motif obligatoire,
+    confirmée par la modale de l'interface."""
 
     action_permission = CanDerogateExpenses
     input_serializer = DerogationSerializer
 
     def perform(self, request, expense, data):
         return services.release_expense_with_derogation(
-            expense=expense, president=request.user, reason=data["reason"], pin=data["pin"]
+            expense=expense, president=request.user, reason=data["reason"]
         )
 
 
@@ -564,12 +548,8 @@ class ExpenseReceiptUploadView(_ExpenseActionView):
 
 
 def _file_response(stored_file, filename_pattern, pk):
-    extension = stored_file.name.rsplit(".", 1)[-1].lower() if "." in stored_file.name else ""
-    if not (extension.isascii() and extension.isalnum() and len(extension) <= 5):
-        extension = "bin"
-    return FileResponse(
-        stored_file.open("rb"), as_attachment=True, filename=filename_pattern.format(pk=pk, ext=extension)
-    )
+    # Type et extension deduits du contenu reel (jamais du nom stocke).
+    return private_file_response(stored_file, download_stem=filename_pattern.format(pk=pk, ext="").rstrip("."))
 
 
 class ExpenseAttachmentDownloadView(APIView):
@@ -910,8 +890,10 @@ class PaymentPreviewView(APIView):
 
 class PaymentCreateView(APIView):
     """POST : modale « Enregistrer un paiement » (CDC 4.4.4) : JSON ou
-    multipart (pièce jointe facultative), code PIN vérifié par le serveur ;
-    Trés, Adj.
+    multipart (pièce jointe facultative), confirmée par la modale ;
+    Trés, Adj. ``client_uuid`` facultatif : 201 à la création, 200 au
+    rejeu de la même saisie, 409 ``client_uuid_conflict`` si la clé a servi
+    à une autre saisie.
     GET : « Derniers paiements » du tableau de bord (CDC 4.4.6) ; Pdt, VP,
     Trés, Adj. Voir :func:`_payment_list`."""
 
@@ -941,14 +923,15 @@ class PaymentCreateView(APIView):
                 paid_on=data["paid_on"],
                 reference=data.get("reference", ""),
                 attachment=data.get("attachment"),
+                client_uuid=data.get("client_uuid"),
                 recorded_by=request.user,
-                pin=data["pin"],
             )
-        except PinError as exc:
-            return _pin_error(exc)
         except services.TreasuryError as exc:
             return _payment_error(exc)
-        return _payment_response(payment, status_code=status.HTTP_201_CREATED)
+        # Rejeu de la même saisie (``client_uuid``, correctif M4) : 200, même
+        # paiement, aucune nouvelle écriture.
+        replayed = getattr(payment, "idempotent_replay", False)
+        return _payment_response(payment, status_code=status.HTTP_200_OK if replayed else status.HTTP_201_CREATED)
 
 
 # ---------------------------------------------------------------------------
@@ -959,8 +942,8 @@ class PaymentCreateView(APIView):
 
 _PAYMENT_LIST_STATUS_FILTERS = {
     "to_validate": Q(transaction__status="pending") | Q(transaction__status="initiated"),
-    "validated": Q(transaction__status="succeeded") & ~Q(reversal__status="approved"),
-    "cancelled": Q(transaction__status="succeeded", reversal__status="approved"),
+    "validated": Q(transaction__status="succeeded") & ~approved_reversal_exists(),
+    "cancelled": Q(transaction__status="succeeded") & approved_reversal_exists(),
     "refused": Q(transaction__status="failed"),
 }
 _PAYMENT_LIST_DEFAULT_STATUSES = ("to_validate", "validated", "cancelled")
@@ -990,14 +973,11 @@ def _dashboard_payment_queryset(request):
             "membership__user",
             "contribution_type",
             "transaction",
-            "reversal__requested_by",
-            "reversal__approved_by",
-            "reversal__rejected_by",
             "submitted_by",
             "validated_by",
             "cash_session",
         )
-        .prefetch_related("allocations")
+        .prefetch_related("allocations", reversal_prefetch())
     )
 
 
@@ -1013,7 +993,24 @@ def _payment_list(request):
     if reversal:
         if reversal != PaymentReversal.Status.PENDING_APPROVAL:
             return Response({"detail": "Filtre d'annulation inconnu."}, status=status.HTTP_400_BAD_REQUEST)
-        queryset = queryset.filter(reversal__status=reversal)
+        # Au plus une demande en attente par paiement : sous-requête, aucun doublon.
+        queryset = queryset.filter(
+            Exists(PaymentReversal.all_objects.filter(payment_id=OuterRef("pk"), status=reversal))
+        )
+    # Onglets « Paiements » et « Cotisations libres » de la modale
+    # « Situation financière » (fiche §4.3) : paiements d'un membre, par
+    # nature de type. Un membre d'un autre club donne une liste vide (le
+    # queryset est déjà restreint au club actif).
+    membership_id = request.query_params.get("membership_id")
+    if membership_id:
+        if not membership_id.isdigit():
+            return Response({"detail": "Identifiant de joueur invalide."}, status=status.HTTP_400_BAD_REQUEST)
+        queryset = queryset.filter(membership_id=int(membership_id))
+    nature = request.query_params.get("nature")
+    if nature:
+        if nature not in ContributionType.Nature.values:
+            return Response({"detail": "Nature de cotisation inconnue."}, status=status.HTTP_400_BAD_REQUEST)
+        queryset = queryset.filter(contribution_type__nature=nature)
     queryset = queryset.order_by("-paid_on", "-submitted_at", "-pk")
     items, count, next_offset = _paginate(request, queryset)
     if items is None:
@@ -1054,6 +1051,122 @@ class TreasuryDashboardSummaryView(APIView):
         return Response(serializers_mod.serialize_dashboard_summary(summary))
 
 
+def _id_list(raw):
+    """``"1,2"`` -> ``[1, 2]`` ; ``None`` si illisible."""
+
+    values = [value.strip() for value in (raw or "").split(",") if value.strip()]
+    if any(not value.isdigit() for value in values):
+        return None
+    return [int(value) for value in values]
+
+
+class MemberListView(APIView):
+    """Tableau « Membres du club » (CDC 4.4.6 ; fiche §3 point 3) : Pdt, VP,
+    Trés, Adj. Paramètres : ``q`` (nom ou numéro), ``status`` (liste :
+    ``in_good_standing``, ``in_debt``, ``pending``, ``suspended``,
+    ``left``), ``contribution_type`` (liste d'identifiants), ``ordering``
+    (``balance`` par défaut, ``-balance``, ``name``, ``-name``,
+    ``last_payment``, ``-last_payment``), ``limit`` (20, max 100),
+    ``offset``. Situation calculée par ``services.list_member_finances``."""
+
+    permission_classes = _GATE + [CanReadTreasuryDashboard]
+
+    def get(self, request):
+        params = request.query_params
+        type_ids = _id_list(params.get("contribution_type"))
+        if type_ids is None:
+            return Response({"detail": "Type de cotisation inconnu dans ce club."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            limit = int(params.get("limit", DEFAULT_PAGE_SIZE))
+            offset = int(params.get("offset", 0))
+        except (TypeError, ValueError):
+            return Response({"detail": "Pagination invalide."}, status=status.HTTP_400_BAD_REQUEST)
+        limit = max(1, min(limit, MAX_PAGE_SIZE))
+        offset = max(0, offset)
+        try:
+            page = services.list_member_finances(
+                club=get_active_club(),
+                requested_by=request.user,
+                query=params.get("q", ""),
+                statuses=[value.strip() for value in params.get("status", "").split(",") if value.strip()],
+                contribution_type_ids=type_ids,
+                ordering=params.get("ordering") or services.MEMBER_LIST_DEFAULT_ORDERING,
+                offset=offset,
+                limit=limit,
+            )
+        except services.TreasuryError as exc:
+            return _treasury_error(exc)
+        return Response(
+            {
+                "currency": page.currency,
+                "today": page.today,
+                "ordering": params.get("ordering") or services.MEMBER_LIST_DEFAULT_ORDERING,
+                "count": page.count,
+                "limit": limit,
+                "offset": offset,
+                "next_offset": offset + limit if offset + limit < page.count else None,
+                "results": [serializers_mod.serialize_member_row(row, request=request) for row in page.rows],
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+
+def _club_member_or_404(membership_id):
+    """Adhésion cherchée dans le club actif (manager tenant-aware + filtre
+    explicite) ; un joueur d'un autre club répond 404."""
+
+    try:
+        return (
+            Membership.objects.filter(club=get_active_club()).select_related("user", "club").get(pk=membership_id),
+            None,
+        )
+    except Membership.DoesNotExist:
+        return None, _not_found(_MEMBER_NOT_FOUND)
+
+
+class MemberDetailView(APIView):
+    """Modale « Situation financière » (CDC 4.4.6 ; fiche §4.3) : résumé,
+    impayés, prochaine échéance, cotisations libres. Onglets « Paiements » :
+    ``GET payments/?membership_id=…`` ; « Grille » : ``members/<id>/grid/<année>/``."""
+
+    permission_classes = _GATE + [CanReadTreasuryDashboard]
+
+    def get(self, request, membership_id):
+        membership, error = _club_member_or_404(membership_id)
+        if error is not None:
+            return error
+        try:
+            detail = services.get_member_financial_detail(membership=membership, requested_by=request.user)
+            capabilities = services.get_treasury_capabilities(request.user, membership.club)
+        except services.TreasuryError as exc:
+            return _treasury_error(exc)
+        can_record = capabilities["can_record_payments"] and membership.status != Membership.Status.DEPARTED
+        return Response(
+            serializers_mod.serialize_member_detail(detail, can_record_payment=can_record, request=request),
+            headers={"Cache-Control": "no-store"},
+        )
+
+
+class MemberGridView(APIView):
+    """Onglet « Grille {année} » de la situation financière : ligne du
+    joueur pour chaque type qui le concerne (mêmes cellules que la grille
+    du bureau, CDC 4.4.7)."""
+
+    permission_classes = _GATE + [CanReadTreasuryDashboard]
+
+    def get(self, request, membership_id, year):
+        membership, error = _club_member_or_404(membership_id)
+        if error is not None:
+            return error
+        try:
+            lines = services.build_member_contribution_lines(membership=membership, year=year, requested_by=request.user)
+        except services.TreasuryError as exc:
+            return _treasury_error(exc)
+        return Response(
+            serializers_mod.serialize_member_lines(lines, request=request), headers={"Cache-Control": "no-store"}
+        )
+
+
 class PaymentDetailView(APIView):
     """Modale « Détail du paiement » (fiche §4.4)."""
 
@@ -1086,22 +1199,26 @@ class _PaymentReversalActionView(APIView):
             self.perform(request, payment, serializer.validated_data)
         except PaymentReversal.DoesNotExist:
             return _not_found(_REVERSAL_NOT_FOUND)
-        except PinError as exc:
-            return _pin_error(exc)
         except services.TreasuryError as exc:
             return _payment_error(exc)
         return _payment_detail_response(request, pk, status_code=self.success_status)
 
     @staticmethod
     def _reversal(payment):
-        return PaymentReversal.objects.get(payment=payment)
+        """Demande courante (la plus récente) : après un refus, une nouvelle
+        demande peut exister ; les décisions portent toujours sur elle."""
+
+        reversal = PaymentReversal.objects.filter(payment=payment).order_by("-pk").first()
+        if reversal is None:
+            raise PaymentReversal.DoesNotExist
+        return reversal
 
     def perform(self, request, payment, data):  # pragma: no cover - abstrait
         raise NotImplementedError
 
 
 class PaymentReversalRequestView(_PaymentReversalActionView):
-    """« Demander l'annulation » : Trés, Adj ; motif obligatoire ; sans PIN."""
+    """« Demander l'annulation » : Trés, Adj ; motif obligatoire."""
 
     action_permission = CanRequestPaymentReversal
     input_serializer = serializers_mod.ReversalRequestSerializer
@@ -1112,17 +1229,18 @@ class PaymentReversalRequestView(_PaymentReversalActionView):
 
 
 class PaymentReversalApproveView(_PaymentReversalActionView):
-    """« Valider l'annulation » : Président, code PIN (CDC 4.4.4, 7.2)."""
+    """« Valider l'annulation » : Président, confirmée par la modale de
+    l'interface (CDC 4.4.4, 7.2) ; l'auteur est journalisé."""
 
     action_permission = CanDecidePaymentReversal
-    input_serializer = PinSerializer
+    input_serializer = ConfirmationSerializer
 
     def perform(self, request, payment, data):
-        services.approve_payment_reversal(reversal=self._reversal(payment), approved_by=request.user, pin=data["pin"])
+        services.approve_payment_reversal(reversal=self._reversal(payment), approved_by=request.user)
 
 
 class PaymentReversalRejectView(_PaymentReversalActionView):
-    """« Refuser » : Président, motif obligatoire (exigé par le service), sans PIN."""
+    """« Refuser » : Président, motif obligatoire (exigé par le service)."""
 
     action_permission = CanDecidePaymentReversal
     input_serializer = serializers_mod.ReversalRejectSerializer
@@ -1152,9 +1270,8 @@ def _cash_session_response(session, *, status_code=status.HTTP_200_OK):
 
 
 class CashSessionOpenView(APIView):
-    """Ouverture d'une session de caisse : EN LIGNE, PIN vérifié une fois
-    par le serveur. 201 si créée, 200 si une session valide existait déjà.
-    La réponse ne contient jamais le PIN ni aucun secret dérivé."""
+    """Ouverture d'une session de caisse : EN LIGNE, confirmée par la modale
+    de l'interface. 201 si créée, 200 si une session valide existait déjà."""
 
     permission_classes = _GATE + [CanRecordPayments]
 
@@ -1162,11 +1279,7 @@ class CashSessionOpenView(APIView):
         serializer = serializers_mod.CashSessionOpenSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            session, created = services.open_cash_session(
-                club=get_active_club(), user=request.user, pin=serializer.validated_data["pin"]
-            )
-        except PinError as exc:
-            return _pin_error(exc)
+            session, created = services.open_cash_session(club=get_active_club(), user=request.user)
         except services.TreasuryError as exc:
             return _payment_error(exc)
         return _cash_session_response(
@@ -1253,7 +1366,7 @@ class CashSessionPaymentPreviewView(APIView):
 
 class CashSessionPaymentView(APIView):
     """Encaissement en espèces d'une session de caisse, en ligne ou
-    synchronisé après une saisie hors connexion : aucun PIN. 201 si créé,
+    synchronisé après une saisie hors connexion. 201 si créé,
     200 si la même saisie (``client_uuid``) avait déjà été reçue."""
 
     permission_classes = _GATE + [CanRecordPayments]
@@ -1284,24 +1397,24 @@ class CashSessionPaymentView(APIView):
 # ---------------------------------------------------------------------------
 # Paiement en ligne, phase 1 (CDC 4.6 ; tâche 2.5) : bouton « Contribuer »,
 # déclaration « J'ai payé » par le joueur (matrice 2.4, « P »), validation
-# par PIN ou refus motivé par le Trésorier ou l'adjoint (« É »). Une
+# (confirmée en modale) ou refus motivé par le Trésorier ou l'adjoint (« É »). Une
 # déclaration d'un autre club, ou non visible par l'utilisateur, répond 404.
 # ---------------------------------------------------------------------------
 
 _DECLARATION_NOT_FOUND = "Cette déclaration n'existe pas dans ce club."
 _DECLARATION_STATUS_FILTERS = {
-    "to_validate": {"transaction__status": "pending"},
-    "validated": {"transaction__status": "succeeded"},
-    "refused": {"transaction__status": "failed"},
-    "cancelled": {"transaction__status": "succeeded", "reversal__status": "approved"},
+    "to_validate": Q(transaction__status="pending"),
+    "validated": Q(transaction__status="succeeded") & ~approved_reversal_exists(),
+    "refused": Q(transaction__status="failed"),
+    "cancelled": Q(transaction__status="succeeded") & approved_reversal_exists(),
 }
 
 
 def _declaration_queryset(queryset):
     return (
         queryset.filter(source=Payment.Source.PLAYER_DECLARATION)
-        .select_related("membership__user", "contribution_type", "transaction", "reversal", "cash_session")
-        .prefetch_related("allocations")
+        .select_related("membership__user", "contribution_type", "transaction", "cash_session")
+        .prefetch_related("allocations", reversal_prefetch())
     )
 
 
@@ -1347,9 +1460,7 @@ class PaymentDeclarationListView(APIView):
         if statuses:
             condition = None
             for key in statuses:
-                clause = Q(**_DECLARATION_STATUS_FILTERS[key])
-                if key == "validated":
-                    clause &= ~Q(reversal__status="approved")
+                clause = _DECLARATION_STATUS_FILTERS[key]
                 condition = clause if condition is None else condition | clause
             queryset = queryset.filter(condition)
         items, count, next_offset = _paginate(request, queryset)
@@ -1415,8 +1526,6 @@ class _DeclarationActionView(APIView):
         serializer.is_valid(raise_exception=True)
         try:
             return self.perform(request, payment, serializer.validated_data)
-        except PinError as exc:
-            return _pin_error(exc)
         except services.TreasuryError as exc:
             return _payment_error(exc)
 
@@ -1439,17 +1548,18 @@ class PaymentDeclarationPreviewView(_DeclarationActionView):
 
 
 class PaymentDeclarationValidateView(_DeclarationActionView):
-    """Validation par code PIN (CDC 4.6, 7.2) : paiement normal, reçu."""
+    """Validation confirmée par la modale de l'interface (CDC 4.6, 7.2) :
+    paiement normal, reçu ; l'auteur est journalisé."""
 
-    input_serializer = PinSerializer
+    input_serializer = ConfirmationSerializer
 
     def perform(self, request, payment, data):
-        payment = services.validate_declared_payment(payment=payment, validated_by=request.user, pin=data["pin"])
+        payment = services.validate_declared_payment(payment=payment, validated_by=request.user)
         return _declaration_response(payment, with_summary=True)
 
 
 class PaymentDeclarationRejectView(_DeclarationActionView):
-    """Refus motivé (sans PIN) : la déclaration reste tracée, joueur prévenu."""
+    """Refus motivé : la déclaration reste tracée, joueur prévenu."""
 
     input_serializer = ReasonSerializer
 
@@ -1625,6 +1735,126 @@ class ContributionGridMonthView(APIView):
         )
 
 
+# ---------------------------------------------------------------------------
+# Données financières du joueur connecté, pour lui seul (« Mon profil » ;
+# fiche comptes-mon-profil §3.2 ; CDC 4.4.7 ; matrice 2.4 colonne « P »).
+# Lecture seule, tout membre actif. L'adhésion lue est TOUJOURS celle de
+# l'utilisateur dans le club actif (jamais un identifiant transmis) : une
+# donnée d'un autre joueur ou d'un autre club répond 404.
+# ---------------------------------------------------------------------------
+
+_NO_ACTIVE_MEMBERSHIP = "Aucune adhésion active pour ce club."
+
+
+def _own_membership_or_403(request):
+    try:
+        return _own_membership(request), None
+    except NoActiveClubError:
+        return None, Response({"detail": _NO_ACTIVE_MEMBERSHIP}, status=status.HTTP_403_FORBIDDEN)
+
+
+def _own_statuses(request):
+    raw = request.query_params.get("status", "")
+    return [value.strip() for value in raw.split(",") if value.strip()]
+
+
+class MyPaymentListView(APIView):
+    """« Derniers paiements » du profil : paiements validés du joueur
+    connecté, toutes sources ; ``status`` = ``validated`` (défaut) et/ou
+    ``cancelled`` ; pagination ``limit``/``offset``."""
+
+    permission_classes = _GATE + [IsActiveClubMember]
+
+    def get(self, request):
+        membership, error = _own_membership_or_403(request)
+        if error is not None:
+            return error
+        try:
+            queryset = services.own_payments_queryset(
+                membership=membership, requested_by=request.user, statuses=_own_statuses(request)
+            )
+        except services.TreasuryError as exc:
+            return _treasury_error(exc)
+        items, count, next_offset = _paginate(request, queryset)
+        if items is None:
+            return Response({"detail": "Pagination invalide."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                "count": count,
+                "next_offset": next_offset,
+                "results": [serializers_mod.serialize_my_payment(item) for item in items],
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+
+class MyPaymentDetailView(APIView):
+    """Modale « Détail du paiement » du profil (paiement validé ou annulé
+    du joueur connecté ; 404 sinon)."""
+
+    permission_classes = _GATE + [IsActiveClubMember]
+
+    def get(self, request, pk):
+        membership, error = _own_membership_or_403(request)
+        if error is not None:
+            return error
+        try:
+            payment = services.own_payments_queryset(
+                membership=membership, requested_by=request.user, statuses=tuple(services.OWN_PAYMENT_STATUS_FILTERS)
+            ).get(pk=pk)
+        except Payment.DoesNotExist:
+            return _not_found(_PAYMENT_NOT_FOUND)
+        except services.TreasuryError as exc:
+            return _treasury_error(exc)
+        return Response(serializers_mod.serialize_my_payment(payment, detail=True), headers={"Cache-Control": "no-store"})
+
+
+class MyContributionGridView(APIView):
+    """« Mes cotisations {année} » : la ligne du joueur connecté dans la
+    grille de chaque type qui le concerne (mêmes cellules que la grille du
+    bureau) et sa situation calculée."""
+
+    permission_classes = _GATE + [IsActiveClubMember]
+
+    def get(self, request, year):
+        membership, error = _own_membership_or_403(request)
+        if error is not None:
+            return error
+        try:
+            own = services.build_own_contribution_lines(membership=membership, year=year, requested_by=request.user)
+        except services.TreasuryError as exc:
+            return _treasury_error(exc)
+        return Response(serializers_mod.serialize_own_lines(own), headers={"Cache-Control": "no-store"})
+
+
+class MyContributionGridMonthView(APIView):
+    """Modale « Détail du mois » du profil (type de la ligne du joueur
+    connecté uniquement ; 404 sinon). Lecture seule : jamais d'action
+    d'enregistrement depuis le profil (``can_record_payment`` = false)."""
+
+    permission_classes = _GATE + [IsActiveClubMember]
+
+    def get(self, request, type_id, year, month):
+        membership, error = _own_membership_or_403(request)
+        if error is not None:
+            return error
+        ctype, error = _grid_type_or_404(type_id)
+        if error is not None:
+            return error
+        try:
+            detail = services.get_own_grid_month_detail(
+                membership=membership, contribution_type=ctype, year=year, month=month, requested_by=request.user
+            )
+        except services.OwnContributionTypeNotFoundError:
+            return _not_found(_TYPE_NOT_FOUND)
+        except services.TreasuryError as exc:
+            return _treasury_error(exc)
+        return Response(
+            serializers_mod.serialize_month_detail(detail, can_record_payment=False, request=request),
+            headers={"Cache-Control": "no-store"},
+        )
+
+
 def _import_error(exc):
     if isinstance(exc, services.ContributionImportError):
         return Response({"detail": str(exc), "code": "import_file_invalid"}, status=status.HTTP_400_BAD_REQUEST)
@@ -1646,8 +1876,6 @@ class _ContributionImportBaseView(APIView):
             return error
         try:
             report = self.perform(request, ctype, data)
-        except PinError as exc:
-            return _pin_error(exc)
         except services.TreasuryError as exc:
             return _import_error(exc)
         return Response(serializers_mod.serialize_import_report(report, request=request), status=self.success_status)
@@ -1667,7 +1895,7 @@ class ContributionImportPreviewView(_ContributionImportBaseView):
 
 
 class ContributionImportView(_ContributionImportBaseView):
-    """Import définitif (CDC 4.4.8), confirmé par code PIN (CDC 7.2) ;
+    """Import définitif (CDC 4.4.8), confirmé par la modale de l'interface ;
     renvoie le rapport (lignes importées, lignes en échec avec le détail)."""
 
     input_serializer = serializers_mod.ContributionImportCreateSerializer
@@ -1679,5 +1907,4 @@ class ContributionImportView(_ContributionImportBaseView):
             year=data["year"],
             csv_file=data["file"],
             imported_by=request.user,
-            pin=data["pin"],
         )

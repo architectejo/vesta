@@ -102,6 +102,12 @@ class CaptainAppointmentInputSerializer(serializers.Serializer):
     membership_id = serializers.IntegerField()
 
 
+class AssistantCoachAppointmentInputSerializer(serializers.Serializer):
+    """Nomination de l'Assistant du Coach (Coach uniquement, CDC 10.3 n179)."""
+
+    membership_id = serializers.IntegerField()
+
+
 class PresidencyTransferSerializer(serializers.ModelSerializer):
     class Meta:
         model = PresidencyTransfer
@@ -135,7 +141,7 @@ class PresidencySuperuserOverrideInputSerializer(serializers.Serializer):
     def validate_reason(self, value: str) -> str:
         if not value.strip():
             raise serializers.ValidationError(
-                "Le motif est obligatoire pour une intervention Superuser (CDC 2.5)."
+                "Le motif est obligatoire pour une intervention du Superuser."
             )
         return value
 
@@ -168,7 +174,7 @@ class PlayerImportInputSerializer(serializers.Serializer):
     def validate_file(self, value):
         name = getattr(value, "name", "") or ""
         if not name.lower().endswith(".csv"):
-            raise serializers.ValidationError("Le fichier doit etre au format CSV.")
+            raise serializers.ValidationError("Le fichier doit être au format CSV.")
         try:
             validate_upload_size(value)
             validate_csv_file(value)
@@ -247,12 +253,26 @@ class MembershipApplicationSerializer(serializers.ModelSerializer):
     ``MEDIA_URL`` publique du fichier."""
 
     application_pdf_url = serializers.SerializerMethodField()
+    # Champs d'affichage en lecture seule (aucune regle metier) : permettent a
+    # l'interface de presenter un dossier sans requete supplementaire.
+    player = serializers.SerializerMethodField()
+    sponsor = serializers.SerializerMethodField()
+    membership_status = serializers.SerializerMethodField()
+    membership_fee_paid = serializers.SerializerMethodField()
+    membership_fee_amount = serializers.SerializerMethodField()
+    membership_fee_paid_on = serializers.SerializerMethodField()
 
     class Meta:
         model = MembershipApplication
         fields = [
             "id",
             "membership_id",
+            "player",
+            "sponsor",
+            "membership_status",
+            "membership_fee_paid",
+            "membership_fee_amount",
+            "membership_fee_paid_on",
             "application_pdf_url",
             "generated_at",
             "sponsor_notified_at",
@@ -269,6 +289,42 @@ class MembershipApplicationSerializer(serializers.ModelSerializer):
             "membership_fee_disposition",
         ]
         read_only_fields = fields
+
+    @staticmethod
+    def _identity(membership) -> dict | None:
+        if membership is None:
+            return None
+        user = membership.user
+        return {
+            "membership_id": membership.id,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "photo": user.photo.url if user.photo else None,
+            "position_label": membership.get_position_display() if membership.position else "",
+            "jersey_number": membership.jersey_number,
+        }
+
+    def get_player(self, obj: MembershipApplication) -> dict | None:
+        return self._identity(obj.membership)
+
+    def get_sponsor(self, obj: MembershipApplication) -> dict | None:
+        return self._identity(obj.membership.sponsor)
+
+    def get_membership_status(self, obj: MembershipApplication) -> str:
+        return obj.membership.status
+
+    def get_membership_fee_paid(self, obj: MembershipApplication) -> bool:
+        from apps.treasury import services as treasury_services
+
+        return bool(treasury_services.has_paid_membership_fee(obj.membership))
+
+    def get_membership_fee_amount(self, obj: MembershipApplication) -> str | None:
+        payment = obj.membership_fee_payment
+        return str(payment.amount) if payment is not None else None
+
+    def get_membership_fee_paid_on(self, obj: MembershipApplication) -> str | None:
+        payment = obj.membership_fee_payment
+        return payment.paid_on.isoformat() if payment is not None else None
 
     def get_application_pdf_url(self, obj: MembershipApplication) -> str | None:
         if not obj.application_pdf_file:
@@ -306,7 +362,7 @@ class MembershipFeePaymentInputSerializer(serializers.Serializer):
     method = serializers.CharField()
     paid_on = serializers.DateField()
     reference = serializers.CharField(required=False, allow_blank=True, default="")
-    pin = serializers.CharField()
+    client_uuid = serializers.UUIDField(required=False, allow_null=True)
     # CDC 6.7, 7.6 : JPEG/PNG/WebP/PDF verifies sur le contenu reel, 10 Mo max.
     attachment = serializers.FileField(
         required=False,
@@ -317,10 +373,9 @@ class MembershipFeePaymentInputSerializer(serializers.Serializer):
 
 
 class SponsorSignInputSerializer(serializers.Serializer):
-    """Signature du parrain par code PIN (CDC 4.3 etape 4 ; 7.2)."""
+    """Signature du parrain (CDC 4.3 etape 4). Tout champ supplementaire recu est ignore."""
 
     application_id = serializers.IntegerField()
-    pin = serializers.CharField()
 
 
 class SponsorRefuseInputSerializer(serializers.Serializer):
@@ -332,7 +387,7 @@ class SponsorRefuseInputSerializer(serializers.Serializer):
     def validate_reason(self, value: str) -> str:
         if not value.strip():
             raise serializers.ValidationError(
-                "Un motif est obligatoire pour refuser de parrainer un joueur (CDC 4.3)."
+                "Un motif est obligatoire pour refuser de parrainer un joueur."
             )
         return value
 
@@ -354,11 +409,10 @@ class MembershipApplicationCancelInputSerializer(serializers.Serializer):
     application_id = serializers.IntegerField()
     reason = serializers.CharField()
     disposition = serializers.ChoiceField(choices=MembershipApplication.FeeDisposition.choices)
-    pin = serializers.CharField()
 
     def validate_reason(self, value: str) -> str:
         if not value.strip():
-            raise serializers.ValidationError("Un motif est obligatoire pour annuler une adhesion (CDC 4.3).")
+            raise serializers.ValidationError("Un motif est obligatoire pour annuler une adhésion.")
         return value
 
 
@@ -434,13 +488,13 @@ class ClubCreationInputSerializer(serializers.Serializer):
         from django.utils import timezone as dj_timezone
 
         if value is not None and value > dj_timezone.now().date():
-            raise serializers.ValidationError("La date ne peut pas etre dans le futur.")
+            raise serializers.ValidationError("La date ne peut pas être dans le futur.")
         return value
 
     def validate_accept_terms(self, value: bool) -> bool:
         if not value:
             raise serializers.ValidationError(
-                "Vous devez accepter les conditions generales pour creer votre club."
+                "Vous devez accepter les conditions générales pour créer votre club."
             )
         return value
 
@@ -484,6 +538,7 @@ class ClubIdentitySerializer(serializers.Serializer):
             "currency": club_settings.currency,
             "currency_locked": clubs_services.club_has_payments(club),
             "timezone": club_settings.timezone,
+            "debt_tolerance_days": club_settings.debt_tolerance_days,
         }
         if is_president:
             payload["payment_link_url"] = club_settings.payment_link_url
@@ -510,6 +565,16 @@ class ClubIdentityInputSerializer(serializers.Serializer):
     currency = serializers.ChoiceField(choices=ClubSettings.Currency.choices, required=False)
     timezone = serializers.CharField(max_length=60, required=False)
     payment_link_url = serializers.CharField(required=False, allow_blank=True)
+    debt_tolerance_days = serializers.IntegerField(
+        required=False,
+        min_value=0,
+        max_value=90,
+        error_messages={
+            "invalid": "Saisissez un nombre entier de jours.",
+            "min_value": "La tolérance de dette doit être comprise entre 0 et 90 jours.",
+            "max_value": "La tolérance de dette doit être comprise entre 0 et 90 jours.",
+        },
+    )
 
     def validate_primary_color(self, value: str) -> str:
         return _validate_hex_color(value)
@@ -522,7 +587,7 @@ class ClubIdentityInputSerializer(serializers.Serializer):
 
     def validate_payment_link_url(self, value: str) -> str:
         if value and not value.startswith("https://"):
-            raise serializers.ValidationError("Saisissez une adresse commencant par https://")
+            raise serializers.ValidationError("Saisissez une adresse commençant par https://")
         return value
 
 
@@ -567,7 +632,7 @@ class PlayerPublicCardSerializer(serializers.Serializer):
             membership_status = clubs_services.PLAYER_CARD_NEUTRAL_STATUS_CODE
             membership_status_label = clubs_services.PLAYER_CARD_NEUTRAL_STATUS_LABEL
 
-        return {
+        data = {
             "membership_id": membership.id,
             "first_name": user.first_name,
             "last_name": user.last_name,
@@ -598,3 +663,11 @@ class PlayerPublicCardSerializer(serializers.Serializer):
                 for role in roles
             ],
         }
+        # « Bloqué » pour le pointage groupé : booléen SEUL, sans motif et
+        # pour tous les rôles (10.2 n° 16 : les coéquipiers ne voient que
+        # « Indisponible »). Fourni par la vue (calcul groupé, jamais une
+        # requête par joueur) ; absent si la vue ne l'a pas calculé.
+        unavailable_ids = self.context.get("unavailable_ids")
+        if unavailable_ids is not None:
+            data["is_unavailable"] = membership.id in unavailable_ids
+        return data

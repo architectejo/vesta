@@ -10,11 +10,20 @@ import {
   type ContributionType,
   type ContributionTypeInput,
 } from "../../api/treasury";
-import { Button, EmptyState, Loader, Modal, useToast } from "../../design-system";
+import { Button, EmptyState, IconUpload, Loader, Modal, useToast } from "../../design-system";
 import { useAuth } from "../../auth/AuthContext";
+import { useDeepLink } from "../../hooks/useDeepLink";
 import { CashRegisterFlow } from "./CashRegisterModal";
+import { DashboardSummarySection, DASHBOARD_SUMMARY_QUERY_KEY } from "./DashboardSummarySection";
+import { DeclarationReviewModal } from "./DeclarationReviewModal";
+import { PaymentDetailModal } from "./PaymentDetailModal";
+import { RecentPaymentsSection } from "./RecentPaymentsSection";
+import { ToValidateSection } from "./ToValidateSection";
 import { ContributionTypeModal, contributionTypeError } from "./ContributionTypeModal";
 import { describeContributionType } from "./contributionTypeLabels";
+import { ImportContributionsModal } from "./ImportContributionsModal";
+import { MemberSituationModal } from "./MemberSituationModal";
+import { MEMBERS_QUERY_KEY, MembersSection } from "./MembersSection";
 import { RecordPaymentModal } from "./RecordPaymentModal";
 import { getTreasuryAccess } from "./treasuryAccess";
 
@@ -99,6 +108,14 @@ export function TresoreriePage() {
   const [confirmArchive, setConfirmArchive] = useState<ContributionType>();
   const [showRecordPayment, setShowRecordPayment] = useState(false);
   const [showCashRegister, setShowCashRegister] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [memberId, setMemberId] = useState<number | null>(null);
+  const [detailPaymentId, setDetailPaymentId] = useState<number | null>(null);
+  const [detailLevel, setDetailLevel] = useState<1 | 2>(1);
+  const [reviewPaymentId, setReviewPaymentId] = useState<number | null>(null);
+
+  // Lien depuis une notification de déclaration « J'ai payé » (`?paiement=<id>`).
+  useDeepLink("paiement", setDetailPaymentId);
 
   const profileQuery = useQuery({ queryKey: ["profile", "me"], queryFn: getMyProfile, staleTime: 60_000 });
   const { canRead, canWrite } = getTreasuryAccess(profileQuery.data?.roles);
@@ -118,6 +135,14 @@ export function TresoreriePage() {
   });
   const currency = capabilitiesQuery.data?.currency ?? "";
   const canRecordPayments = capabilitiesQuery.data?.capabilities.can_record_payments ?? false;
+  const canDecideReversals = capabilitiesQuery.data?.capabilities.can_decide_payment_reversal ?? false;
+
+  /** Rafraîchit indicateurs, listes de paiements et « À valider » après une action. */
+  function refreshPayments(): void {
+    void queryClient.invalidateQueries({ queryKey: ["treasury", "payments"] });
+    void queryClient.invalidateQueries({ queryKey: DASHBOARD_SUMMARY_QUERY_KEY });
+    void queryClient.invalidateQueries({ queryKey: MEMBERS_QUERY_KEY });
+  }
 
   const saveMutation = useMutation({
     mutationFn: (input: ContributionTypeInput) =>
@@ -184,6 +209,13 @@ export function TresoreriePage() {
               </Button>
             </>
           ) : null}
+          {canRecordPayments ? (
+            // L'import crée des paiements validés : même capacité que
+            // l'enregistrement (matrice 2.4 ; `CanImportContributions`).
+            <Button variant="secondary" size="sm" icon={<IconUpload aria-hidden="true" className="h-4 w-4" />} onClick={() => setShowImport(true)}>
+              Importer des cotisations
+            </Button>
+          ) : null}
           {canWrite ? (
             // Une seule action « primary » par zone (docs/lot0/design-system.md
             // §3.1) : secondaire dès que « Enregistrer un paiement » l'est déjà.
@@ -193,6 +225,22 @@ export function TresoreriePage() {
           ) : null}
         </div>
       </header>
+
+      <DashboardSummarySection />
+
+      <ToValidateSection
+        canValidateDeclarations={canRecordPayments}
+        canDecideReversals={canDecideReversals}
+        onOpen={(payment) => setDetailPaymentId(payment.id)}
+      />
+
+      <MembersSection onOpen={(member) => setMemberId(member.membership_id)} />
+
+      <RecentPaymentsSection
+        canRecordPayments={canRecordPayments}
+        onOpen={(payment) => setDetailPaymentId(payment.id)}
+        onRecordPayment={() => setShowRecordPayment(true)}
+      />
 
       <ContributionTypesCard
         types={typesQuery.data ?? []}
@@ -208,6 +256,7 @@ export function TresoreriePage() {
           open
           type={selected}
           canEdit={canWrite}
+          currency={currency}
           isSubmitting={saveMutation.isPending}
           submitError={saveMutation.isError ? contributionTypeError(saveMutation.error) : undefined}
           onClose={closeForm}
@@ -238,9 +287,62 @@ export function TresoreriePage() {
           open
           currency={currency}
           onClose={() => setShowRecordPayment(false)}
-          onRecorded={() => void queryClient.invalidateQueries({ queryKey: TYPES_QUERY_KEY })}
+          onRecorded={() => {
+            void queryClient.invalidateQueries({ queryKey: TYPES_QUERY_KEY });
+            refreshPayments();
+          }}
         />
       ) : null}
+
+      <MemberSituationModal
+        membershipId={memberId}
+        onClose={() => setMemberId(null)}
+        onOpenPayment={(id) => {
+          setDetailLevel(2);
+          setDetailPaymentId(id);
+        }}
+        onPaymentRecorded={() => {
+          void queryClient.invalidateQueries({ queryKey: TYPES_QUERY_KEY });
+          refreshPayments();
+        }}
+      />
+
+      {canRecordPayments && showImport ? (
+        <ImportContributionsModal
+          open
+          currency={currency}
+          initialYear={new Date().getFullYear()}
+          onClose={() => setShowImport(false)}
+          onImported={() => {
+            refreshPayments();
+            void queryClient.invalidateQueries({ queryKey: ["treasury", "grid"] });
+          }}
+        />
+      ) : null}
+
+      <PaymentDetailModal
+        paymentId={detailPaymentId}
+        level={detailLevel}
+        canRecordPayments={canRecordPayments}
+        canDecideReversals={canDecideReversals}
+        onClose={() => {
+          setDetailPaymentId(null);
+          setDetailLevel(1);
+        }}
+        onReviewDeclaration={(id) => setReviewPaymentId(id)}
+        onChanged={refreshPayments}
+      />
+
+      <DeclarationReviewModal
+        paymentId={reviewPaymentId}
+        onClose={() => setReviewPaymentId(null)}
+        onDone={() => {
+          refreshPayments();
+          if (detailPaymentId !== null) {
+            void queryClient.invalidateQueries({ queryKey: ["treasury", "payment-detail"] });
+          }
+        }}
+      />
 
       <CashRegisterFlow
         open={showCashRegister}

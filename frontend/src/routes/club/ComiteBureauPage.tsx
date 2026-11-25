@@ -1,9 +1,8 @@
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   getClubIdentity,
   getMyProfile,
-  getPlayerCard,
   listClubPlayers,
   listRoles,
   revokeRole,
@@ -22,13 +21,15 @@ import {
   ConfirmDialog,
   DataTable,
   EmptyState,
-  IconButton,
+  IconUpload,
   Loader,
   StatusBadge,
   useToast,
 } from "../../design-system";
 import type { FilterChip } from "../../design-system";
+import { AssistantCoachSection } from "./AssistantCoachSection";
 import { AddPlayerModal } from "./AddPlayerModal";
+import { MembershipFollowUpCard } from "./adhesion/MembershipFollowUpCard";
 import { ClubIdentityModal } from "./ClubIdentityModal";
 import { ImportPlayersModal } from "./ImportPlayersModal";
 import { MEMBERSHIP_STATUS_KEY, PlayerCardModal } from "./PlayerCardModal";
@@ -55,11 +56,13 @@ const ROLE_FILTER_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "", label: "Tous les rôles" },
   { value: "president", label: "Président" },
   { value: "vice_president", label: "Vice-président" },
+  { value: "secretary", label: "Secrétaire" },
   { value: "sports_director", label: "Directeur sportif" },
   { value: "treasurer", label: "Trésorier" },
   { value: "assistant_treasurer", label: "Trésorier adjoint" },
   { value: "steward", label: "Intendant" },
   { value: "coach", label: "Coach" },
+  { value: "assistant_coach", label: "Assistant du Coach" },
   { value: "captain", label: "Capitaine" },
   { value: "doctor", label: "Médecin" },
   { value: "player_recruiter", label: "Joueur autorisé à ajouter des joueurs" },
@@ -69,8 +72,9 @@ function optionLabel<T extends string>(options: Array<{ value: T | ""; label: st
   return options.find((opt) => opt.value === value)?.label ?? value;
 }
 
-const BUREAU_ROLES: Array<{ role: string; label: string }> = [
+const BUREAU_ROLES: Array<{ role: string; label: string; hint?: string }> = [
   { role: "vice_president", label: "Vice-président" },
+  { role: "secretary", label: "Secrétaire", hint: "Communiqués, préparation des AG, archives." },
   { role: "sports_director", label: "Directeur sportif" },
   { role: "treasurer", label: "Trésorier" },
   { role: "assistant_treasurer", label: "Trésorier adjoint" },
@@ -93,10 +97,12 @@ function Card({ title, action, children }: { title: string; action?: ReactNode; 
 function RoleRow({
   label,
   holderName,
+  hint,
   onClick,
 }: {
   label: string;
   holderName: string | null;
+  hint?: string;
   onClick: () => void;
 }) {
   return (
@@ -106,14 +112,17 @@ function RoleRow({
       className="flex w-full items-center justify-between gap-2 py-2 text-left hover:bg-surface-muted"
     >
       <span className="text-xs text-text-muted">{label}</span>
-      {holderName ? (
-        <span className="flex items-center gap-2 text-sm text-text">
-          <Avatar name={holderName} size={24} />
-          {holderName}
-        </span>
-      ) : (
-        <span className="text-sm text-text-muted">Poste vacant</span>
-      )}
+      <span className="flex min-w-0 flex-col items-end">
+        {holderName ? (
+          <span className="flex items-center gap-2 text-sm text-text">
+            <Avatar name={holderName} size={24} />
+            {holderName}
+          </span>
+        ) : (
+          <span className="text-sm text-text-muted">Poste vacant</span>
+        )}
+        {hint ? <span className="text-[13px] text-text-muted">{hint}</span> : null}
+      </span>
     </button>
   );
 }
@@ -123,9 +132,7 @@ function RoleRow({
  *
  * Point ouvert restant, signalé au compte rendu : les noms des titulaires de
  * rôle sont obtenus en combinant `GET /clubs/roles/` (qui ne renvoie que des
- * `membership_id`) avec un appel `GET /clubs/players/<id>/card/` par
- * titulaire — fonctionnel mais coûteux en requêtes pour un grand bureau,
- * acceptable au vu du nombre de rôles. L'Effectif (§3.6), lui, utilise
+ * `membership_id`) avec la liste unique `GET /clubs/players/`. L'Effectif (§3.6), lui, utilise
  * directement `GET /clubs/players/` (une seule requête, filtres et
  * recherche en paramètres de requête, tri déjà garanti par l'API).
  */
@@ -155,41 +162,25 @@ export function ComiteBureauPage() {
   const isPresident = profileQuery.data?.roles.some((r) => r.role === "president") ?? false;
   const isCoach = profileQuery.data?.roles.some((r) => r.role === "coach") ?? false;
 
-  const membershipIds = useMemo(
-    () => Array.from(new Set((rolesQuery.data ?? []).map((r) => r.membership_id))),
-    [rolesQuery.data],
-  );
-
-  const cardResults = useQueries({
-    queries: membershipIds.map((id) => ({
-      queryKey: ["player-card", id],
-      queryFn: () => getPlayerCard(id),
-    })),
+  // Les noms viennent de l'effectif (une seule requête de liste, partagée avec
+  // le tableau « Effectif » quand aucun filtre n'est posé) : jamais une
+  // requête par titulaire de rôle.
+  const rosterQuery = useQuery({
+    queryKey: ["club-players", "", "", "", ""],
+    queryFn: () => listClubPlayers(),
   });
 
   const nameById = useMemo(() => {
     const map = new Map<number, string>();
-    cardResults.forEach((result) => {
-      if (result.data) map.set(result.data.membership_id, `${result.data.first_name} ${result.data.last_name}`);
-    });
+    (rosterQuery.data ?? []).forEach((p) => map.set(p.membership_id, `${p.first_name} ${p.last_name}`));
     return map;
-  }, [cardResults]);
+  }, [rosterQuery.data]);
 
   const cardById = useMemo(() => {
     const map = new Map<number, ReturnType<typeof toPlayerSearchResult>>();
-    cardResults.forEach((result) => {
-      if (result.data) {
-        map.set(result.data.membership_id, {
-          id: result.data.membership_id,
-          firstName: result.data.first_name,
-          lastName: result.data.last_name,
-          number: result.data.jersey_number,
-          photoUrl: result.data.photo,
-        });
-      }
-    });
+    (rosterQuery.data ?? []).forEach((p) => map.set(p.membership_id, toPlayerSearchResult(p)));
     return map;
-  }, [cardResults]);
+  }, [rosterQuery.data]);
 
   const playersQuery = useQuery({
     queryKey: [
@@ -261,6 +252,7 @@ export function ComiteBureauPage() {
 
   const president = findRole("president");
   const coach = findRole("coach");
+  const assistantCoach = findRole("assistant_coach");
   const captain = findRole("captain");
   const recruiters = (rolesQuery.data ?? []).filter((r) => r.role === "player_recruiter");
   const recruitersForModal: Array<{ role: MembershipRole; player: ReturnType<typeof toPlayerSearchResult> }> =
@@ -292,12 +284,14 @@ export function ComiteBureauPage() {
             <Button variant="primary" size="sm" onClick={() => setAddPlayerOpen(true)}>
               Ajouter un joueur
             </Button>
-            <IconButton
-              aria-label="Importer des joueurs"
-              onClick={() => setImportOpen(true)}
-              icon={<span className="text-xs">CSV</span>}
+            <Button
               variant="secondary"
-            />
+              size="sm"
+              icon={<IconUpload aria-hidden="true" className="h-4 w-4" />}
+              onClick={() => setImportOpen(true)}
+            >
+              Importer (CSV)
+            </Button>
           </div>
         ) : null}
       </header>
@@ -367,12 +361,13 @@ export function ComiteBureauPage() {
           <Loader loading variant="list" count={6} />
         ) : (
           <div className="divide-y divide-border">
-            {BUREAU_ROLES.map(({ role, label }) => {
+            {BUREAU_ROLES.map(({ role, label, hint }) => {
               const roleData = findRole(role);
               return (
                 <RoleRow
                   key={role}
                   label={label}
+                  hint={hint}
                   holderName={roleData ? (nameById.get(roleData.membership_id) ?? "…") : null}
                   onClick={() => setActiveRole({ role, label })}
                 />
@@ -396,6 +391,14 @@ export function ComiteBureauPage() {
           />
         </div>
       </Card>
+
+      <AssistantCoachSection
+        assistant={assistantCoach}
+        assistantName={assistantCoach ? (nameById.get(assistantCoach.membership_id) ?? null) : null}
+        loading={rolesQuery.isLoading || profileQuery.isLoading}
+        canManage={isCoach}
+        onChanged={refetchAll}
+      />
 
       <Card
         title="Joueurs autorisés à ajouter des joueurs"
@@ -436,6 +439,8 @@ export function ComiteBureauPage() {
           </ul>
         )}
       </Card>
+
+      <MembershipFollowUpCard isPresident={isPresident} profileReady={!profileQuery.isLoading} />
 
       <Card title="Effectif">
         {playersQuery.isError ? (
@@ -558,6 +563,7 @@ export function ComiteBureauPage() {
       {identityModalOpen && identityQuery.data ? (
         <ClubIdentityModal
           identity={identityQuery.data}
+          canEditDebtTolerance={isPresident}
           onClose={() => setIdentityModalOpen(false)}
           onUpdated={() => {
             setIdentityModalOpen(false);

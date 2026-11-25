@@ -13,7 +13,6 @@ from __future__ import annotations
 import datetime
 from decimal import Decimal
 
-from django.contrib.auth.hashers import make_password
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 
@@ -23,7 +22,6 @@ from apps.clubs.tests.factories import MembershipFactory
 from apps.treasury import services
 from apps.treasury.models import ContributionType, Due, Payment
 from apps.treasury.tests.cash_helpers import monthly_type
-from apps.treasury.tests.conftest import PIN
 
 NOW = datetime.datetime(2026, 9, 15, 10, 0, tzinfo=datetime.timezone.utc)
 TODAY = datetime.date(2026, 9, 15)
@@ -61,7 +59,7 @@ def player(
     ctx, first_name: str, last_name: str, *, email=None, jersey=None, joined_on=datetime.date(2025, 1, 1),
     status=Membership.Status.ACTIVE,
 ):
-    kwargs = {"first_name": first_name, "last_name": last_name, "pin_hash": make_password(PIN)}
+    kwargs = {"first_name": first_name, "last_name": last_name}
     if email:
         kwargs["email"] = email
     user = UserFactory(**kwargs)
@@ -106,7 +104,6 @@ def pay(ctx, membership, ctype, amount, paid_on, *, now=NOW) -> Payment:
         method=Payment.Method.CASH,
         paid_on=paid_on,
         recorded_by=ctx.treasurer.user,
-        pin=PIN,
         now=now,
     )
 

@@ -9,6 +9,8 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { useClosingState } from "../../hooks/useClosingState";
+import { IconClose } from "../icons";
 import { Button, type ButtonVariant } from "./Button";
 import { IconButton } from "./IconButton";
 import { Skeleton } from "./Skeleton";
@@ -22,7 +24,7 @@ export interface ModalProps {
   title: string;
   subtitle?: string;
   size?: ModalSize;
-  /** Niveau d'empilement (2 = PIN ou confirmation au-dessus d'un formulaire). */
+  /** Niveau d'empilement (2 = confirmation au-dessus d'un formulaire). */
   level?: 1 | 2;
   /** Formulaire modifié : toute fermeture ouvre la confirmation d'abandon. */
   isDirty?: boolean;
@@ -122,6 +124,7 @@ export function Modal({
 }: ModalProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const { mounted, dataState, onAnimationEnd } = useClosingState(open, 200);
   const [showAbandonConfirm, setShowAbandonConfirm] = useState(false);
   const [mouseDownOnOverlay, setMouseDownOnOverlay] = useState(false);
   const dragStartYRef = useRef<number | null>(null);
@@ -240,7 +243,7 @@ export function Modal({
     };
   }, [open]);
 
-  if (!open) return null;
+  if (!mounted) return null;
 
   function handleOverlayMouseDown(event: ReactMouseEvent<HTMLDivElement>): void {
     setMouseDownOnOverlay(event.target === event.currentTarget);
@@ -288,13 +291,20 @@ export function Modal({
     size === "sm"
       ? "max-h-[90vh] w-full rounded-t-lg sm:mx-auto sm:w-[400px] sm:rounded-lg"
       : `h-[100dvh] w-full sm:h-auto sm:max-h-[90vh] sm:rounded-lg ${SIZE_PANEL_WIDTH[size]}`;
+  // Panneau bas sur mobile pour `sm` (petite confirmation), plein écran pour
+  // les autres tailles ; centrée à partir de 640 px dans les deux cas
+  // (design-system-icones-animations.md §2.2).
+  const panelAnimClass = size === "sm" ? "vesta-anim-panel-sm" : "vesta-anim-panel-full";
 
   const modalContent = (
     <div
-      className={`fixed inset-0 ${zIndexClass} flex justify-center ${containerAlignClass}`}
+      className={`fixed inset-0 ${zIndexClass} flex justify-center ${containerAlignClass} ${
+        dataState === "closing" ? "pointer-events-none" : ""
+      }`}
     >
       <div
-        className="absolute inset-0 bg-overlay"
+        className="vesta-anim-overlay absolute inset-0 bg-overlay"
+        data-state={dataState}
         onMouseDown={handleOverlayMouseDown}
         onMouseUp={handleOverlayMouseUp}
         aria-hidden="true"
@@ -306,7 +316,9 @@ export function Modal({
         aria-labelledby={titleId}
         aria-busy={isSubmitting || loading || undefined}
         onKeyDown={handlePanelKeyDown}
-        className={`relative flex flex-col bg-surface shadow-elevated outline-none ${panelSizeClass}`}
+        data-state={dataState}
+        onAnimationEnd={onAnimationEnd}
+        className={`relative flex flex-col bg-surface shadow-elevated outline-none ${panelAnimClass} ${panelSizeClass}`}
       >
         {size === "sm" ? (
           <div
@@ -331,18 +343,7 @@ export function Modal({
               aria-label="Fermer"
               onClick={requestClose}
               disabled={!canCloseNow}
-              icon={
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  className="h-5 w-5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
-                </svg>
-              }
+              icon={<IconClose aria-hidden="true" className="h-5 w-5" />}
             />
           ) : null}
         </header>

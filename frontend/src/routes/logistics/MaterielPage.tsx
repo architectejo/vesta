@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError } from "../../api/client";
 import { getMyProfile } from "../../api/clubs";
+import { useDeepLink } from "../../hooks/useDeepLink";
 import {
   createArticle,
   getMaterialOverview,
@@ -65,6 +66,8 @@ export function MaterielPage() {
   const [selectedMovementId, setSelectedMovementId] = useState<number | null>(null);
   const [selectedEquipmentMatch, setSelectedEquipmentMatch] = useState<OutstandingEquipmentRow | null>(null);
   const [inventoryDetailId, setInventoryDetailId] = useState<number | null>(null);
+  // Lien depuis l'alerte « inventaire non clôturé » (`?inventaire=<id>`).
+  useDeepLink("inventaire", setInventoryDetailId);
   const [countModalOpen, setCountModalOpen] = useState(false);
   const [confirmOpenInventory, setConfirmOpenInventory] = useState(false);
   const [openInventoryError, setOpenInventoryError] = useState<string | undefined>(undefined);

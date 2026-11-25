@@ -23,7 +23,7 @@ from apps.treasury.models import (
     Payment,
     Transaction,
 )
-from apps.treasury.tests.conftest import PIN, make_member, past_day
+from apps.treasury.tests.conftest import make_member, past_day
 from apps.clubs.models import Membership
 
 from apps.accounts.tests.factories import SuperuserFactory  # noqa: E402
@@ -38,7 +38,6 @@ def pay(ctx, membership=None, amount="5"):
         method="cash",
         paid_on=past_day(),
         validated_by=ctx.treasurer.user,
-        pin=PIN,
     )
 
 

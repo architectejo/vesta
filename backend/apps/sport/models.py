@@ -196,6 +196,14 @@ class Match(TenantModel):
     )
     is_composition_published = models.BooleanField(default=False)
     composition_published_at = models.DateTimeField(null=True, blank=True)
+    result_post = models.OneToOneField(
+        "social.Post",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        help_text="Publication du résultat sur le fil (une seule par match, CDC 4.8).",
+    )
 
     class Meta(TenantModel.Meta):
         verbose_name = "Match"
@@ -744,3 +752,247 @@ class TacticalPlanAnnotation(TenantModel):
             raise ValidationError("Une flèche ou une zone doit porter les coordonnées de son tracé.")
         if self.target_membership_id and self.target_line:
             raise ValidationError("Une consigne cible soit un joueur, soit une ligne, jamais les deux.")
+
+
+# ---------------------------------------------------------------------------
+# Tests de performance (docs/ecrans/sport-statistiques-seance.md, partie C ;
+# circuit 9.4, validé par le client les 15-16/11/2026)
+# ---------------------------------------------------------------------------
+
+
+class PerformanceTest(TenantModel):
+    """Test de performance défini une fois par club (chrono sur distance,
+    distance en temps donné, répétitions, saisie libre).
+
+    Aucune donnée de santé : l'unité d'une « saisie libre » appartient à une
+    liste fermée (jamais de kg, cm ni battements par minute) et aucune
+    estimation physiologique n'est calculée. Le nom est unique parmi les
+    tests actifs du club : règle appliquée par le service (une contrainte
+    conditionnelle n'est pas portable entre moteurs de base de données).
+    """
+
+    class Kind(models.TextChoices):
+        TIMED_DISTANCE = "timed_distance", "Chrono sur distance"
+        DISTANCE_IN_TIME = "distance_in_time", "Distance en temps donné"
+        REPETITIONS = "repetitions", "Nombre de répétitions"
+        FREE = "free", "Saisie libre"
+
+    class Unit(models.TextChoices):
+        SECONDS = "seconds", "secondes"
+        METERS = "meters", "mètres"
+        KMH = "kmh", "km/h"
+        REPETITIONS = "repetitions", "répétitions"
+        POINTS = "points", "points"
+        PERCENT = "percent", "pourcentage"
+
+    name = models.CharField(max_length=60)
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    distance_m = models.DecimalField(
+        max_digits=7, decimal_places=2, null=True, blank=True, help_text="Chrono sur distance : 1 à 5 000 m."
+    )
+    duration_s = models.PositiveIntegerField(
+        null=True, blank=True, help_text="Distance en temps donné : 10 à 3 600 s."
+    )
+    attempts = models.PositiveSmallIntegerField(
+        null=True, blank=True, help_text="Répétitions : nombre de tentatives (1 à 100), facultatif."
+    )
+    time_limit_s = models.PositiveIntegerField(null=True, blank=True, help_text="Répétitions : durée limite, facultative.")
+    unit = models.CharField(max_length=12, choices=Unit.choices, blank=True, default="")
+    decimals = models.PositiveSmallIntegerField(default=0, help_text="Saisie libre : 0 à 2 décimales.")
+    higher_is_better = models.BooleanField(default=True)
+    description = models.CharField(max_length=300, blank=True)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta(TenantModel.Meta):
+        verbose_name = "Test de performance"
+        verbose_name_plural = "Tests de performance"
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(distance_m__isnull=True) | (Q(distance_m__gte=1) & Q(distance_m__lte=5000)),
+                name="perf_test_distance_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(duration_s__isnull=True) | (Q(duration_s__gte=10) & Q(duration_s__lte=3600)),
+                name="perf_test_duration_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(attempts__isnull=True) | (Q(attempts__gte=1) & Q(attempts__lte=100)),
+                name="perf_test_attempts_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(time_limit_s__isnull=True) | Q(time_limit_s__gt=0), name="perf_test_time_limit_gt_0"
+            ),
+            models.CheckConstraint(condition=Q(decimals__lte=2), name="perf_test_decimals_range"),
+            models.CheckConstraint(
+                condition=Q(unit__in=["", "seconds", "meters", "kmh", "repetitions", "points", "percent"]),
+                name="perf_test_unit_closed_list",
+            ),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return self.name
+
+    def clean(self):
+        if self.kind == self.Kind.TIMED_DISTANCE and self.distance_m is None:
+            raise ValidationError("Saisissez une distance entre 1 et 5 000 m.")
+        if self.kind == self.Kind.DISTANCE_IN_TIME and self.duration_s is None:
+            raise ValidationError("Saisissez une durée entre 10 secondes et 60 minutes.")
+        if self.kind == self.Kind.FREE and not self.unit:
+            raise ValidationError("Choisissez une unité dans la liste.")
+
+
+class PerformanceRun(TenantModel):
+    """Un départ ou une saisie groupée de mesures, rattaché à une séance.
+
+    ``client_uuid`` rend l'envoi idempotent (mesures prises hors connexion)."""
+
+    class Method(models.TextChoices):
+        STOPWATCH = "stopwatch", "Chronomètre"
+        MANUAL = "manual", "Saisie manuelle"
+
+    class StartMode(models.TextChoices):
+        GROUP = "group", "Départ groupé"
+        INDIVIDUAL = "individual", "Un par un"
+
+    event = models.ForeignKey(Event, on_delete=models.PROTECT, related_name="performance_runs")
+    test = models.ForeignKey(PerformanceTest, on_delete=models.PROTECT, related_name="runs")
+    method = models.CharField(max_length=9, choices=Method.choices)
+    start_mode = models.CharField(max_length=10, choices=StartMode.choices, blank=True, default="")
+    recorded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    client_uuid = models.UUIDField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta(TenantModel.Meta):
+        verbose_name = "Épreuve de performance"
+        verbose_name_plural = "Épreuves de performance"
+        constraints = [
+            models.UniqueConstraint(fields=["club", "client_uuid"], name="perf_run_unique_client_uuid"),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"Épreuve {self.pk} ({self.test_id} @ {self.event_id})"
+
+    def clean(self):
+        if self.event_id and self.club_id and self.event.club_id != self.club_id:
+            raise ValidationError("L'épreuve doit porter le même club que la séance.")
+        if self.test_id and self.club_id and self.test.club_id != self.club_id:
+            raise ValidationError("L'épreuve doit porter le même club que le test.")
+
+
+class PerformanceResult(TenantModel):
+    """Résultat d'un joueur : valeurs brutes uniquement (temps en
+    millisecondes entières, distances et valeurs en Decimal). Jamais de
+    suppression : une correction crée une ligne de
+    :class:`PerformanceResultCorrection`, un retrait passe ``status`` à
+    « voided » (même esprit que la règle des paiements)."""
+
+    class Outcome(models.TextChoices):
+        DONE = "done", "Mesuré"
+        DNF = "dnf", "Abandon"
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Actif"
+        VOIDED = "voided", "Retiré"
+
+    run = models.ForeignKey(PerformanceRun, on_delete=models.PROTECT, related_name="results")
+    membership = models.ForeignKey(Membership, on_delete=models.PROTECT, related_name="performance_results")
+    attempt_no = models.PositiveSmallIntegerField(default=1)
+    time_ms = models.PositiveIntegerField(null=True, blank=True)
+    distance_m = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    count = models.PositiveIntegerField(null=True, blank=True)
+    value = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    outcome = models.CharField(max_length=4, choices=Outcome.choices, default=Outcome.DONE)
+    status = models.CharField(max_length=6, choices=Status.choices, default=Status.ACTIVE)
+    client_uuid = models.UUIDField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta(TenantModel.Meta):
+        verbose_name = "Résultat de performance"
+        verbose_name_plural = "Résultats de performance"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["run", "membership", "attempt_no"], name="perf_result_unique_run_member_attempt"
+            ),
+            models.UniqueConstraint(fields=["club", "client_uuid"], name="perf_result_unique_client_uuid"),
+            models.CheckConstraint(condition=Q(attempt_no__gte=1), name="perf_result_attempt_no_gte_1"),
+            models.CheckConstraint(
+                condition=Q(time_ms__isnull=True) | Q(time_ms__gt=0), name="perf_result_time_ms_gt_0"
+            ),
+            models.CheckConstraint(
+                condition=Q(distance_m__isnull=True) | (Q(distance_m__gt=0) & Q(distance_m__lte=10000)),
+                name="perf_result_distance_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(value__isnull=True) | Q(value__gte=0), name="perf_result_value_gte_0"
+            ),
+            models.CheckConstraint(
+                condition=~Q(outcome="dnf")
+                | (
+                    Q(time_ms__isnull=True)
+                    & Q(distance_m__isnull=True)
+                    & Q(count__isnull=True)
+                    & Q(value__isnull=True)
+                ),
+                name="perf_result_dnf_has_no_value",
+            ),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"Résultat {self.pk} (joueur {self.membership_id})"
+
+    def clean(self):
+        if self.run_id and self.club_id and self.run.club_id != self.club_id:
+            raise ValidationError("Le résultat doit porter le même club que l'épreuve.")
+        if self.membership_id and self.club_id and self.membership.club_id != self.club_id:
+            raise ValidationError("Le résultat doit porter le même club que l'adhésion.")
+        has_value = any(v is not None for v in (self.time_ms, self.distance_m, self.count, self.value))
+        if self.outcome == self.Outcome.DONE and not has_value:
+            raise ValidationError("Un résultat mesuré doit porter une valeur.")
+
+    def delete(self, *args, **kwargs):
+        raise models.ProtectedError("Un résultat de performance n'est jamais supprimé.", {self})
+
+
+class PerformanceResultCorrection(TenantModel):
+    """Historique append-only des corrections et retraits d'un résultat
+    (anciennes et nouvelles valeurs, motif obligatoire, auteur)."""
+
+    result = models.ForeignKey(PerformanceResult, on_delete=models.PROTECT, related_name="corrections")
+    old_time_ms = models.PositiveIntegerField(null=True, blank=True)
+    old_distance_m = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    old_count = models.PositiveIntegerField(null=True, blank=True)
+    old_value = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    old_outcome = models.CharField(max_length=4, choices=PerformanceResult.Outcome.choices)
+    old_status = models.CharField(max_length=6, choices=PerformanceResult.Status.choices)
+    new_time_ms = models.PositiveIntegerField(null=True, blank=True)
+    new_distance_m = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    new_count = models.PositiveIntegerField(null=True, blank=True)
+    new_value = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    new_outcome = models.CharField(max_length=4, choices=PerformanceResult.Outcome.choices)
+    new_status = models.CharField(max_length=6, choices=PerformanceResult.Status.choices)
+    reason = models.TextField()
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta(TenantModel.Meta):
+        verbose_name = "Correction de résultat"
+        verbose_name_plural = "Corrections de résultats"
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"Correction {self.pk} du résultat {self.result_id}"
+
+    def clean(self):
+        if self.result_id and self.club_id and self.result.club_id != self.club_id:
+            raise ValidationError("La correction doit porter le même club que le résultat.")
+        if not (self.reason or "").strip():
+            raise ValidationError("Indiquez le motif.")
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValidationError("Une correction est append-only : elle ne se modifie jamais.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise models.ProtectedError("Une correction n'est jamais supprimée.", {self})

@@ -53,3 +53,14 @@ Thumbs.db
 
 # Verrou local des taches planifiees (ephemere, propre a la machine).
 .claude/scheduled_tasks.lock
+
+# Essai cPanel : reglages avec secrets en clair, ne jamais commiter (16/10/2026)
+backend/config/settings/cpanel_test.py
+
+# Archives de deploiement (peuvent contenir .env, .venv, base de donnees) et
+# fichiers de travail laisses par les agents testeurs : jamais commites.
+*.zip
+backend/apps.json
+backend/exp.json
+backend/ids.json
+backend/state.json

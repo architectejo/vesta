@@ -494,7 +494,7 @@ class TestImportPlayersFromCsv:
         )
 
         assert summary.batch.row_count_failed == 1
-        assert "numero de maillot invalide" in summary.rows[0].message
+        assert "numéro de maillot invalide" in summary.rows[0].message
 
     def test_numero_de_maillot_negatif_echoue_avec_message_clair(self):
         club = ClubFactory()
@@ -506,7 +506,7 @@ class TestImportPlayersFromCsv:
         )
 
         assert summary.batch.row_count_failed == 1
-        assert "numero de maillot invalide" in summary.rows[0].message
+        assert "numéro de maillot invalide" in summary.rows[0].message
 
     def test_numero_de_maillot_non_numerique_echoue_avec_message_clair(self):
         club = ClubFactory()
@@ -518,7 +518,7 @@ class TestImportPlayersFromCsv:
         )
 
         assert summary.batch.row_count_failed == 1
-        assert "numero de maillot invalide" in summary.rows[0].message
+        assert "numéro de maillot invalide" in summary.rows[0].message
 
     # -----------------------------------------------------------------
     # Dates : format invalide et date de naissance dans le futur.
@@ -797,8 +797,8 @@ class TestImportPlayersFromCsv:
         recruteur = MembershipFactory(club=club)
         csv_content = (
             "email,first_name,last_name,position,jersey_number,birth_date\n"
-            "adolphe.abedi@discoveryclub.cd,ADOLPHE,ABEDI,,1,01/01/1970\n"
-            "chamba.gaston@discoveryclub.cd,CHAMBA,GASTON,Attaquant,2,\n"
+            "joueur.un@example.com,PAUL,DURAND,,1,01/01/1970\n"
+            "joueur.deux@example.com,MARC,LEROY,Attaquant,2,\n"
         )
 
         summary = clubs_services.import_players_from_csv(
@@ -807,12 +807,12 @@ class TestImportPlayersFromCsv:
 
         assert summary.batch.row_count_success == 2
         assert summary.batch.row_count_failed == 0
-        premier = Membership.all_objects.get(club=club, user__email="adolphe.abedi@discoveryclub.cd")
-        assert premier.user.first_name == "ADOLPHE"
-        assert premier.user.last_name == "ABEDI"
+        premier = Membership.all_objects.get(club=club, user__email="joueur.un@example.com")
+        assert premier.user.first_name == "PAUL"
+        assert premier.user.last_name == "DURAND"
         assert premier.jersey_number == 1
         assert premier.user.birth_date == date(1970, 1, 1)
-        second = Membership.all_objects.get(club=club, user__email="chamba.gaston@discoveryclub.cd")
+        second = Membership.all_objects.get(club=club, user__email="joueur.deux@example.com")
         assert second.position == Membership.Position.FORWARD
         assert second.jersey_number == 2
 

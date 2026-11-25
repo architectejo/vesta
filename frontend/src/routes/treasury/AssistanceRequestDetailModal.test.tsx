@@ -33,6 +33,7 @@ function makeCapabilities(overrides: Partial<TreasuryCapabilities> = {}): Treasu
     can_submit_expenses: false,
     can_validate_expenses: true,
     can_derogate: true,
+    can_decide_payment_reversal: false,
     can_upload_expense_receipts: false,
     can_manage_assistance_scales: false,
     can_process_assistance_requests: true,
@@ -100,13 +101,13 @@ describe("AssistanceRequestDetailModal", () => {
     vi.resetAllMocks();
   });
 
-  it("accepte la demande sans code PIN (résolution du §9.1)", async () => {
+  it("accepte la demande sans champ PIN", async () => {
     vi.mocked(approveSocialAssistanceRequest).mockResolvedValue(makeRequest({ status: "approved" }));
     const user = userEvent.setup();
     renderModal(makeRequest(), makeCapabilities());
 
     const acceptButton = await screen.findByRole("button", { name: "Accepter la demande" });
-    expect(screen.queryByLabelText("Votre code PIN")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/PIN/i)).not.toBeInTheDocument();
     await user.click(acceptButton);
 
     await waitFor(() => expect(approveSocialAssistanceRequest).toHaveBeenCalledWith(1));

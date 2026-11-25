@@ -71,7 +71,7 @@
 | `AgendaItem` | `assemblies` | FK `Assembly` | §9.2 |
 | `AssemblyAttendance` | `assemblies` | FK `Assembly`, FK `Membership` — quorum via `ClubSettings.assembly_quorum_percentage` | §9.3 |
 | `Decision` | `assemblies` | FK `Assembly`, FK `AgendaItem` | §9.4 |
-| `Minutes` | `assemblies` | 1–1 `Assembly` — signé PIN Président (+ VP si en poste) | §9.5 |
+| `Minutes` | `assemblies` | 1–1 `Assembly` — signé (confirmation) Président (+ VP si en poste) | §9.5 |
 
 ## Communication (`apps/social`)
 
@@ -99,7 +99,7 @@
 | --- | --- |
 | `ContributionType`, `ContributionTypeRate`, `ContributionAssignment`, `ContributionSuspension`, `Due` | `schema-treasury.md` §4 |
 | `Payment`, `PaymentAllocation`, `PaymentReversal` | `schema-treasury.md` §5 |
-| `CashSession` — session de caisse (Caisse Terrain Express, PIN vérifié une fois, valable jusqu'à minuit, 10.2 n° 22) | `schema-treasury.md` §5.4 |
+| `CashSession` — session de caisse (Caisse Terrain Express, ouverte en ligne par confirmation, valable jusqu'à minuit, 10.2 n° 22, modifié le 11/10/2026 — plus de PIN, n° 177) | `schema-treasury.md` §5.4 |
 | `Transaction`, `LedgerChainState`, `LedgerVerificationRun` | `schema-treasury.md` §6 |
 | `ExpenseCategory`, `Expense`, `ExpenseAttachment`, `ExpenseDerogation` | `schema-treasury.md` §7 |
 | `SocialAssistanceScale`, `SocialAssistanceRequest` | `schema-treasury.md` §8 |

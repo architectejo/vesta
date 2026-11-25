@@ -5,7 +5,7 @@ Sources : CDC 4.3, 4.4.1, 4.4.4, 4.6, 5.3, 7.2 ; docs/lot0/schema-treasury.md
 (`Transaction`), §6.2 (`LedgerChainState`), §6.4 (empreinte), §9 (invariants).
 
 Ces modeles sont des structures de donnees : les regles metier (qui peut
-enregistrer, validation PIN, calcul de l'empreinte, scellement, verification
+enregistrer, calcul de l'empreinte, scellement, verification
 de la chaine, frais d'adhesion payes...) vivent dans
 ``apps.treasury.services`` (CLAUDE.md section 5). Les modeles portent
 seulement les garde-fous d'integrite qui doivent tenir quel que soit le
@@ -43,11 +43,12 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from typing import Optional
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import Q
+from django.db.models import Exists, F, OuterRef, Prefetch, Q
 
 from apps.core.models import TenantManager, TenantModel, TenantQuerySet
 from apps.core.storage import private_storage
@@ -70,7 +71,7 @@ class AppendOnlyQuerySet(TenantQuerySet):
     """Bloque ``update()``/``delete()`` en masse (SQL direct qui contournerait
     ``Model.save()``/``Model.delete()``), comme ``AuditLogQuerySet``."""
 
-    immutable_message = "Écriture financière protégée : modification ou suppression en masse interdite (CDC 5.3)."
+    immutable_message = "Écriture financière protégée : modification ou suppression en masse interdite."
 
     def update(self, **kwargs):
         raise LedgerImmutableError(self.immutable_message)
@@ -200,7 +201,7 @@ class ContributionType(TenantModel):
         if self.nature == self.Nature.MANDATORY and (self.amount is None or self.amount <= 0):
             errors.append("Une cotisation obligatoire exige un montant fixe strictement positif.")
         if self.is_membership_fee and (self.amount is None or self.amount <= 0):
-            errors.append("Les frais d'adhésion exigent un montant fixe strictement positif (CDC 4.3).")
+            errors.append("Les frais d'adhésion exigent un montant fixe strictement positif.")
         if self.status == self.Status.ARCHIVED and self.archived_at is None:
             errors.append("Un type archivé doit porter sa date d'archivage.")
 
@@ -382,6 +383,9 @@ class Due(TenantModel):
         ARRIVAL = "arrival", "Arrivée"
         ASSIGNMENT = "assignment", "Rattachement"
         IMPORT = "import", "Import"
+        # Frais d'adhesion (decision du client du 17/11/2026, 10.3 n° 100) :
+        # du unique cree a l'ouverture de l'adhesion, echeance a la date d'entree.
+        MEMBERSHIP_FEE = "membership", "Adhésion"
 
     club = _club_fk("treasury_dues")
     membership = models.ForeignKey("clubs.Membership", on_delete=models.PROTECT, related_name="treasury_dues")
@@ -436,7 +440,53 @@ class Due(TenantModel):
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        raise LedgerImmutableError("Un montant dû n'est jamais supprimé (schema-treasury.md §4.5).")
+        raise LedgerImmutableError("Un montant dû n'est jamais supprimé.")
+
+
+class DueCancellation(TenantModel):
+    """Ecriture d'annulation d'un montant du (decision du client du
+    17/11/2026 ; CDC 4.3, 4.4.2 ; CLAUDE.md regle 4).
+
+    Un montant du n'est jamais supprime ni modifie : quand il n'est plus
+    exigible (adhesion annulee apres refus du parrain, frais rembourses), une
+    annulation motivee, datee et attribuee est ajoutee. Un du annule ne compte
+    plus ni dans le solde, ni dans la repartition 4.4.3, ni dans les
+    indicateurs. Au plus une annulation par du (``due`` unique). Immuable,
+    jamais supprimee.
+    """
+
+    club = _club_fk("treasury_due_cancellations")
+    due = models.OneToOneField(Due, on_delete=models.PROTECT, related_name="cancellation")
+    reason = models.TextField()
+    cancelled_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    cancelled_at = models.DateTimeField()
+
+    objects = AppendOnlyTenantManager()
+    all_objects = models.Manager.from_queryset(AppendOnlyQuerySet)()
+
+    class Meta(TenantModel.Meta):
+        verbose_name = "Annulation de montant dû"
+        verbose_name_plural = "Annulations de montants dus"
+        constraints = [
+            models.CheckConstraint(condition=~Q(reason=""), name="duecancellation_reason_required"),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"Annulation du montant dû {self.due_id}"
+
+    def clean(self):
+        if self.club_id and self.due_id and self.due.club_id != self.club_id:
+            raise ValidationError("L'annulation et le montant dû doivent appartenir au même club.")
+        if not (self.reason or "").strip():
+            raise ValidationError("Le motif de l'annulation est obligatoire.")
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None and DueCancellation.all_objects.filter(pk=self.pk).exists():
+            raise LedgerImmutableError("Une annulation de montant dû est immuable.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise LedgerImmutableError("Une annulation de montant dû n'est jamais supprimée.")
 
 
 # ---------------------------------------------------------------------------
@@ -448,13 +498,12 @@ class CashSession(TenantModel):
     """Session de caisse de la Caisse Terrain Express (CDC 4.4.5, 6.6, 7.2 ;
     10.2 n° 22 ; schema-treasury.md §5.4 ; tache 2.4).
 
-    Ouverte **en ligne** par le Tresorier ou l'adjoint apres verification
-    **serveur** de son code PIN (``pin_verified_at``) ; couvre ensuite ses
+    Ouverte **en ligne** par le Tresorier ou l'adjoint (confirmation en
+    modale ; plus de PIN depuis le 11/10/2026) ; couvre ensuite ses
     encaissements en especes, en ligne comme hors connexion, jusqu'a minuit
     dans le fuseau du club (``expires_at``, calcule a la creation et fige).
 
-    - **Aucun PIN** n'est stocke ici ni transmis a l'appareil : l'appareil
-      ne garde que ``public_id`` (identifiant non devinable, seul
+    - L'appareil ne garde que ``public_id`` (identifiant non devinable, seul
       identifiant expose par l'API) et ``expires_at``.
     - **Validite evaluee a la volee** (:meth:`is_valid_at`) a partir des
       horodatages ; ``status`` n'est qu'un reflet (fermeture manuelle).
@@ -467,7 +516,7 @@ class CashSession(TenantModel):
         EXPIRED = "expired", "Expirée"
 
     # Champs figes des la creation (schema §5.4).
-    IMMUTABLE_FIELDS = ("club_id", "public_id", "opened_by_id", "pin_verified_at", "opened_at", "expires_at")
+    IMMUTABLE_FIELDS = ("club_id", "public_id", "opened_by_id", "opened_at", "expires_at")
 
     club = _club_fk("cash_sessions")
     public_id = models.UUIDField(
@@ -482,7 +531,6 @@ class CashSession(TenantModel):
         related_name="cash_sessions",
         help_text="Trésorier ou Trésorier adjoint qui a ouvert la session (même club).",
     )
-    pin_verified_at = models.DateTimeField(help_text="Vérification serveur du code PIN à l'ouverture.")
     opened_at = models.DateTimeField()
     expires_at = models.DateTimeField(help_text="Minuit suivant le jour d'ouverture, fuseau du club (UTC en base).")
     closed_at = models.DateTimeField(null=True, blank=True, help_text="Fermeture manuelle par son auteur.")
@@ -497,10 +545,6 @@ class CashSession(TenantModel):
         constraints = [
             models.CheckConstraint(
                 condition=Q(expires_at__gt=models.F("opened_at")), name="cashsession_expires_after_opening"
-            ),
-            models.CheckConstraint(
-                condition=Q(pin_verified_at__lte=models.F("opened_at")),
-                name="cashsession_pin_verified_before_opening",
             ),
             models.CheckConstraint(
                 condition=Q(closed_at__isnull=True)
@@ -669,8 +713,14 @@ class Payment(TenantModel):
                 condition=~Q(source="csv_import") | Q(import_batch__isnull=False),
                 name="payment_import_batch_required_for_csv",
             ),
+            # ``client_uuid`` = cle d'idempotence par club. Caisse Terrain
+            # Express : UUID de l'appareil, toujours avec l'heure de saisie
+            # declaree. Saisie en ligne du Tresorier (correctif M4) : UUID de
+            # la modale de confirmation, sans heure d'appareil.
             models.CheckConstraint(
-                condition=Q(client_uuid__isnull=True) | Q(client_recorded_at__isnull=False),
+                condition=Q(client_uuid__isnull=True)
+                | Q(client_recorded_at__isnull=False)
+                | ~Q(source="field_cash"),
                 name="payment_client_recorded_at_required_with_uuid",
             ),
             models.CheckConstraint(
@@ -718,7 +768,23 @@ class Payment(TenantModel):
             return name or None
         return value
 
+    def _guard_issued_receipt(self) -> None:
+        """Un reçu émis est figé (annexe D §1.9 ; « jamais deux reçus ») :
+        ni remplacé, ni retiré, ni redaté. Seul le premier remplissage
+        (fichier vide -> fichier) est permis."""
+
+        stored = Payment.all_objects.filter(pk=self.pk).values("receipt_file", "receipt_issued_at").first()
+        if stored is None or not stored["receipt_file"]:
+            return
+        current_name = getattr(self.receipt_file, "name", self.receipt_file) or None
+        if current_name != stored["receipt_file"] or self.receipt_issued_at != stored["receipt_issued_at"]:
+            raise LedgerImmutableError(
+                "Le reçu de ce paiement a déjà été émis : il n'est jamais remplacé ni supprimé."
+            )
+
     def save(self, *args, **kwargs):
+        if self.pk is not None:
+            self._guard_issued_receipt()
         if self.pk is not None and self._has_sealed_transaction():
             original = Payment.all_objects.filter(pk=self.pk).values(*self.FINANCIAL_FIELDS).first()
             if original is not None:
@@ -728,13 +794,47 @@ class Payment(TenantModel):
                 if changed:
                     raise LedgerImmutableError(
                         "Un paiement validé ne peut pas être modifié : corrigez-le par une "
-                        "écriture d'annulation (CDC 4.4.4)."
+                        "écriture d'annulation."
                     )
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
         raise LedgerImmutableError(
-            "Un paiement n'est jamais supprimé : corrigez-le par une écriture d'annulation (CDC 4.4.4)."
+            "Un paiement n'est jamais supprimé : corrigez-le par une écriture d'annulation."
+        )
+
+    @property
+    def reversal(self) -> Optional["PaymentReversal"]:
+        """Annulation COURANTE du paiement, ou ``None`` : la demande ouverte
+        (en attente ou approuvée) s'il y en a une, sinon la dernière demande
+        refusée. Une nouvelle demande ne pouvant suivre qu'un refus, c'est
+        toujours la plus récente. Utilise le cache de
+        ``prefetch_related(reversal_prefetch())`` s'il est présent (aucune
+        requête par ligne dans les listes)."""
+
+        if self.pk is None:
+            return None
+        cache = getattr(self, "_prefetched_objects_cache", {})
+        if "reversals" in cache:
+            reversals = list(cache["reversals"])
+            return max(reversals, key=lambda item: item.pk) if reversals else None
+        return PaymentReversal.all_objects.filter(club_id=self.club_id, payment_id=self.pk).order_by("-pk").first()
+
+    def reversal_history(self) -> list["PaymentReversal"]:
+        """Toutes les demandes d'annulation du paiement, de la plus récente
+        à la plus ancienne (décision client du 15/11/2026). Même source que
+        ``reversal`` (dont elle est le premier élément) ; utilise le cache de
+        ``reversal_prefetch()`` s'il est présent."""
+
+        if self.pk is None:
+            return []
+        cache = getattr(self, "_prefetched_objects_cache", {})
+        if "reversals" in cache:
+            return sorted(cache["reversals"], key=lambda item: item.pk, reverse=True)
+        return list(
+            PaymentReversal.all_objects.filter(club_id=self.club_id, payment_id=self.pk)
+            .select_related("requested_by", "approved_by", "rejected_by")
+            .order_by("-pk")
         )
 
 
@@ -792,8 +892,32 @@ class PaymentReversal(TenantModel):
         APPROVED = "approved", "Approuvée"
         REJECTED = "rejected", "Rejetée"
 
+    OPEN_STATUSES = (Status.PENDING_APPROVAL, Status.APPROVED)
+
     club = _club_fk("payment_reversals")
-    payment = models.OneToOneField(Payment, on_delete=models.PROTECT, related_name="reversal")
+    # Plusieurs demandes par paiement (correctif D-A4 du 13/11/2026) : apres
+    # un REFUS, une nouvelle demande est possible ; la demande refusee reste
+    # conservee telle quelle (append-only) et journalisee. Les filtres
+    # ``reversal__status`` restent valables (``related_query_name``) ;
+    # l'annulation courante est ``Payment.reversal`` (propriete).
+    payment = models.ForeignKey(
+        Payment, on_delete=models.PROTECT, related_name="reversals", related_query_name="reversal"
+    )
+    # Garde-fou d'unicite portable (aucun index partiel, non pris en charge
+    # par MySQL/MariaDB) : egal a ``payment`` tant que la demande est en
+    # attente ou approuvee, NULL une fois refusee. Unique : au plus une
+    # demande ouverte par paiement, donc au plus une annulation approuvee.
+    open_for_payment = models.OneToOneField(
+        Payment,
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.PROTECT,
+        related_name="+",
+        error_messages={
+            "unique": "Une demande d'annulation est déjà en attente ou approuvée pour ce paiement."
+        },
+    )
     reason = models.TextField()
     reason_kind = models.CharField(max_length=10, choices=ReasonKind.choices, default=ReasonKind.ERROR)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING_APPROVAL)
@@ -826,6 +950,12 @@ class PaymentReversal(TenantModel):
                 | (Q(rejected_by__isnull=False, rejected_at__isnull=False) & ~Q(rejection_reason="")),
                 name="paymentreversal_rejected_fields",
             ),
+            models.CheckConstraint(
+                condition=(Q(status="rejected") & Q(open_for_payment__isnull=True))
+                | (~Q(status="rejected") & Q(open_for_payment=F("payment"))),
+                name="paymentreversal_open_for_payment_consistent",
+                violation_error_message="Demande d'annulation incohérente avec son paiement.",
+            ),
         ]
 
     def __str__(self) -> str:  # pragma: no cover
@@ -842,12 +972,40 @@ class PaymentReversal(TenantModel):
             stored_status = PaymentReversal.all_objects.filter(pk=self.pk).values_list("status", flat=True).first()
             if stored_status is not None and stored_status != self.Status.PENDING_APPROVAL:
                 raise LedgerImmutableError(
-                    "Une annulation approuvée ou rejetée ne peut plus être modifiée (CDC 5.3)."
+                    "Une annulation approuvée ou rejetée ne peut plus être modifiée."
                 )
+        # Derive, jamais saisi : demande ouverte = garde-fou d'unicite actif.
+        self.open_for_payment_id = self.payment_id if self.status in self.OPEN_STATUSES else None
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        raise LedgerImmutableError("Une annulation de paiement n'est jamais supprimée (CDC 5.3).")
+        raise LedgerImmutableError("Une annulation de paiement n'est jamais supprimée.")
+
+
+def approved_reversal_exists() -> Q:
+    """Condition « le paiement a une annulation approuvee », en sous-requete
+    ``EXISTS`` : combinee par OU a d'autres conditions, elle ne duplique
+    jamais une ligne de paiement (plusieurs demandes refusees possibles)."""
+
+    return Q(
+        Exists(
+            PaymentReversal.all_objects.filter(
+                payment_id=OuterRef("pk"), status=PaymentReversal.Status.APPROVED
+            )
+        )
+    )
+
+
+def reversal_prefetch() -> Prefetch:
+    """Prefetch des annulations d'une liste de paiements (pour
+    ``Payment.reversal``). Queryset explicite (``all_objects``) : le
+    gestionnaire par defaut, tenant-aware, exige un club actif ; les lignes
+    restent limitees aux paiements deja filtres par club."""
+
+    return Prefetch(
+        "reversals",
+        queryset=PaymentReversal.all_objects.select_related("requested_by", "approved_by", "rejected_by"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1014,12 +1172,12 @@ class Transaction(TenantModel):
             )
             if stored_sealed_at is not None:
                 raise LedgerImmutableError(
-                    "Une transaction scellée est immuable (CDC 5.3) : aucune modification possible."
+                    "Une transaction scellée est immuable : aucune modification possible."
                 )
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        raise LedgerImmutableError("Une transaction financière n'est jamais supprimée (CDC 5.3).")
+        raise LedgerImmutableError("Une transaction financière n'est jamais supprimée.")
 
 
 class LedgerChainState(TenantModel):
@@ -1055,10 +1213,10 @@ class LedgerChainState(TenantModel):
         ]
 
     def __str__(self) -> str:  # pragma: no cover
-        return f"Chaine du club {self.club_id}"
+        return f"Chaîne du club {self.club_id}"
 
     def delete(self, *args, **kwargs):
-        raise LedgerImmutableError("L'état de la chaîne financière d'un club n'est jamais supprimé (CDC 5.3).")
+        raise LedgerImmutableError("L'état de la chaîne financière d'un club n'est jamais supprimé.")
 
 
 # ---------------------------------------------------------------------------
@@ -1450,7 +1608,7 @@ class Expense(TenantModel):
             original = Expense.all_objects.filter(pk=self.pk).values("status", *self.FINANCIAL_FIELDS).first()
         if original is None:
             if self.status != self.Status.PENDING:
-                raise LedgerImmutableError("Une dépense est toujours créée « En attente » (CDC 4.5.2).")
+                raise LedgerImmutableError("Une dépense est toujours créée « En attente ».")
         else:
             if original["status"] in self.FINAL_STATUSES:
                 raise LedgerImmutableError("Une dépense refusée ou justifiée ne peut plus être modifiée.")
@@ -1458,16 +1616,16 @@ class Expense(TenantModel):
             if self.status not in allowed:
                 raise LedgerImmutableError(
                     "Changement d'état de dépense interdit : une dépense ne revient jamais à un état "
-                    "antérieur (CDC 4.5.2)."
+                    "antérieur."
                 )
             if original["status"] != self.Status.PENDING:
                 changed = [f for f in self.FINANCIAL_FIELDS if getattr(self, f) != original[f]]
                 if changed:
-                    raise LedgerImmutableError("Une dépense libérée ne peut plus être modifiée (CDC 5.3).")
+                    raise LedgerImmutableError("Une dépense libérée ne peut plus être modifiée.")
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        raise LedgerImmutableError("Une dépense n'est jamais supprimée (CDC 4.5.2).")
+        raise LedgerImmutableError("Une dépense n'est jamais supprimée.")
 
 
 class ExpenseAttachment(TenantModel):
@@ -1547,8 +1705,56 @@ class ExpenseDerogation(TenantModel):
 
     def save(self, *args, **kwargs):
         if self.pk is not None and ExpenseDerogation.all_objects.filter(pk=self.pk).exists():
-            raise LedgerImmutableError("Une dérogation ne peut plus être modifiée (CDC 4.5.2).")
+            raise LedgerImmutableError("Une dérogation ne peut plus être modifiée.")
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        raise LedgerImmutableError("Une dérogation n'est jamais supprimée (CDC 4.5.2).")
+        raise LedgerImmutableError("Une dérogation n'est jamais supprimée.")
+
+
+# ---------------------------------------------------------------------------
+# Dette constatee a l'echeance (CDC 4.17, 4.4.2)
+# ---------------------------------------------------------------------------
+
+
+class DebtDueNotice(TenantModel):
+    """Trace du traitement d'une echeance par la commande cron
+    ``notify_debt_due`` (CDC 4.17 « Dette constatee a l'echeance »).
+
+    Une ligne au plus par montant du (``due`` unique) : garantit **en base**
+    qu'une meme echeance n'est jamais notifiee deux fois. ``outcome`` dit si
+    la dette a ete constatee (notifications envoyees) ou si le joueur etait
+    en ordre au moment du traitement (aucune notification ; l'echeance n'est
+    plus jamais reevaluee). Immuable, jamais supprimee. Ne stocke **aucun
+    solde** (invariant 1) : ``amount_due`` est l'instantane du montant a
+    regulariser cite dans la notification.
+    """
+
+    class Outcome(models.TextChoices):
+        NOTIFIED = "notified", "Dette constatée, notifiée"
+        NOT_IN_DEBT = "not_in_debt", "Joueur en ordre à l'échéance"
+
+    club = _club_fk("treasury_debt_due_notices")
+    due = models.OneToOneField(Due, on_delete=models.PROTECT, related_name="debt_notice")
+    outcome = models.CharField(max_length=12, choices=Outcome.choices)
+    amount_due = _money_field(null=True, blank=True)
+    processed_at = models.DateTimeField()
+
+    objects = AppendOnlyTenantManager()
+    all_objects = models.Manager.from_queryset(AppendOnlyQuerySet)()
+
+    class Meta(TenantModel.Meta):
+        verbose_name = "Constat de dette à l'échéance"
+        verbose_name_plural = "Constats de dette à l'échéance"
+
+    def clean(self):
+        if self.club_id and self.due_id and self.due.club_id != self.club_id:
+            raise ValidationError("Le constat et le montant dû doivent appartenir au même club.")
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None and DebtDueNotice.all_objects.filter(pk=self.pk).exists():
+            raise LedgerImmutableError("Un constat de dette à l'échéance est immuable.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise LedgerImmutableError("Un constat de dette à l'échéance n'est jamais supprimé.")

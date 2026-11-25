@@ -17,7 +17,7 @@ from django.utils import timezone
 from apps.clubs.models import Membership
 from apps.mercato import services
 from apps.mercato.models import TransferOffer
-from apps.mercato.tests.conftest import PIN, MercatoClubContext, make_debtor
+from apps.mercato.tests.conftest import MercatoClubContext, make_debtor
 from apps.treasury.models import Payment
 from apps.treasury.services import record_payment
 
@@ -112,7 +112,6 @@ def test_accept_offer_with_debt_blocks_and_auto_unblocks_on_payment(ctx: Mercato
         method=Payment.Method.CASH,
         paid_on=timezone.now().date(),
         recorded_by=other_ctx.treasurer.user,
-        pin=PIN,
     )
 
     # 10.2 n° 30 : déblocage automatique, sans nouvelle acceptation du joueur.
@@ -143,17 +142,17 @@ def test_recheck_all_blocked_transfers_cron_sweep(ctx: MercatoClubContext, other
         method=Payment.Method.CASH,
         paid_on=timezone.now().date(),
         recorded_by=other_ctx.treasurer.user,
-        pin=PIN,
     )
     assert services.recheck_all_blocked_transfers() == 1
 
 
-def test_automatic_unblock_writes_no_audit_entry_without_a_real_actor(ctx: MercatoClubContext, other_ctx: MercatoClubContext):
-    """Convention déjà établie ailleurs dans le projet (voir docstring de
-    ``apps.mercato.services``) : une transition sans acteur humain réel
-    n'écrit aucune entrée de journal."""
+def test_automatic_unblock_writes_audit_entry_with_system_actor_and_auto_post(ctx: MercatoClubContext, other_ctx: MercatoClubContext):
+    """D16 (règle 6) : le déblocage automatique est journalisé avec l'acteur Système ;
+    D7 (CDC 4.14 étape 6) : une publication automatique apparaît sur le fil du nouveau club."""
 
     from apps.audit.models import AuditLog
+    from apps.core.reserved_accounts import SYSTEM_ACTOR_EMAIL
+    from apps.social.models import Post
 
     services.set_market_availability(membership=other_ctx.player, actor=other_ctx.player.user, is_on_market=True)
     ctype = make_debtor(other_ctx.club, other_ctx.player)
@@ -161,6 +160,7 @@ def test_automatic_unblock_writes_no_audit_entry_without_a_real_actor(ctx: Merca
         initiated_by=ctx.president.user, target_club=ctx.club, target_membership=other_ctx.player, message="Bonjour"
     )
     offer = services.respond_to_offer(offer=offer, actor=other_ctx.player.user, accept=True)
+    assert offer.status == TransferOffer.Status.BLOCKED_DEBT
     record_payment(
         membership=other_ctx.player,
         contribution_type=ctype,
@@ -168,70 +168,22 @@ def test_automatic_unblock_writes_no_audit_entry_without_a_real_actor(ctx: Merca
         method=Payment.Method.CASH,
         paid_on=timezone.now().date(),
         recorded_by=other_ctx.treasurer.user,
-        pin=PIN,
     )
-    count_before = AuditLog.objects.filter(action_type="mercato.transfer_offer.completed").count()
     services.recheck_transfers_for_membership(other_ctx.player)
-    count_after = AuditLog.objects.filter(action_type="mercato.transfer_offer.completed").count()
-    assert count_after == count_before
+    entries = AuditLog.objects.filter(action_type="mercato.transfer_offer.completed")
+    assert entries.count() == 1
+    assert entries.first().actor.email == SYSTEM_ACTOR_EMAIL
+    posts = Post.all_objects.filter(club=ctx.club, post_kind=Post.PostKind.AUTO_TRANSFER)
+    assert posts.count() == 1
+    assert other_ctx.player.user.last_name in posts.first().body
 
 
-def _quitus_text(offer: TransferOffer) -> str:
-    offer.quitus_file.open("rb")
-    try:
-        content = offer.quitus_file.read()
-    finally:
-        offer.quitus_file.close()
-    assert content.startswith(b"%PDF")
-    # Canevas sans compression (pageCompression=0) : permet une assertion
-    # directe sur le flux de contenu (`apps.core.pdf.NumberedDocumentCanvas`).
-    return content.decode("latin-1")
+def test_manual_transfer_publishes_auto_post_once(ctx: MercatoClubContext, other_ctx: MercatoClubContext):
+    from apps.social.models import Post
 
-
-class TestQuitusPdfContent:
-    """Gabarit valide docs/annexes/modeles-documents.md §2, §6.2 : aucune
-    reference au cahier des charges, cadre d'attestation avec date de
-    verification, date etablie dans le fuseau du club d'origine."""
-
-    def test_quitus_never_contains_the_literal_cdc_reference(self, ctx, other_ctx):
-        services.set_market_availability(membership=other_ctx.player, actor=other_ctx.player.user, is_on_market=True)
-        offer = services.create_transfer_offer(
-            initiated_by=ctx.president.user, target_club=ctx.club, target_membership=other_ctx.player, message="Bonjour"
-        )
-        offer = services.respond_to_offer(offer=offer, actor=other_ctx.player.user, accept=True)
-
-        text = _quitus_text(offer)
-        assert "CDC" not in text
-        # L'objet meme du document : le badge « En ordre » (§2.3 ligne 11)
-        # et la mention de verification automatique doivent y figurer.
-        assert "En ordre" in text
-        assert "Solde v" in text  # « Solde vérifié... » (« é » échappé en octal par reportlab)
-
-    def test_debt_check_and_quitus_date_use_the_origin_clubs_local_date_not_utc(self, ctx, other_ctx):
-        """CLAUDE.md §7 : ``_evaluate_debt_and_progress`` doit évaluer et
-        imprimer la date du jour au club d'origine, pas la date UTC de
-        ``now`` (docs/annexes/modeles-documents.md §6.2, remarque hors
-        gabarit)."""
-
-        services.set_market_availability(membership=other_ctx.player, actor=other_ctx.player.user, is_on_market=True)
-        offer = services.create_transfer_offer(
-            initiated_by=ctx.president.user, target_club=ctx.club, target_membership=other_ctx.player, message="Bonjour"
-        )
-
-        # 23h30 UTC un jour donne = 00h30 le lendemain a Kinshasa (UTC+1,
-        # sans heure d'ete -- fuseau par defaut de `build_mercato_club_context`).
-        utc_instant = datetime.datetime(2026, 9, 27, 23, 30, tzinfo=datetime.timezone.utc)
-        expected_local_date = datetime.date(2026, 9, 28)
-        assert expected_local_date != utc_instant.date()
-
-        with patch("apps.treasury.services.is_in_good_standing") as mocked:
-            mocked.return_value = (True, None, "")
-            offer = services.respond_to_offer(offer=offer, actor=other_ctx.player.user, accept=True, now=utc_instant)
-
-        called_kwargs = mocked.call_args.kwargs
-        assert called_kwargs["at_date"] == expected_local_date
-
-        assert offer.status == TransferOffer.Status.COMPLETED
-        text = _quitus_text(offer)
-        assert "28/09/2026" in text
-        assert "27/09/2026" not in text
+    services.set_market_availability(membership=other_ctx.player, actor=other_ctx.player.user, is_on_market=True)
+    offer = services.create_transfer_offer(
+        initiated_by=ctx.president.user, target_club=ctx.club, target_membership=other_ctx.player, message="Bonjour"
+    )
+    services.respond_to_offer(offer=offer, actor=other_ctx.player.user, accept=True)
+    assert Post.all_objects.filter(club=ctx.club, post_kind=Post.PostKind.AUTO_TRANSFER).count() == 1

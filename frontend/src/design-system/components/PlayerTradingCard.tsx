@@ -213,7 +213,7 @@ export function PlayerTradingCard({
         window.cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      node!.style.transition = "transform 300ms ease-out";
+      node!.style.transition = "transform var(--duration-slow) var(--ease-out)";
       node!.style.setProperty("--rx", "0deg");
       node!.style.setProperty("--ry", "0deg");
       node!.style.setProperty("--mx", "50%");
@@ -380,7 +380,7 @@ export function PlayerTradingCard({
                       `${stats.yellowCards} jaune${stats.yellowCards > 1 ? "s" : ""}, ${stats.redCards} rouge${stats.redCards > 1 ? "s" : ""}`,
                     ],
                     ["Taux de présence", stats.attendanceRate !== null ? `${stats.attendanceRate} %` : "—"],
-                    ["Note moyenne", stats.averageRating !== null ? `${stats.averageRating} sur 10` : "—"],
+                    ["Note moyenne", stats.averageRating !== null ? `${String(stats.averageRating).replace(".", ",")} sur 10` : "—"],
                   ] as Array<[string, string, string?]>
                 ).map(([label, value, sub]) => (
                   <div key={label} className="border-t pt-1" style={{ borderColor: "color-mix(in srgb, var(--color-player-card-fg-muted) 40%, transparent)" }}>

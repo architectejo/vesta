@@ -12,7 +12,20 @@ import {
   type GridMonth,
   type GridRow,
 } from "../../api/treasury";
-import { Avatar, Button, DataTable, EmptyState, Loader, SegmentedControl, useToast, type DataTableColumn } from "../../design-system";
+import {
+  Avatar,
+  Button,
+  DataTable,
+  EmptyState,
+  IconButton,
+  IconChevronLeft,
+  IconChevronRight,
+  IconClose,
+  Loader,
+  SegmentedControl,
+  useToast,
+  type DataTableColumn,
+} from "../../design-system";
 import { useAuth } from "../../auth/AuthContext";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -437,23 +450,17 @@ export function GrilleCotisationsPage() {
         />
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-1">
-            <button
-              type="button"
+            <IconButton
               aria-label="Année précédente"
               onClick={() => setYear((y) => y - 1)}
-              className="flex h-10 w-10 items-center justify-center rounded-sm text-text hover:bg-surface-muted"
-            >
-              ‹
-            </button>
+              icon={<IconChevronLeft aria-hidden="true" className="h-5 w-5" />}
+            />
             <span className="w-14 text-center text-sm font-medium tabular-nums text-text">{year}</span>
-            <button
-              type="button"
+            <IconButton
               aria-label="Année suivante"
               onClick={() => setYear((y) => y + 1)}
-              className="flex h-10 w-10 items-center justify-center rounded-sm text-text hover:bg-surface-muted"
-            >
-              ›
-            </button>
+              icon={<IconChevronRight aria-hidden="true" className="h-5 w-5" />}
+            />
           </div>
           <SegmentedControl
             label="Filtre"
@@ -480,14 +487,12 @@ export function GrilleCotisationsPage() {
       {!helpDismissed ? (
         <div className="flex items-center justify-between gap-2 rounded-md bg-surface-muted px-3 py-2 text-xs text-text-muted sm:hidden">
           <span>Faites défiler vers la droite pour voir les autres mois, ou tournez votre téléphone.</span>
-          <button
-            type="button"
+          <IconButton
             onClick={() => setHelpDismissed(true)}
             aria-label="Fermer l'aide"
-            className="shrink-0 text-text-muted hover:text-text"
-          >
-            ×
-          </button>
+            icon={<IconClose aria-hidden="true" className="h-5 w-5" />}
+            className="shrink-0"
+          />
         </div>
       ) : null}
 

@@ -53,3 +53,10 @@ describe("getSportAccess", () => {
     expect(getSportAccess([{ role: "member" }]).canReportInjury).toBe(false);
   });
 });
+
+describe("getSportAccess - Assistant du Coach", () => {
+  it("donne à l'Assistant du Coach exactement les mêmes droits que le Coach", () => {
+    expect(getSportAccess([{ role: "assistant_coach" }])).toEqual(getSportAccess([{ role: "coach" }]));
+    expect(getSportAccess([{ role: "assistant_coach" }]).isCoach).toBe(true);
+  });
+});

@@ -6,7 +6,6 @@ import datetime
 from dataclasses import dataclass
 
 import pytest
-from django.contrib.auth.hashers import make_password
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -17,8 +16,6 @@ from apps.clubs.tests.factories import ClubSettingsFactory, MembershipFactory, M
 from apps.treasury.models import ContributionType, Due
 from apps.treasury.tests.factories import ContributionTypeFactory
 
-PIN = "2468"
-
 
 def client_for(user) -> APIClient:
     client = APIClient()
@@ -27,8 +24,8 @@ def client_for(user) -> APIClient:
     return client
 
 
-def make_member(club, *, roles=(), status=Membership.Status.ACTIVE, pin=PIN, **kwargs):
-    user = UserFactory(pin_hash=make_password(pin) if pin else "")
+def make_member(club, *, roles=(), status=Membership.Status.ACTIVE, **kwargs):
+    user = UserFactory()
     membership = MembershipFactory(club=club, user=user, status=status, **kwargs)
     for role in roles:
         MembershipRoleFactory(membership=membership, club=club, role=role, appointed_at=timezone.now())

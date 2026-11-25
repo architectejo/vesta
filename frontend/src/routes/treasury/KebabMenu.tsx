@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { IconButton } from "../../design-system";
+import { useClosingState } from "../../hooks/useClosingState";
+import { IconButton, IconMore } from "../../design-system";
 
 export interface KebabMenuItem {
   label: string;
@@ -15,6 +16,7 @@ export interface KebabMenuItem {
  */
 export function KebabMenu({ items, ariaLabel = "Plus d'actions" }: { items: KebabMenuItem[]; ariaLabel?: string }) {
   const [open, setOpen] = useState(false);
+  const { mounted, dataState, onAnimationEnd } = useClosingState(open, 200);
   const ref = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -42,16 +44,14 @@ export function KebabMenu({ items, ariaLabel = "Plus d'actions" }: { items: Keba
         aria-haspopup="true"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        icon={
-          <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
-            <circle cx="5" cy="12" r="1.6" />
-            <circle cx="12" cy="12" r="1.6" />
-            <circle cx="19" cy="12" r="1.6" />
-          </svg>
-        }
+        icon={<IconMore aria-hidden="true" className="h-5 w-5" />}
       />
-      {open ? (
-        <div className="absolute right-0 top-full z-10 mt-1 w-52 rounded-md border border-border bg-surface py-1 shadow-elevated">
+      {mounted ? (
+        <div
+          data-state={dataState}
+          onAnimationEnd={onAnimationEnd}
+          className="vesta-anim-menu absolute right-0 top-full z-10 mt-1 w-52 rounded-md border border-border bg-surface py-1 shadow-elevated"
+        >
           {items.map((item) => (
             <button
               key={item.label}

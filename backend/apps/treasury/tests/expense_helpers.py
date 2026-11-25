@@ -16,7 +16,6 @@ from django.utils import timezone
 
 from apps.treasury import services
 from apps.treasury.models import ContributionType, Due, Expense, Payment, Transaction
-from apps.treasury.tests.conftest import PIN
 from apps.treasury.tests.factories import ContributionTypeFactory
 
 PDF_CONTENT = b"%PDF-1.4\n%justificatif de test\n%%EOF\n"
@@ -104,7 +103,7 @@ def make_expense(ctx, category=None, *, amount="25", by=None, **kwargs) -> Expen
 
 
 def release(ctx, expense, *, by=None, now=None) -> Expense:
-    return services.release_expense(expense=expense, released_by=(by or ctx.vice_president).user, pin=PIN, now=now)
+    return services.release_expense(expense=expense, released_by=(by or ctx.vice_president).user, now=now)
 
 
 def days_ago(days: int) -> datetime.datetime:

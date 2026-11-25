@@ -69,11 +69,11 @@ export function Loader({
       <div aria-busy="true" aria-live="polite" className={["space-y-6", className].join(" ")}>
         <span className="sr-only">Chargement…</span>
         <div className="h-[3px] w-full overflow-hidden rounded-full bg-surface-muted">
-          <div className="h-full w-1/3 rounded-full bg-primary motion-safe:animate-pulse" />
+          <div className="h-full w-1/3 rounded-full bg-primary motion-safe:animate-progress-indeterminate" />
         </div>
         <div className="space-y-2">
           <Skeleton variant="row" className="max-w-xs" />
-          <div className="h-3 w-40 rounded bg-skeleton motion-safe:animate-pulse" />
+          <div className="h-3 w-40 rounded bg-skeleton motion-safe:animate-skeleton" />
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <Skeleton variant="card" />

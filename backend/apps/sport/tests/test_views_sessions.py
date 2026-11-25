@@ -200,3 +200,46 @@ def test_update_session_is_blocked_once_locked(ctx):
     response = client_for(ctx.coach.user).patch(url, payload)
     assert response.status_code == status.HTTP_409_CONFLICT
     assert response.data["code"] == "event_locked"
+
+
+def test_unassigned_reason_code_is_hidden_from_teammates_and_captain(ctx):
+    """D2 : le code de motif ne fuit pas aux coéquipiers/Capitaine ; Médecin/DS ne voient ni dette ni attente."""
+    session = SessionFactory(club=ctx.club, event__club=ctx.club, event__season=ctx.season)
+    for target in (ctx.debtor, ctx.pending_member):
+        services.mark_arrival(
+            session=session, membership=target, arrived_at=_arrived(session), marked_by=ctx.coach.user
+        )
+    url = reverse("sport:session-unassigned", args=[session.pk])
+
+    def entry(viewer, target):
+        response = client_for(viewer.user).get(url)
+        assert response.status_code == status.HTTP_200_OK
+        return next((i for i in response.data["cannot_play"] if i["membership_id"] == target.pk), None)
+
+    for viewer in (ctx.player, ctx.captain):
+        for target in (ctx.debtor, ctx.pending_member):
+            item = entry(viewer, target)
+            assert item is not None
+            assert item["reason"] == "Indisponible"
+            assert item["reason_code"] == "unavailable"
+    for viewer in (ctx.doctor, ctx.sports_director):
+        for target in (ctx.debtor, ctx.pending_member):
+            item = entry(viewer, target)
+            assert item is not None
+            assert item["reason"] == "Indisponible"
+            assert item["reason_code"] == "unavailable"
+    coach_item = entry(ctx.coach, ctx.debtor)
+    assert coach_item["reason_code"] == "debt"
+
+
+def test_superuser_unlock_without_support_session_is_403_not_500(ctx):
+    """D15 : hors Ghost Mode, refus explicite en français (pas de 500)."""
+    from apps.accounts.tests.factories import SuperuserFactory
+
+    session = SessionFactory(club=ctx.club, event__club=ctx.club, event__season=ctx.season)
+    access = str(RefreshToken.for_user(SuperuserFactory()).access_token)
+    response = APIClient().post(
+        reverse("sport:event-unlock", args=[session.pk]), {"reason": "Test"}, HTTP_AUTHORIZATION=f"Bearer {access}"
+    )
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert "session de support" in response.data["detail"]

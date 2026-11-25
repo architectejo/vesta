@@ -8,4 +8,6 @@ Guides courts, orientés tâches, pour les rôles principaux de Vesta. Basés su
 - [Joueur](guide-joueur.md)
 - [Médecin](guide-medecin.md)
 
+Guide d'exploitation (administration de l'hébergement) : [exploitation.md](exploitation.md).
+
 Rôles non couverts par un guide dédié (périmètre restreint, ou proches d'un rôle déjà documenté) : Vice-président (voir guide Président, section « Ce que vous partagez »), Directeur sportif (mercato, suivi sportif en lecture seule), Intendant (matériel, voir `docs/ecrans/logistique.md`), Capitaine (pointage et incidents, voir guide Coach). À compléter séparément si le client le demande.

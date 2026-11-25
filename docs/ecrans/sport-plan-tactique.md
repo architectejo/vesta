@@ -12,7 +12,7 @@ Le Coach prépare son onze sur un terrain : il choisit une formation, place les 
 
 Deux routes :
 
-- `/plans` : liste des plans, accessible à tous par l'entrée « Sport › Plan tactique » ;
+- `/vestiaire?onglet=plans` : liste des plans, onglet « Plans » du Vestiaire, accessible à tous par « Sport › Vestiaire › Plans » (l'ancienne route `/plans` y renvoie, `?plan=ID` conservé ; l'entrée « Plan tactique » de la barre latérale est supprimée, `remarques.md` l. 95) ;
 - `/plans/{id}/tableau` : éditeur, réservé au Coach.
 
 | Rôle | Liste et consultation | Édition (tableau noir) | Numéro et poste depuis le plan |
@@ -20,13 +20,13 @@ Deux routes :
 | Coach | Tous les plans, brouillons compris | É : créer, placer, dessiner, dupliquer, rattacher, publier, supprimer | É (matrice 2.4) |
 | Président, VP, DS, Trésorier, adjoint, Intendant, Capitaine, Médecin, Joueur | Plans **publiés** seulement, en lecture seule (2.4 : « L » ; 4.11 : « lecture seule, sans pouvoir le modifier ni le supprimer ») | — | — |
 
-Un non-Coach qui ouvre directement `/plans/{id}/tableau` est renvoyé vers `/plans`, où s'ouvre la modale « Plan » en lecture seule, si le plan est publié. Si le plan n'est pas publié, il voit le message standard « Vous n'avez pas accès à cette action. ».
+Un non-Coach qui ouvre directement `/plans/{id}/tableau` est renvoyé vers `/vestiaire?onglet=plans`, où s'ouvre la modale « Plan » en lecture seule, si le plan est publié. Si le plan n'est pas publié, il voit le message standard « Vous n'avez pas accès à cette action. ».
 
 Brouillons réservés au Coach : c'est une **position provisoire** (voir le §8, point ouvert 1).
 
-## 3. Page « Plans tactiques » (`/plans`)
+## 3. Onglet « Plans » du Vestiaire (`/vestiaire?onglet=plans`)
 
-**En-tête** : titre « Plans tactiques » ; contexte « {nom du club} · Saison {saison} ». Action principale (Coach) : « Nouveau plan ». Aucune action pour les autres rôles.
+**En-tête** (sous les onglets « Aujourd'hui » / « Plans ») : titre « Plans tactiques » ; contexte « {nom du club} · Saison {saison} ». Action principale (Coach et Assistant) : « Nouveau plan ». Aucune action pour les autres rôles, Capitaine et Président compris (lecture seule, position provisoire à valider par le client). Voir `sport-vestiaire.md` §10.
 
 Sections :
 
@@ -248,7 +248,7 @@ Le 4.11 exige un plan utilisable sur smartphone **en portrait et en paysage**. L
 
 - **≥ 768 px** : terrain horizontal, banc en colonne à droite (280 px), barre d'outils en colonne à gauche.
 - **≥ 1024 px** : barre latérale de l'application visible (248 px) ; en-tête complet avec la ligne de contexte ; terrain horizontal d'au plus 760 px de large ; colonne de droite de 300 px avec deux onglets, « Banc » et « Consignes ». La souris déplace un pion sans appui long ; au survol, un pion affiche le nom complet en info-bulle.
-- **Page « Plans tactiques »** : une seule carte, d'au plus 800 px de large. La modale « Plan » est centrée, en taille `lg` (800 px), avec le terrain à gauche (60 %) et les consignes à droite (40 %).
+- **Onglet « Plans »** : une seule carte, d'au plus 800 px de large. La modale « Plan » est centrée, en taille `lg` (800 px), avec le terrain à gauche (60 %) et les consignes à droite (40 %).
 
 ## 8. Décisions appliquées et points ouverts
 

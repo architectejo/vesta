@@ -1,11 +1,10 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { loginAs } from "./support/auth";
 import { runShell } from "./support/shell";
-import { pickPlayerFromSearch, fillPin } from "./support/ui";
+import { pickPlayerFromSearch } from "./support/ui";
 import {
   CLUB_SLUG,
   ACCOUNTS,
-  DEMO_ASSISTANT_PIN,
   DEBTOR,
   LATE_ARRIVAL_CANDIDATE,
   SPORTS_DIRECTOR_CANDIDATE,
@@ -21,11 +20,11 @@ import {
  * `seed_simulation`). Les 10 points du 9.3 sont repris un par un, dans
  * l'ordre, chacun avec une VRAIE action de navigateur là où c'est
  * possible avec des identifiants réellement disponibles au test (voir
- * `e2e/support/auth.ts`) ; là où une étape exige un code PIN d'un compte
- * réel dont le test ne connaît pas le PIN (Président/Vice-président),
- * l'étape est arrêtée juste avant la saisie du PIN et le point est
- * documenté comme non complété en direct (même limitation, pour la même
- * raison, que celle déjà assumée explicitement par `seed_simulation.py`).
+ * `e2e/support/auth.ts`). Il n'existe plus de code d'authentification
+ * secondaire (décision du 11/10/2026, CLAUDE.md règle 7, CDC 7.2) : les
+ * actions sensibles (signature du parrain, libération d'une dépense,
+ * signature du PV, ouverture de la caisse) se valident par un bouton puis
+ * une modale de confirmation, que ce parcours joue jusqu'au bout.
  *
  * `mode: "serial"` : les étapes se nourrissent les unes des autres
  * exactement comme un vrai parcours de recette (ex. l'étape 4 regroupe le
@@ -75,7 +74,7 @@ test.beforeAll(async ({ browser }) => {
 from apps.accounts.models import User, TermsVersion
 from apps.accounts import services as accounts_services
 
-user = User.objects.get(email="demo.tresorier.adjoint@simulation.vesta.local")
+user = User.objects.get(email="tresorier.adjoint@example.org")
 if user.must_change_password:
     accounts_services.change_forced_password(
         user=user,
@@ -127,10 +126,10 @@ test("1. le club est créé avec des joueurs et des cotisations réellement impo
   await expect(president.getByRole("heading", { name: "Comité et bureau" })).toBeVisible();
   // Recherche un joueur réellement importé (pas un joueur de démonstration
   // ajouté par ce test) dans l'effectif.
-  await president.getByPlaceholder("Rechercher un joueur").fill("Bisimwa");
+  await president.getByPlaceholder("Rechercher un joueur").fill("Bokele");
   // Le filtre de la table est debouncé côté client avant la requête API.
   await president.waitForTimeout(500);
-  await expect(president.getByText("ALAIN BISIMWA", { exact: false }).first()).toBeVisible({ timeout: 15_000 });
+  await expect(president.getByText("ALAIN BOKELE", { exact: false }).first()).toBeVisible({ timeout: 15_000 });
 
   await president.goto("/tresorerie/grille");
   await expect(president.getByRole("heading", { name: "Grille des cotisations" })).toBeVisible();
@@ -162,7 +161,7 @@ test("2. bureau, Coach, Médecin et Capitaine sont en place ; une nomination vac
   // par une exécution précédente) : ne re-tente la nomination que si le
   // poste est encore vacant.
   const alreadyAppointed = await president
-    .getByText("POPAUL KIZUNGU", { exact: false })
+    .getByText("POPAUL KIESE", { exact: false })
     .first()
     .waitFor({ state: "visible", timeout: 8_000 })
     .then(() => true)
@@ -171,13 +170,13 @@ test("2. bureau, Coach, Médecin et Capitaine sont en place ; une nomination vac
     await president.getByRole("button", { name: /Directeur sportif/ }).click();
     const modal = president.getByRole("dialog");
     await expect(modal).toBeVisible();
-    await pickPlayerFromSearch(president, modal, "Kizungu");
+    await pickPlayerFromSearch(president, modal, "Kiese");
     await modal.getByRole("button", { name: "Nommer" }).click();
     await expect(president.getByText(/est maintenant Directeur sportif|nommé/i)).toBeVisible({ timeout: 20_000 });
   }
 
   await president.goto("/club/comite");
-  await expect(president.getByText("POPAUL KIZUNGU", { exact: false })).toBeVisible({ timeout: 20_000 });
+  await expect(president.getByText("POPAUL KIESE", { exact: false })).toBeVisible({ timeout: 20_000 });
 });
 
 // ---------------------------------------------------------------------------
@@ -200,22 +199,49 @@ test("3. un nouveau joueur ajouté avec parrain apparaît « En attente »", asy
   // `<select>` pour un joueur ; ici ce n'est pas un joueur mais le choix
   // reste rendu en boutons, pas en `<select>` natif).
   await modal.getByRole("group", { name: "Poste" }).getByRole("button", { name: "Milieu" }).click();
-  await pickPlayerFromSearch(president, modal, "Bisimwa"); // parrain
+  await pickPlayerFromSearch(president, modal, "Bokele"); // parrain
   await modal.getByRole("button", { name: "Ajouter le joueur" }).click();
 
   await expect(president.getByText(/ajouté/i)).toBeVisible({ timeout: 20_000 });
 
   // Vérifie le statut réel dans l'effectif : « En attente » (adhésion pas
-  // encore payée/signée). Le paiement des frais d'adhésion et la
-  // signature PIN du parrain (CDC 4.3) ne sont volontairement PAS
-  // complétés ici : ils exigent le code PIN réel du parrain choisi
-  // (un compte réel du club pilote), inconnu de ce test — même principe
-  // que documenté ailleurs pour les actions protégées par PIN d'un
-  // compte réel (voir compte rendu).
+  // encore payée/signée).
   await president.goto("/club/comite");
   await president.getByPlaceholder("Rechercher un joueur").fill(`Test${stamp}`);
   const row = president.getByText(`Test${stamp}`, { exact: false });
   await expect(row).toBeVisible({ timeout: 20_000 });
+
+  // Étape 2 de l'adhésion (CDC 4.3) : le Trésorier enregistre les frais
+  // d'adhésion (bouton, puis modale de confirmation « Valider ce paiement
+  // de … ? »), ce qui génère la fiche et prévient le parrain.
+  const treasurer = await actorPage("treasurer", ACCOUNTS.treasurer);
+  await treasurer.goto("/club/comite");
+  await treasurer.getByPlaceholder("Rechercher un joueur").fill(`Test${stamp}`);
+  await treasurer.getByText(`Test${stamp}`, { exact: false }).first().click();
+  await treasurer.getByRole("button", { name: "Enregistrer les frais d'adhésion" }).click();
+  const feeModal = treasurer.getByRole("dialog", { name: /Frais d'adhésion de/ });
+  await expect(feeModal).toBeVisible({ timeout: 20_000 });
+  await feeModal.getByLabel("Montant").fill("5");
+  await feeModal.getByRole("button", { name: "Enregistrer" }).click();
+  const feeConfirm = treasurer.getByRole("dialog", { name: /Valider ce paiement de/ });
+  await expect(feeConfirm).toBeVisible();
+  await feeConfirm.getByRole("button", { name: "Valider", exact: true }).click();
+  await expect(treasurer.getByText("Frais d'adhésion enregistrés.")).toBeVisible({ timeout: 20_000 });
+
+  // Étape 3 : le parrain (Alain Bokele) signe la fiche, par un bouton puis
+  // une modale de confirmation.
+  const sponsor = await actorPage("sponsor", ACCOUNTS.captain);
+  await sponsor.goto("/club/comite");
+  await sponsor.getByPlaceholder("Rechercher un joueur").fill(`Test${stamp}`);
+  await sponsor.getByText(`Test${stamp}`, { exact: false }).first().click();
+  await sponsor.getByRole("button", { name: "Signer la fiche d'adhésion" }).click();
+  const signModal = sponsor.getByRole("dialog", { name: /Fiche d'adhésion de/ });
+  await expect(signModal).toBeVisible({ timeout: 20_000 });
+  await signModal.getByRole("button", { name: "Signer la fiche" }).click();
+  const signConfirm = sponsor.getByRole("dialog", { name: /Signer la fiche d'adhésion de/ });
+  await expect(signConfirm).toBeVisible();
+  await signConfirm.getByRole("button", { name: "Signer la fiche" }).click();
+  await expect(sponsor.getByText(/est maintenant inscrit/)).toBeVisible({ timeout: 20_000 });
 });
 
 // ---------------------------------------------------------------------------
@@ -276,7 +302,7 @@ with active_club(club):
   // Pointage du débiteur (action réelle de Coach) : condition pour
   // apparaître dans la répartition d'équipe (10.2 n° 29 : « il peut être
   // pointé mais reste en zone Non répartis »).
-  await coach.getByPlaceholder("Nom ou numéro").fill("Mburugu");
+  await coach.getByPlaceholder("Nom ou numéro").fill("Matondo");
   const arriveButton = coach.getByRole("button", { name: "Arrivé" }).first();
   if (await arriveButton.isVisible({ timeout: 5_000 }).catch(() => false)) {
     await arriveButton.click();
@@ -311,17 +337,17 @@ with active_club(club):
 
     // La session de caisse simulée (seed_simulation) date du 14/09/2026 :
     // expirée par rapport au "maintenant" réel du test -> une nouvelle
-    // session doit s'ouvrir avec le code PIN (CDC 4.4.5, 10.2 n° 22).
-    const pinDialog = assistant.getByRole("dialog").filter({ hasText: "Ouvrir une session de caisse" });
-    if (await pinDialog.isVisible({ timeout: 5_000 }).catch(() => false)) {
-      await fillPin(assistant, DEMO_ASSISTANT_PIN);
-      await assistant.getByRole("button", { name: "Ouvrir la session" }).click();
+    // session doit s'ouvrir par une modale de confirmation (CDC 4.4.5,
+    // 10.2 n° 22).
+    const openSessionDialog = assistant.getByRole("dialog").filter({ hasText: "Ouvrir une session de caisse" });
+    if (await openSessionDialog.isVisible({ timeout: 5_000 }).catch(() => false)) {
+      await openSessionDialog.getByRole("button", { name: "Ouvrir la session" }).click();
     }
 
     const cashModal = assistant.getByRole("dialog").filter({ hasText: "Caisse Terrain Express" });
     await expect(cashModal).toBeVisible({ timeout: 20_000 });
 
-    await pickPlayerFromSearch(assistant, cashModal, "Mburugu");
+    await pickPlayerFromSearch(assistant, cashModal, "Matondo");
     // Important : sans choix explicite, la Caisse encaisse par défaut sur
     // « Sa cotisation mensuelle » (le type MENSUEL par défaut du joueur),
     // pas forcément sur le type qui porte la dette réelle. Le débiteur de
@@ -398,7 +424,7 @@ test("5. un retardataire est compté absent puis placé manuellement en équipe,
   // bien après l'heure limite fixée pour cette séance, ce pointage est
   // automatiquement compté « en retard » par le service (CDC 4.7, 10.2
   // n° 6/25) — pas besoin de le forcer.
-  await coach.getByPlaceholder("Nom ou numéro").fill("Kasusula");
+  await coach.getByPlaceholder("Nom ou numéro").fill("Nsimba");
   const arriveButton = coach.getByRole("button", { name: "Arrivé" }).first();
   if (await arriveButton.isVisible({ timeout: 5_000 }).catch(() => false)) {
     await arriveButton.click();
@@ -424,7 +450,7 @@ test("5. un retardataire est compté absent puis placé manuellement en équipe,
     await evalButton.click();
     const evalModal = coach.getByRole("dialog").filter({ hasText: "Évaluer un joueur" });
     await expect(evalModal).toBeVisible({ timeout: 20_000 });
-    await pickPlayerFromSearch(coach, evalModal, "Kasusula");
+    await pickPlayerFromSearch(coach, evalModal, "Nsimba");
     await evalModal.getByLabel("Note globale (/10)").fill("8");
     await evalModal.getByRole("button", { name: "Enregistrer" }).click();
     await expect(coach.getByText(/valuation enregistr/i)).toBeVisible({ timeout: 20_000 }).catch(() => undefined);
@@ -445,7 +471,7 @@ test("6. cartons et blessure sont enregistrés sur la feuille de match", async (
   // Carton.
   await coach.getByRole("button", { name: "Ajouter un carton" }).click();
   const cardModal = coach.getByRole("dialog").filter({ hasText: "Signaler un incident" });
-  await pickPlayerFromSearch(coach, cardModal, "Kasusula");
+  await pickPlayerFromSearch(coach, cardModal, "Nsimba");
   await cardModal.getByRole("group", { name: "Type" }).getByRole("button", { name: "Carton jaune" }).click();
   await cardModal.getByRole("button", { name: "Enregistrer" }).click();
   await expect(coach.getByText(/enregistré/i)).toBeVisible({ timeout: 20_000 });
@@ -453,7 +479,7 @@ test("6. cartons et blessure sont enregistrés sur la feuille de match", async (
   // Blessure.
   await coach.getByRole("button", { name: "Déclarer une blessure" }).click();
   const injuryModal = coach.getByRole("dialog").filter({ hasText: "Déclarer une blessure" });
-  await pickPlayerFromSearch(coach, injuryModal, "Kizungu");
+  await pickPlayerFromSearch(coach, injuryModal, "Kiese");
   await injuryModal.getByLabel("Minute").fill("60");
   await injuryModal.getByLabel(/[Cc]irconstances/).fill("Choc avec un adversaire, douleur au genou (recette 9.3).");
   await injuryModal.getByRole("button", { name: "Déclarer" }).click();
@@ -462,17 +488,16 @@ test("6. cartons et blessure sont enregistrés sur la feuille de match", async (
 
 // ---------------------------------------------------------------------------
 // 7. Dépense du vestiaire non justifiée : blocage, tentative de
-//    libération (la saisie finale du PIN Président/VP n'est pas
-//    complétée en direct — voir compte rendu).
+//    libération jouée jusqu'au bout (bouton puis modale de confirmation).
 //
 // Écart signalé (compte rendu) : `ExpenseDetailModal.tsx` ne montre les
 // boutons « Valider et libérer »/« Refuser »/« Libérer par dérogation »
 // que si `capabilities.can_validate_expenses` est vrai (Président/VP) --
 // le Trésorier, qui SAISIT la dépense, ne peut PAS la valider lui-même
 // (CDC 2.4, séparation des tâches) : cette étape est donc jouée par le
-// Président, seul rôle capable d'aller jusqu'au code PIN.
+// Président.
 // ---------------------------------------------------------------------------
-test("7. le Président peut tenter de libérer la dépense en attente (jusqu'au code PIN)", async () => {
+test("7. le Président libère la dépense en attente après confirmation", async () => {
   const president = await actorPage("president", ACCOUNTS.president);
   await president.goto("/tresorerie/depenses");
   await expect(president.getByRole("heading", { name: "Dépenses" })).toBeVisible({ timeout: 20_000 });
@@ -490,25 +515,29 @@ test("7. le Président peut tenter de libérer la dépense en attente (jusqu'au 
     // la dérogation (Président, motif obligatoire) reste possible.
     await expect(releaseButton).toBeDisabled();
     await derogationButton.click();
-    await president.getByLabel("Motif de la dérogation").fill("Vérification recette CDC 9.3 (test-engineer).");
-    await president.getByRole("button", { name: "Continuer" }).click();
-  } else {
+    const reasonModal = president.getByRole("dialog", { name: "Libérer par dérogation" });
+    await reasonModal.getByLabel("Motif de la dérogation").fill("Vérification recette CDC 9.3 (test-engineer).");
+    await reasonModal.getByRole("button", { name: "Continuer" }).click();
+    const confirm = president.getByRole("dialog", { name: /par dérogation \?/ });
+    await expect(confirm).toBeVisible({ timeout: 10_000 });
+    await confirm.getByRole("button", { name: "Confirmer la dérogation" }).click();
+    await expect(president.getByText("Dépense libérée par dérogation.")).toBeVisible({ timeout: 20_000 });
+  } else if (await releaseButton.isVisible({ timeout: 2_000 }).catch(() => false)) {
     await releaseButton.click();
+    const confirm = president.getByRole("dialog", { name: /Libérer cette dépense de/ });
+    await expect(confirm).toBeVisible({ timeout: 10_000 });
+    await confirm.getByRole("button", { name: "Libérer la dépense" }).click();
+    await expect(president.getByText(/Dépense libérée/)).toBeVisible({ timeout: 20_000 });
+  } else {
+    // Déjà libérée par une exécution précédente de ce parcours : aucune
+    // action n'est proposée, l'état final est seulement vérifié.
+    await expect(expenseModal.getByText("Libérée le", { exact: false })).toBeVisible();
   }
-
-  // Dans les deux cas, la dernière étape avant l'écriture financière est
-  // le code PIN (CLAUDE.md règle n°7, CDC 7.2) : on vérifie qu'il est
-  // bien exigé, sans le saisir (PIN réel du Président inconnu de ce
-  // test) -- puis on annule proprement.
-  await expect(president.getByText("Confirmer avec votre code PIN", { exact: false })).toBeVisible({
-    timeout: 10_000,
-  });
-  await president.keyboard.press("Escape").catch(() => undefined);
 });
 
 // ---------------------------------------------------------------------------
-// 8. Assemblée générale avec décision sur les cotisations (signature du PV
-//    non complétée en direct — voir compte rendu).
+// 8. Assemblée générale avec décision sur les cotisations, puis signature
+//    du PV (bouton suivi d'une modale de confirmation).
 // ---------------------------------------------------------------------------
 test("8. l'assemblée générale montre son quorum, sa décision et son PV en brouillon", async () => {
   const president = await actorPage("president", ACCOUNTS.president);
@@ -532,7 +561,18 @@ test("8. l'assemblée générale montre son quorum, sa décision et son PV en br
   await expect(assemblyModal.getByText(/[Aa]dopté/)).toBeVisible();
   await assemblyModal.getByRole("tab", { name: "Procès-verbal" }).click();
   await expect(assemblyModal.getByText(/[Bb]rouillon/)).toBeVisible();
-  // Signature PIN Président (+ VP) non tentée : PIN réel inconnu du test.
+
+  // Signature du PV par le Président. Idempotent : si le Président a déjà
+  // signé lors d'une exécution précédente, le bouton n'est plus proposé.
+  const signButton = assemblyModal.getByRole("button", { name: "Signer le PV" });
+  if (await signButton.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    await signButton.click();
+    const confirm = president.getByRole("dialog", { name: /Signer le procès-verbal de l'AG/ });
+    await expect(confirm).toBeVisible({ timeout: 10_000 });
+    await confirm.getByRole("button", { name: "Signer le PV" }).click();
+    await expect(confirm).toBeHidden({ timeout: 20_000 });
+  }
+  await expect(assemblyModal.getByText(/Président : .*signé le/)).toBeVisible({ timeout: 20_000 });
 });
 
 // ---------------------------------------------------------------------------

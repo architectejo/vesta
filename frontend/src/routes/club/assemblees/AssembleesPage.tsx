@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { useDeepLink } from "../../../hooks/useDeepLink";
 import { listAssemblies, type Assembly } from "../../../api/assemblies";
 import { getMyProfile } from "../../../api/clubs";
-import { Button, EmptyState, Skeleton, StatusBadge } from "../../../design-system";
+import { Button, EmptyState, IconButton, IconMore, Skeleton, StatusBadge } from "../../../design-system";
+import { useClosingState } from "../../../hooks/useClosingState";
 import { AssemblyDetailModal } from "./AssemblyDetailModal";
 import { assemblyCardStatus, assemblyTypeLabel, formatDateLong, formatTimeShort } from "./assembliesFormat";
 import { ConveneAssemblyWizard } from "./ConveneAssemblyWizard";
@@ -57,15 +59,20 @@ function AssemblyCard({ assembly, onOpen }: { assembly: Assembly; onOpen: () => 
 export function AssembleesPage() {
   const [openAssemblyId, setOpenAssemblyId] = useState<number | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
+  // Lien depuis une notification de convocation ou de PV (`?assemblee=<id>`).
+  useDeepLink("assemblee", setOpenAssemblyId);
   const [quorumOpen, setQuorumOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const { mounted: menuMounted, dataState: menuDataState, onAnimationEnd: onMenuAnimationEnd } =
+    useClosingState(menuOpen, 200);
   const [pastLimit, setPastLimit] = useState(5);
+  const [upcomingLimit, setUpcomingLimit] = useState(10);
 
   const profileQuery = useQuery({ queryKey: ["profile", "me"], queryFn: getMyProfile, staleTime: 60_000 });
 
   const upcomingQuery = useQuery({
-    queryKey: ["assemblies", "scheduled"],
-    queryFn: () => listAssemblies({ status: "scheduled", limit: 10 }),
+    queryKey: ["assemblies", "scheduled", upcomingLimit],
+    queryFn: () => listAssemblies({ status: "scheduled", limit: upcomingLimit }),
   });
   const pastQuery = useQuery({
     queryKey: ["assemblies", "held", pastLimit],
@@ -78,10 +85,26 @@ export function AssembleesPage() {
   // pour l'affichage du bouton, jamais pour une décision métier (§2 de la
   // spec : « l'interface n'affiche un bouton que si le droit correspondant
   // est présent »). Le clic réel est toujours vérifié côté API.
-  const canManage =
-    upcomingQuery.data?.results.some((a) => a.can_manage) ??
-    pastQuery.data?.results.some((a) => a.can_manage) ??
-    (profileQuery.data?.roles.some((r) => r.role === "president" || r.role === "vice_president") ?? false);
+  // Les deux sources sont cumulées (OU), jamais chaînées : une liste vide
+  // renvoie `false` et non `undefined`, ce qui faisait disparaître le bouton
+  // dès que « À venir » arrivait vide après l'avoir affiché via le profil.
+  const apiAllowsManage =
+    (upcomingQuery.data?.results.some((a) => a.can_manage) ?? false) ||
+    (pastQuery.data?.results.some((a) => a.can_manage) ?? false);
+  const roleAllowsManage =
+    profileQuery.data?.roles.some((r) => r.role === "president" || r.role === "vice_president") ?? false;
+  const canManage = apiAllowsManage || roleAllowsManage;
+  // « Convoquer » (Président, VP, Secrétaire — 10.3 n° 170) : même principe,
+  // mais piloté par `can_convene` renvoyé par l'API, jamais par une liste de
+  // rôles recopiée ; le repli sur le profil ne sert qu'à l'affichage quand
+  // aucune AG n'existe encore. Le « Seuil de quorum » reste lié à `canManage`
+  // (le Secrétaire ne gère pas le quorum).
+  const apiAllowsConvene =
+    (upcomingQuery.data?.results.some((a) => a.can_convene) ?? false) ||
+    (pastQuery.data?.results.some((a) => a.can_convene) ?? false);
+  const roleAllowsConvene =
+    profileQuery.data?.roles.some((r) => ["president", "vice_president", "secretary"].includes(r.role)) ?? false;
+  const canConvene = apiAllowsConvene || roleAllowsConvene || canManage;
 
   return (
     <div className="space-y-4">
@@ -91,26 +114,26 @@ export function AssembleesPage() {
           <p className="text-sm text-text-muted">{profileQuery.data?.club.name ?? ""}</p>
         </div>
         <div className="flex items-center gap-2">
-          {canManage ? (
+          {canConvene ? (
             <Button variant="primary" size="sm" onClick={() => setWizardOpen(true)}>
               Convoquer une AG
             </Button>
           ) : null}
           {canManage ? (
             <div className="relative">
-              <Button
-                variant="secondary"
-                size="sm"
+              <IconButton
+                aria-label="Plus d'actions"
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
                 onClick={() => setMenuOpen((v) => !v)}
-              >
-                …
-              </Button>
-              {menuOpen ? (
+                icon={<IconMore aria-hidden="true" className="h-5 w-5" />}
+              />
+              {menuMounted ? (
                 <div
                   role="menu"
-                  className="absolute right-0 z-10 mt-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated"
+                  data-state={menuDataState}
+                  onAnimationEnd={onMenuAnimationEnd}
+                  className="vesta-anim-menu absolute right-0 z-10 mt-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated"
                 >
                   <button
                     type="button"
@@ -137,16 +160,25 @@ export function AssembleesPage() {
         ) : upcomingQuery.isError ? (
           <EmptyState variant="error" actionLabel="Réessayer" onAction={() => void upcomingQuery.refetch()} />
         ) : upcomingQuery.data && upcomingQuery.data.results.length > 0 ? (
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            {upcomingQuery.data.results.map((assembly) => (
-              <AssemblyCard key={assembly.id} assembly={assembly} onOpen={() => setOpenAssemblyId(assembly.id)} />
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+              {upcomingQuery.data.results.map((assembly) => (
+                <AssemblyCard key={assembly.id} assembly={assembly} onOpen={() => setOpenAssemblyId(assembly.id)} />
+              ))}
+            </div>
+            {upcomingQuery.data.next_offset !== null ? (
+              <div className="mt-3">
+                <Button variant="secondary" size="sm" onClick={() => setUpcomingLimit((n) => n + 10)}>
+                  Voir plus
+                </Button>
+              </div>
+            ) : null}
+          </>
         ) : (
           <EmptyState
             message="Aucune assemblée prévue."
-            actionLabel={canManage ? "Convoquer une AG" : undefined}
-            onAction={canManage ? () => setWizardOpen(true) : undefined}
+            actionLabel={canConvene ? "Convoquer une AG" : undefined}
+            onAction={canConvene ? () => setWizardOpen(true) : undefined}
           />
         )}
       </section>

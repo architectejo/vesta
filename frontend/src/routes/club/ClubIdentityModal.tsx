@@ -6,6 +6,7 @@ import {
   Banner,
   Button,
   Modal,
+  NumberField,
   SegmentedControl,
   TextField,
   useToast,
@@ -22,10 +23,13 @@ export function ClubIdentityModal({
   identity,
   onClose,
   onUpdated,
+  canEditDebtTolerance = true,
 }: {
   identity: ClubIdentity;
   onClose: () => void;
   onUpdated: () => void;
+  /** Seul le Président modifie la tolérance de dette (l'API refuse les autres rôles). */
+  canEditDebtTolerance?: boolean;
 }) {
   const { showToast } = useToast();
   const [name, setName] = useState(identity.name);
@@ -36,6 +40,9 @@ export function ClubIdentityModal({
   const [currency, setCurrency] = useState<"USD" | "CDF">(identity.currency);
   const [timezone, setTimezone] = useState(identity.timezone);
   const [paymentLinkUrl, setPaymentLinkUrl] = useState(identity.payment_link_url ?? "");
+  const [debtToleranceDays, setDebtToleranceDays] = useState<number | null>(
+    identity.debt_tolerance_days ?? 0,
+  );
   const [logo, setLogo] = useState<File | null>(null);
   const [logoPreviewUrl, setLogoPreviewUrl] = useState<string | null>(null);
   const [preparingLogo, setPreparingLogo] = useState(false);
@@ -64,6 +71,7 @@ export function ClubIdentityModal({
     currency !== identity.currency ||
     timezone !== identity.timezone ||
     paymentLinkUrl !== (identity.payment_link_url ?? "") ||
+    (canEditDebtTolerance && debtToleranceDays !== (identity.debt_tolerance_days ?? 0)) ||
     logo !== null;
 
   // Aperçu du fichier nouvellement choisi (FileField + aperçu, §4.1). Révoqué
@@ -136,6 +144,10 @@ export function ClubIdentityModal({
       setErrors({ name: "Ce champ est obligatoire." });
       return;
     }
+    if (canEditDebtTolerance && debtToleranceDays === null) {
+      setErrors({ debt_tolerance_days: "Saisissez un nombre de jours entre 0 et 90." });
+      return;
+    }
     setSubmitting(true);
     try {
       await updateClubIdentity({
@@ -148,6 +160,7 @@ export function ClubIdentityModal({
         currency: identity.currency_locked ? undefined : currency,
         timezone,
         payment_link_url: paymentLinkUrl,
+        debt_tolerance_days: canEditDebtTolerance ? (debtToleranceDays ?? undefined) : undefined,
       });
       showToast("Identité du club mise à jour.");
       onUpdated();
@@ -284,6 +297,22 @@ export function ClubIdentityModal({
           error={errors.payment_link_url}
           help="Saisissez une adresse commençant par https://"
         />
+        {canEditDebtTolerance ? (
+          <NumberField
+            label="Jours de tolérance avant qu'un retard devienne une dette"
+            value={debtToleranceDays}
+            onChange={setDebtToleranceDays}
+            min={0}
+            max={90}
+            help="0 = la dette naît le lendemain de l'échéance"
+            error={errors.debt_tolerance_days}
+          />
+        ) : (
+          <div>
+            <p className="mb-1 text-sm font-medium text-text">Tolérance de dette</p>
+            <p className="text-sm text-text-muted">{identity.debt_tolerance_days ?? 0} jour(s)</p>
+          </div>
+        )}
       </div>
     </Modal>
   );

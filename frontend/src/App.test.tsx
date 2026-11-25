@@ -42,11 +42,12 @@ describe("App", () => {
     expect(screen.getByRole("heading", { name: "Connexion" })).toBeInTheDocument();
   });
 
-  it("affiche la page de démonstration du design system sur /dev/design-system", () => {
+  it("n'expose pas la page de démonstration du design system à un visiteur anonyme", () => {
     renderApp("/dev/design-system");
+    expect(screen.getByRole("heading", { name: "Connexion" })).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Design system Vesta — démonstration interne" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("heading", { name: "Design system Vesta — démonstration interne" }),
+    ).not.toBeInTheDocument();
   });
 
   it("affiche un état neutre pour une route inconnue", () => {

@@ -3,7 +3,7 @@
  * directement dans `backend/apps/clubs/{urls,views,serializers}.py`.
  */
 
-import { apiGet, apiPatch, apiPost } from "./client";
+import { apiDownload, apiGet, apiPatch, apiPost } from "./client";
 import type { TermsVersion } from "./auth";
 import type { PlayerSearchResult } from "../design-system/components/PlayerSearch";
 
@@ -122,6 +122,10 @@ export interface MyProfile {
   membership_status_label: string;
   roles: Array<{ role: string; label: string }>;
   email_notifications_enabled: boolean;
+  /** Destination d'arrivée décidée par l'API. */
+  default_landing?: "board_dashboard" | "home";
+  /** Droits de page calculés par l'API (jamais déduits d'un rôle côté interface). */
+  capabilities?: { can_view_board_dashboard?: boolean };
 }
 
 export function getMyProfile() {
@@ -146,6 +150,8 @@ export interface ClubIdentity {
   timezone: string;
   payment_link_url?: string;
   payment_link_configured?: boolean;
+  /** Jours de tolérance avant qu'un retard devienne une dette (0 à 90). */
+  debt_tolerance_days?: number;
 }
 
 export function getClubIdentity() {
@@ -162,6 +168,8 @@ export interface ClubIdentityUpdateInput {
   currency?: "USD" | "CDF";
   timezone?: string;
   payment_link_url?: string;
+  /** Président seul (403 sinon) ; entier 0 à 90. */
+  debt_tolerance_days?: number;
 }
 
 export function updateClubIdentity(input: ClubIdentityUpdateInput) {
@@ -195,6 +203,8 @@ export interface PlayerPublicCard {
   membership_status_label: string;
   joined_on: string | null;
   roles: Array<{ role: string; label: string }>;
+  /** Booléen sans motif, servi à tous les rôles (10.2 n° 16). */
+  is_unavailable?: boolean;
 }
 
 export function getPlayerCard(membershipId: number) {
@@ -224,6 +234,8 @@ export interface ClubPlayerListItem {
   membership_status: ClubPlayerMembershipStatus;
   membership_status_label: string;
   roles: Array<{ role: string; label: string }>;
+  /** Booléen sans motif, servi à tous les rôles (10.2 n° 16). */
+  is_unavailable?: boolean;
 }
 
 export interface ListClubPlayersParams {
@@ -306,6 +318,14 @@ export function revokeRole(params: { role_id: number; reason?: string }) {
   return apiPost<MembershipRole>("/clubs/roles/revoke/", params);
 }
 
+export function appointAssistantCoach(params: { membership_id: number }) {
+  return apiPost<MembershipRole>("/clubs/roles/assistant-coach/appoint/", params);
+}
+
+export function revokeAssistantCoach(params: { role_id: number; reason?: string }) {
+  return apiPost<MembershipRole>("/clubs/roles/assistant-coach/revoke/", params);
+}
+
 export function appointCaptain(params: { membership_id: number }) {
   return apiPost<MembershipRole>("/clubs/roles/captain/appoint/", params);
 }
@@ -370,13 +390,33 @@ export interface AddPlayerWithSponsorInput {
   requested_contribution_type_label?: string;
 }
 
+export type SponsorDecision = "pending" | "signed" | "refused";
+export type FeeDisposition = "refunded" | "kept" | "";
+
+export interface ApplicationPerson {
+  membership_id: number;
+  first_name: string;
+  last_name: string;
+  photo: string | null;
+  position_label: string;
+  jersey_number: number | null;
+}
+
 export interface MembershipApplication {
   id: number;
   membership_id: number;
-  application_pdf_file: string | null;
+  /** Joueur concerné et parrain actuel (lecture seule, servis par l'API). */
+  player?: ApplicationPerson | null;
+  sponsor?: ApplicationPerson | null;
+  membership_status?: "pending" | "active" | "departed";
+  membership_fee_paid?: boolean;
+  membership_fee_amount?: string | null;
+  membership_fee_paid_on?: string | null;
+  /** Adresse de la vue authentifiée de la fiche PDF (jamais une URL publique). */
+  application_pdf_url: string | null;
   generated_at: string | null;
   sponsor_notified_at: string | null;
-  sponsor_decision: string;
+  sponsor_decision: SponsorDecision;
   sponsor_signed_by_id: number | null;
   sponsor_signed_at: string | null;
   sponsor_refused_reason: string;
@@ -386,7 +426,7 @@ export interface MembershipApplication {
   cancelled_by_id: number | null;
   cancelled_reason: string;
   membership_fee_payment_id: number | null;
-  membership_fee_disposition: string;
+  membership_fee_disposition: FeeDisposition;
 }
 
 export function addPlayerWithSponsor(input: AddPlayerWithSponsorInput) {
@@ -394,4 +434,73 @@ export function addPlayerWithSponsor(input: AddPlayerWithSponsorInput) {
     "/clubs/players/add/",
     input,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Parcours d'adhésion et de parrainage (CDC 4.3 ; club-accueil.md §5.4, §5.5)
+// ---------------------------------------------------------------------------
+
+/** Dossier d'adhésion d'un joueur ; 404 si le joueur n'a pas de dossier. */
+export function getMembershipApplication(membershipId: number) {
+  return apiGet<MembershipApplication>(`/clubs/players/${membershipId}/application/`);
+}
+
+/** Fiches que l'utilisateur connecté doit signer en tant que parrain. */
+export function listPendingSponsorSignatures() {
+  return apiGet<MembershipApplication[]>("/clubs/applications/pending-sponsor-signature/");
+}
+
+export interface PendingPresidentDecisions {
+  /** Parrainages refusés : décision à prendre (autre parrain ou annulation). */
+  refused: MembershipApplication[];
+  /** Parrains sans réponse depuis 7 jours : alerte seule (CDC 10.3 n° 71). */
+  awaiting_sponsor: MembershipApplication[];
+}
+
+export function listPendingPresidentDecisions() {
+  return apiGet<PendingPresidentDecisions>("/clubs/applications/pending-president-decision/");
+}
+
+export function signSponsorApplication(params: { application_id: number }) {
+  return apiPost<MembershipApplication>("/clubs/applications/sponsor/sign/", params);
+}
+
+export function refuseSponsorApplication(params: { application_id: number; reason: string }) {
+  return apiPost<MembershipApplication>("/clubs/applications/sponsor/refuse/", params);
+}
+
+export function reassignSponsor(params: { application_id: number; new_sponsor_membership_id: number }) {
+  return apiPost<MembershipApplication>("/clubs/applications/sponsor/reassign/", params);
+}
+
+export function cancelMembershipApplication(params: {
+  application_id: number;
+  reason: string;
+  disposition: "refunded" | "kept";
+}) {
+  return apiPost<MembershipApplication>("/clubs/applications/cancel/", params);
+}
+
+export interface MembershipFeePaymentInput {
+  application_id: number;
+  amount: string;
+  method: "cash" | "mobile_money" | "payment_link";
+  paid_on: string;
+  reference?: string;
+  /** UUID v4 d'idempotence ; jamais envoyé vide (ignoré par la boucle ci-dessous). */
+  client_uuid?: string;
+}
+
+export function recordMembershipFeePayment(input: MembershipFeePaymentInput) {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(input)) {
+    if (value === undefined || value === null || value === "") continue;
+    form.append(key, String(value));
+  }
+  return apiPost<MembershipApplication>("/clubs/applications/fee-payment/", form);
+}
+
+/** Télécharge la fiche d'adhésion PDF par la vue authentifiée. */
+export function downloadApplicationPdf(applicationId: number) {
+  return apiDownload(`/clubs/applications/${applicationId}/fiche-pdf/`, `adhesion-${applicationId}.pdf`);
 }

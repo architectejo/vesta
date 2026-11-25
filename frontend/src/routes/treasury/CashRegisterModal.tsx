@@ -22,7 +22,6 @@ import {
   EmptyState,
   Modal,
   MoneyField,
-  PinPrompt,
   PlayerSearch,
   StatusBadge,
   useToast,
@@ -31,7 +30,6 @@ import {
 } from "../../design-system";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { formatAmount, formatMonthYear, toApiAmount } from "./money";
-import { formatPinError } from "./pinErrors";
 
 const CASH_SESSION_QUERY_KEY = ["treasury", "cash-session-current"] as const;
 const CONTRIBUTION_TYPES_QUERY_KEY = ["treasury", "contribution-types"] as const;
@@ -156,30 +154,31 @@ function OpenCashSessionModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
-  async function handleSubmit(pin: string): Promise<void> {
+  async function handleSubmit(): Promise<void> {
     setSubmitting(true);
     setError(undefined);
     try {
-      const { session } = await openCashSession(pin);
+      const { session } = await openCashSession();
       showToast("Session de caisse ouverte jusqu'à minuit.");
       onOpened(session);
     } catch (err) {
-      setError(formatPinError(err));
+      setError(apiErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <PinPrompt
+    <ConfirmDialog
       open
-      title="Ouvrir une session de caisse"
+      danger={false}
+      title="Ouvrir une session de caisse ?"
       description={
         <>
           <p>
             Vous allez ouvrir une session de caisse valable jusqu'à minuit (heure du club). Pendant
-            cette session, vos encaissements en espèces ne demanderont plus votre code PIN, y compris
-            hors connexion. Ouvrez-la avant d'aller au terrain si le réseau y est faible.
+            cette session, vous pouvez encaisser en espèces, y compris hors connexion.
+            Ouvrez-la avant d'aller au terrain si le réseau y est faible.
           </p>
           {!online ? (
             <Banner variant="warning" className="mt-3">
@@ -189,12 +188,12 @@ function OpenCashSessionModal({
         </>
       }
       confirmLabel="Ouvrir la session"
-      confirmLoadingLabel="Vérification…"
-      isSubmitting={submitting}
-      disabled={!online}
+      loadingLabel="Ouverture…"
+      loading={submitting}
+      confirmDisabled={!online}
       error={error}
-      onSubmit={(pin) => void handleSubmit(pin)}
-      onClose={onClose}
+      onConfirm={() => void handleSubmit()}
+      onCancel={onClose}
     />
   );
 }
@@ -482,7 +481,7 @@ function CashRegisterModal({
       <ConfirmDialog
         open={confirmCloseOpen}
         title="Fermer la session de caisse ?"
-        description="Pour encaisser à nouveau, il faudra ouvrir une nouvelle session avec votre code PIN."
+        description="Pour encaisser à nouveau, il faudra ouvrir une nouvelle session."
         confirmLabel="Fermer la session"
         loading={closing}
         onConfirm={() => void handleCloseSession()}

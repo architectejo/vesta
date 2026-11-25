@@ -4,7 +4,7 @@ import { ApiError } from "../../../api/client";
 import { Banner, Checkbox, Modal, TextArea, TextField } from "../../../design-system";
 import { ImagePickerField } from "../../fil/ImagePickerField";
 
-/** Modale « Publier un communiqué » (club-accueil.md §5.2 ; Président, VP). */
+/** Modale « Publier un communiqué » (club-accueil.md §5.2 ; Président, Vice-président, Secrétaire). */
 export function PublishAnnouncementModal({ onClose, onPublished }: { onClose: () => void; onPublished: () => void }) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");

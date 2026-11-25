@@ -18,7 +18,8 @@ from apps.core.services import resolve_active_membership
 from apps.core.tenant import NoActiveClubError, get_active_club
 from apps.logistics import serializers as ser
 from apps.logistics import services
-from apps.logistics.models import Article, Inventory, InventoryLine, StockMovement
+from apps.logistics import register as register_module
+from apps.logistics.models import Article, Decommission, Holder, Inventory, InventoryLine, StockMovement
 from apps.logistics.permissions import (
     CanManageMaterial,
     CanReadMaterial,
@@ -32,6 +33,10 @@ _GATE = [IsAuthenticated, HasCompletedPasswordSetup, HasAcceptedLatestTerms, Has
 
 def _error(exc) -> Response:
     return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def _find_holder(pk):
+    return Holder.objects.select_related("membership__user").filter(pk=pk).first()
 
 
 def _active_membership(request):
@@ -69,7 +74,18 @@ class ArticleListCreateView(APIView):
         if search:
             queryset = queryset.filter(name__icontains=search)
         queryset = queryset.order_by("category", "name")
-        data = [ser.serialize_article(article) for article in queryset]
+        stocks = services.bulk_stock_by_holder()
+        holders_by_id = services.club_holders_by_id()
+        pending = services.pending_decommission_by_article()
+        data = [
+            ser.serialize_article(
+                article,
+                holder_stocks=stocks.get(article.pk, {}),
+                holders_by_id=holders_by_id,
+                pending_decommission=pending.get(article.pk, 0),
+            )
+            for article in queryset
+        ]
         return Response({"count": len(data), "results": data})
 
     def post(self, request):
@@ -96,7 +112,7 @@ class ArticleDetailView(APIView):
         article = self._get(pk)
         if article is None:
             return Response({"detail": "Cet article n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(ser.serialize_article(article))
+        return Response(ser.serialize_article(article, detail=True))
 
     def patch(self, request, pk: int):
         article = self._get(pk)
@@ -104,7 +120,10 @@ class ArticleDetailView(APIView):
             return Response({"detail": "Cet article n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
         serializer = ser.ArticleInputSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        article = services.update_article(article=article, actor=request.user, **serializer.validated_data)
+        try:
+            article = services.update_article(article=article, actor=request.user, **serializer.validated_data)
+        except services.LogisticsError as exc:
+            return _error(exc)
         return Response(ser.serialize_article(article))
 
     def post(self, request, pk: int):
@@ -170,15 +189,32 @@ class MovementListCreateView(APIView):
             return Response({"detail": "Choisissez un article."}, status=status.HTTP_400_BAD_REQUEST)
         membership = None
         if payload.get("membership_id"):
-            membership = Membership.objects.filter(pk=payload["membership_id"]).first()
+            membership = Membership.objects.filter(pk=payload["membership_id"], club=club).first()
+            if membership is None:
+                return Response({"detail": "Ce joueur n'appartient pas au club actif."}, status=status.HTTP_400_BAD_REQUEST)
         match = None
         if payload.get("match_id"):
             match = Match.objects.filter(pk=payload["match_id"]).first()
+            if match is None:
+                return Response({"detail": "Ce match n'existe pas dans ce club."}, status=status.HTTP_400_BAD_REQUEST)
+        holder = None
+        if payload.get("holder_id") is not None:
+            holder = _find_holder(payload["holder_id"])
+            if holder is None:
+                return Response({"detail": "Ce détenteur n'existe pas dans ce club."}, status=status.HTTP_400_BAD_REQUEST)
+        provenance = payload.get("provenance") or None
+        donor_membership = None
+        if provenance and provenance.get("donor_membership_id"):
+            donor_membership = Membership.objects.filter(pk=provenance["donor_membership_id"], club=club).first()
+            if donor_membership is None:
+                return Response({"detail": "Ce donateur n'appartient pas au club actif."}, status=status.HTTP_400_BAD_REQUEST)
         expense = None
         if payload.get("expense_id"):
             from apps.treasury.models import Expense
 
             expense = Expense.objects.filter(pk=payload["expense_id"]).first()
+            if expense is None:
+                return Response({"detail": "Cette dépense n'existe pas dans ce club."}, status=status.HTTP_400_BAD_REQUEST)
         try:
             movement = services.record_movement(
                 club=club,
@@ -191,6 +227,9 @@ class MovementListCreateView(APIView):
                 membership=membership,
                 match=match,
                 expense=expense,
+                holder=holder,
+                provenance=provenance,
+                donor_membership=donor_membership,
             )
         except services.LogisticsError as exc:
             return _error(exc)
@@ -243,7 +282,13 @@ class MatchEquipmentOutView(APIView):
             article = articles.get(line["article_id"])
             if article is None:
                 return Response({"detail": "Choisissez un article."}, status=status.HTTP_400_BAD_REQUEST)
-            lines.append({"article": article, "quantity": line["quantity"]})
+            entry = {"article": article, "quantity": line["quantity"]}
+            if "holder_id" in line:
+                holder = _find_holder(line["holder_id"]) if line["holder_id"] is not None else None
+                if line["holder_id"] is not None and holder is None:
+                    return Response({"detail": "Ce détenteur n'existe pas dans ce club."}, status=status.HTTP_400_BAD_REQUEST)
+                entry["holder"] = holder
+            lines.append(entry)
         try:
             services.record_match_equipment_out(club=get_active_club(), actor=request.user, match=match, lines=lines)
         except services.LogisticsError as exc:
@@ -271,7 +316,13 @@ class MatchEquipmentReturnView(APIView):
             article = articles.get(line["article_id"])
             if article is None:
                 return Response({"detail": "Choisissez un article."}, status=status.HTTP_400_BAD_REQUEST)
-            lines.append({"article": article, "quantity_returned": line["quantity_returned"]})
+            entry = {"article": article, "quantity_returned": line["quantity_returned"]}
+            if "holder_id" in line:
+                holder = _find_holder(line["holder_id"]) if line["holder_id"] is not None else None
+                if line["holder_id"] is not None and holder is None:
+                    return Response({"detail": "Ce détenteur n'existe pas dans ce club."}, status=status.HTTP_400_BAD_REQUEST)
+                entry["holder"] = holder
+            lines.append(entry)
         try:
             services.record_match_equipment_return(
                 club=get_active_club(),
@@ -378,3 +429,362 @@ class InventoryCloseView(APIView):
         except services.LogisticsError as exc:
             return _error(exc)
         return Response(ser.serialize_inventory(inventory))
+
+
+# ---------------------------------------------------------------------------
+# Détenteurs (registre de l'intendance §3)
+# ---------------------------------------------------------------------------
+
+
+_HOLDER_NOT_FOUND = {"detail": "Ce détenteur n'existe pas dans ce club."}
+
+
+class HolderListCreateView(APIView):
+    def get_permissions(self):
+        classes = list(_GATE) + [CanReadMaterial]
+        if self.request.method == "POST":
+            classes = list(_GATE) + [CanManageMaterial]
+        return [c() for c in classes]
+
+    def get(self, request):
+        overview = services.holders_overview(include_archived=request.query_params.get("include_archived") == "true")
+        results = [
+            ser.serialize_holder(row["holder"], stock_total=row["stock_total"], articles_count=row["articles_count"])
+            for row in overview["holders"]
+        ]
+        return Response({"count": len(results), "results": results, "unlocated": overview["unlocated"]})
+
+    def post(self, request):
+        serializer = ser.HolderInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = serializer.validated_data
+        club = get_active_club()
+        membership = None
+        if payload["kind"] == Holder.Kind.MEMBER and payload.get("membership_id"):
+            membership = Membership.objects.filter(pk=payload["membership_id"], club=club).first()
+            if membership is None:
+                return Response({"detail": "Ce joueur n'appartient pas au club actif."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            holder = services.create_holder(
+                club=club,
+                actor=request.user,
+                kind=payload["kind"],
+                membership=membership,
+                label=payload.get("label", ""),
+            )
+        except services.LogisticsError as exc:
+            return _error(exc)
+        return Response(ser.serialize_holder(holder), status=status.HTTP_201_CREATED)
+
+
+class HolderDetailView(APIView):
+    def get_permissions(self):
+        classes = list(_GATE) + [CanReadMaterial]
+        if self.request.method == "PATCH":
+            classes = list(_GATE) + [CanManageMaterial]
+        return [c() for c in classes]
+
+    def get(self, request, pk: int):
+        holder = _find_holder(pk)
+        if holder is None:
+            return Response(_HOLDER_NOT_FOUND, status=status.HTTP_404_NOT_FOUND)
+        return Response(ser.serialize_holder_detail(holder, viewer=request.user))
+
+    def patch(self, request, pk: int):
+        holder = _find_holder(pk)
+        if holder is None:
+            return Response(_HOLDER_NOT_FOUND, status=status.HTTP_404_NOT_FOUND)
+        serializer = ser.HolderUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            holder = services.update_holder(holder=holder, actor=request.user, label=serializer.validated_data["label"])
+        except services.LogisticsError as exc:
+            return _error(exc)
+        return Response(ser.serialize_holder_detail(holder, viewer=request.user))
+
+
+class HolderArchiveView(APIView):
+    permission_classes = _GATE + [CanManageMaterial]
+
+    def post(self, request, pk: int):
+        holder = _find_holder(pk)
+        if holder is None:
+            return Response(_HOLDER_NOT_FOUND, status=status.HTTP_404_NOT_FOUND)
+        try:
+            holder = services.archive_holder(holder=holder, actor=request.user)
+        except services.LogisticsError as exc:
+            return _error(exc)
+        return Response(ser.serialize_holder(holder))
+
+
+class TransferCreateView(APIView):
+    permission_classes = _GATE + [CanManageMaterial]
+
+    def post(self, request):
+        serializer = ser.TransferInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = serializer.validated_data
+        article = Article.objects.filter(pk=payload["article_id"]).first()
+        if article is None:
+            return Response({"detail": "Choisissez un article."}, status=status.HTTP_400_BAD_REQUEST)
+        source = None
+        if payload["from_holder_id"] is not None:
+            source = _find_holder(payload["from_holder_id"])
+            if source is None:
+                return Response(_HOLDER_NOT_FOUND, status=status.HTTP_400_BAD_REQUEST)
+        destination = None
+        if payload["to_holder_id"] is not None:
+            destination = _find_holder(payload["to_holder_id"])
+            if destination is None:
+                return Response(_HOLDER_NOT_FOUND, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            out_movement, in_movement = services.record_transfer(
+                club=get_active_club(),
+                actor=request.user,
+                article=article,
+                source=source,
+                destination=destination,
+                quantity=payload["quantity"],
+                movement_date=payload["movement_date"],
+                reason=payload.get("reason", ""),
+            )
+        except services.LogisticsError as exc:
+            return _error(exc)
+        out_movement = StockMovement.objects.select_related("article", "holder__membership__user").get(pk=out_movement.pk)
+        in_movement = StockMovement.objects.select_related("article", "holder__membership__user").get(pk=in_movement.pk)
+        article_data = ser.serialize_article(article)
+        return Response(
+            {
+                "transfer_group": str(out_movement.transfer_group),
+                "out_movement": ser.serialize_movement(out_movement, viewer=request.user),
+                "in_movement": ser.serialize_movement(in_movement, viewer=request.user),
+                "in_stock": article_data["in_stock"],
+                "stock_by_holder": article_data["stock_by_holder"],
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Déclassement (registre de l'intendance §7)
+# ---------------------------------------------------------------------------
+
+
+_DECOMMISSION_NOT_FOUND = {"detail": "Ce déclassement n'existe pas dans ce club."}
+
+
+def _find_decommission(pk):
+    return (
+        Decommission.objects.select_related("article", "holder__membership__user", "noted_by", "executed_by", "cancelled_by")
+        .filter(pk=pk)
+        .first()
+    )
+
+
+class DecommissionListCreateView(APIView):
+    def get_permissions(self):
+        classes = list(_GATE) + [CanReadMaterial]
+        if self.request.method == "POST":
+            classes = list(_GATE) + [CanManageMaterial]
+        return [c() for c in classes]
+
+    def get(self, request):
+        queryset = Decommission.objects.select_related(
+            "article", "holder__membership__user", "noted_by", "executed_by", "cancelled_by"
+        ).order_by("-noted_on", "-pk")
+        status_filter = request.query_params.get("status")
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        article_id = request.query_params.get("article")
+        if article_id:
+            queryset = queryset.filter(article_id=article_id)
+        data = [ser.serialize_decommission(d, viewer=request.user) for d in queryset[:200]]
+        return Response(
+            {
+                "count": len(data),
+                "pending_quantity": sum(services.pending_decommission_by_article().values()),
+                "results": data,
+            }
+        )
+
+    def post(self, request):
+        serializer = ser.DecommissionInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = serializer.validated_data
+        article = Article.objects.filter(pk=payload["article_id"]).first()
+        if article is None:
+            return Response({"detail": "Choisissez un article."}, status=status.HTTP_400_BAD_REQUEST)
+        holder = None
+        if payload.get("holder_id") is not None:
+            holder = _find_holder(payload["holder_id"])
+            if holder is None:
+                return Response(_HOLDER_NOT_FOUND, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            decommission = services.flag_decommission(
+                club=get_active_club(),
+                actor=request.user,
+                article=article,
+                quantity=payload["quantity"],
+                reason=payload["reason"],
+                reason_note=payload.get("reason_note", ""),
+                noted_on=payload["noted_on"],
+                holder=holder,
+            )
+        except services.LogisticsError as exc:
+            return _error(exc)
+        decommission = _find_decommission(decommission.pk)
+        return Response(ser.serialize_decommission(decommission, viewer=request.user), status=status.HTTP_201_CREATED)
+
+
+class DecommissionDetailView(APIView):
+    permission_classes = _GATE + [CanReadMaterial]
+
+    def get(self, request, pk: int):
+        decommission = _find_decommission(pk)
+        if decommission is None:
+            return Response(_DECOMMISSION_NOT_FOUND, status=status.HTTP_404_NOT_FOUND)
+        return Response(ser.serialize_decommission(decommission, viewer=request.user))
+
+
+class DecommissionExecuteView(APIView):
+    permission_classes = _GATE + [CanManageMaterial]
+
+    def post(self, request, pk: int):
+        decommission = _find_decommission(pk)
+        if decommission is None:
+            return Response(_DECOMMISSION_NOT_FOUND, status=status.HTTP_404_NOT_FOUND)
+        serializer = ser.DecommissionExecuteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = serializer.validated_data
+        try:
+            services.execute_decommission(
+                decommission=decommission,
+                actor=request.user,
+                exit_date=payload["exit_date"],
+                destination=payload.get("destination", ""),
+                confirm=payload.get("confirm", False),
+            )
+        except services.LogisticsError as exc:
+            return _error(exc)
+        decommission = _find_decommission(pk)
+        return Response(
+            {
+                "decommission": ser.serialize_decommission(decommission, viewer=request.user),
+                "in_stock": services.theoretical_quantity(decommission.article),
+            }
+        )
+
+
+class DecommissionCancelView(APIView):
+    permission_classes = _GATE + [CanManageMaterial]
+
+    def post(self, request, pk: int):
+        decommission = _find_decommission(pk)
+        if decommission is None:
+            return Response(_DECOMMISSION_NOT_FOUND, status=status.HTTP_404_NOT_FOUND)
+        serializer = ser.DecommissionCancelSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            services.cancel_decommission(
+                decommission=decommission, actor=request.user, reason=serializer.validated_data["reason"]
+            )
+        except services.LogisticsError as exc:
+            return _error(exc)
+        return Response(ser.serialize_decommission(_find_decommission(pk), viewer=request.user))
+
+
+# ---------------------------------------------------------------------------
+# Registre de l'intendance (page, PDF, CSV)
+# ---------------------------------------------------------------------------
+
+
+class _RegisterBase(APIView):
+    """Lecteurs de la matrice 2.4 (position provisoire, question Q22)."""
+
+    permission_classes = _GATE + [CanReadMaterial]
+
+    def _parse(self, request):
+        """Renvoie ``(kwargs, None)`` ou ``(None, Response d'erreur)``."""
+
+        params = request.query_params
+        category = params.get("category") or ""
+        if category and category not in Article.Category.values:
+            return None, Response({"detail": "Nature inconnue."}, status=status.HTTP_400_BAD_REQUEST)
+        holder_filter = None
+        raw = params.get("holder")
+        if raw == "none":
+            holder_filter = "none"
+        elif raw:
+            holder_filter = _find_holder(raw) if raw.isdigit() else None
+            if holder_filter is None:
+                return None, Response(_HOLDER_NOT_FOUND, status=status.HTTP_404_NOT_FOUND)
+        return {
+            "search": (params.get("search") or "").strip(),
+            "category": category,
+            "holder_filter": holder_filter,
+            "include_exits": params.get("include_exits") == "true",
+        }, None
+
+    def _export_log(self, request, club, fmt, kwargs):
+        from apps.core.services import log_action
+
+        log_action(
+            actor=request.user,
+            club=club,
+            action_type="logistics.register.exported",
+            obj=club,
+            after={
+                "format": fmt,
+                "filters": register_module.register_filters_snapshot(
+                    search=kwargs["search"], category=kwargs["category"], holder_filter=kwargs["holder_filter"]
+                ),
+            },
+        )
+
+
+class RegisterView(_RegisterBase):
+    def get(self, request):
+        kwargs, error = self._parse(request)
+        if error is not None:
+            return error
+        return Response(register_module.build_register(get_active_club(), **kwargs))
+
+
+class RegisterPdfView(_RegisterBase):
+    def get(self, request):
+        from django.http import HttpResponse
+
+        kwargs, error = self._parse(request)
+        if error is not None:
+            return error
+        club = get_active_club()
+        data = register_module.build_register(club, **kwargs)
+        try:
+            content = register_module.render_register_pdf(club, data, actor=request.user)
+        except Exception:
+            return Response(
+                {"detail": "Le registre n'a pas pu être généré. Réessayez."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        self._export_log(request, club, "pdf", kwargs)
+        response = HttpResponse(content, content_type="application/pdf")
+        filename = "registre-intendance-" + club.slug + "-" + data["as_of"].isoformat() + ".pdf"
+        response["Content-Disposition"] = 'attachment; filename="' + filename + '"'
+        return response
+
+
+class RegisterCsvView(_RegisterBase):
+    def get(self, request):
+        from django.http import HttpResponse
+
+        kwargs, error = self._parse(request)
+        if error is not None:
+            return error
+        club = get_active_club()
+        data = register_module.build_register(club, **kwargs)
+        content = register_module.render_register_csv(data)
+        self._export_log(request, club, "csv", kwargs)
+        response = HttpResponse(content, content_type="text/csv; charset=utf-8")
+        filename = "registre-intendance-" + club.slug + "-" + data["as_of"].isoformat() + ".csv"
+        response["Content-Disposition"] = 'attachment; filename="' + filename + '"'
+        return response

@@ -13,6 +13,8 @@ export interface SegmentedControlProps<T extends string> {
   disabled?: boolean;
   /** Grille 2×2 sous 400 px pour garder les libellés entiers (clubs-creation.md §7). */
   wrapOnMobile?: boolean;
+  /** Libellé réservé aux lecteurs d'écran (barres compactes, ex. `PeriodPicker`). */
+  hideLabel?: boolean;
 }
 
 /**
@@ -28,10 +30,11 @@ export function SegmentedControl<T extends string>({
   help,
   disabled,
   wrapOnMobile = false,
+  hideLabel = false,
 }: SegmentedControlProps<T>) {
   return (
     <div role="group" aria-label={label}>
-      <p className="mb-1 block text-sm font-medium text-text">{label}</p>
+      <p className={hideLabel ? "sr-only" : "mb-1 block text-sm font-medium text-text"}>{label}</p>
       <div
         className={[
           wrapOnMobile ? "grid grid-cols-2 gap-1 xs:flex" : "flex flex-wrap gap-1",

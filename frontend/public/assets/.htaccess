@@ -1,0 +1,9 @@
+# Assets versionnes par Vite (hash dans le nom de fichier) : cache long.
+# Fichier separe car <If> n'est pas fiable sur tous les LiteSpeed.
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresDefault "access plus 1 year"
+</IfModule>
+<IfModule mod_headers.c>
+  Header set Cache-Control "public, max-age=31536000, immutable"
+</IfModule>

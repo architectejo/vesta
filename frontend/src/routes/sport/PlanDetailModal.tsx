@@ -87,6 +87,8 @@ export function PlanDetailModal({ open, planId, isCoach, ownMembershipId, onClos
       membershipId: p.membership_id as number,
       label: shortLabel(p.player?.name ?? ""),
       number: p.jersey_number_override ?? p.player?.jersey_number ?? null,
+      photoUrl: p.player?.photo ?? null,
+      fullName: p.player?.name,
       x: Number(p.x_coord),
       y: Number(p.y_coord),
       locked: Boolean(p.no_longer_eligible),

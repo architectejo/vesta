@@ -103,7 +103,7 @@ class PersonalInfoUpdateSerializer(serializers.Serializer):
         from django.utils import timezone
 
         if value is not None and value > timezone.now().date():
-            raise serializers.ValidationError("La date ne peut pas etre dans le futur.")
+            raise serializers.ValidationError("La date ne peut pas être dans le futur.")
         return value
 
 
@@ -119,16 +119,6 @@ class CredentialsUpdateSerializer(serializers.Serializer):
     confirm_new_password = serializers.CharField(
         write_only=True, trim_whitespace=False, required=False, allow_blank=True, default=""
     )
-
-
-class ProfilePinUpdateSerializer(serializers.Serializer):
-    """Onglet « Code PIN » de Mon profil (CDC 7.2 ; comptes-mon-profil.md
-    §4.1) : point d'entree HTTP de ``apps.accounts.services.redefine_pin``
-    (deja construit tache 1.4b), jamais reimplemente ici."""
-
-    current_password = serializers.CharField(write_only=True, trim_whitespace=False)
-    new_pin = serializers.CharField(write_only=True)
-    confirm_new_pin = serializers.CharField(write_only=True)
 
 
 class ProfilePhotoUpdateSerializer(serializers.Serializer):

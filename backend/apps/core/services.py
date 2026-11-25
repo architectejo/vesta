@@ -89,13 +89,13 @@ def resolve_active_membership(user, club=None):
 
     if user is None or not getattr(user, "is_authenticated", False):
         raise NoActiveClubError(
-            "Utilisateur non authentifie : aucun club actif ne peut etre determine."
+            "Utilisateur non authentifié : aucun club actif ne peut être déterminé."
         )
 
     if getattr(user, "is_superuser", False):
         raise NoActiveClubError(
-            "Un Superuser n'a pas de fiche joueur et n'appartient a aucun club "
-            "(CLAUDE.md regle n1) : aucun club actif ne peut etre determine."
+            "Un Superuser n'a pas de fiche joueur et n'appartient à aucun club : "
+            "aucun club actif ne peut être déterminé."
         )
 
     # Import tardif pour eviter tout import circulaire au chargement des
@@ -113,8 +113,8 @@ def resolve_active_membership(user, club=None):
         membership = queryset.filter(club=club).first()
         if membership is None:
             raise NoActiveClubError(
-                "Aucune adhesion active de cet utilisateur pour le club demande : "
-                "acces refuse."
+                "Aucune adhésion active de cet utilisateur pour le club demandé : "
+                "accès refusé."
             )
         return membership
 
@@ -178,7 +178,7 @@ def log_action(
       ``object_id`` en sont deduits (``obj.__class__.__name__``, ``obj.pk``).
     - ``before`` / ``after`` : etat avant/apres, JSON-serialisable.
       **Jamais de contenu medical** (rejete par le service pour toute
-      action ``medical.*``), ni de PIN, ni de mot de passe (hache ou non).
+      action ``medical.*``), ni de mot de passe (hache ou non).
     - ``ip_address`` / ``user_agent`` : contexte de la requete (CDC 5.1).
       Si **omis**, deduits du contexte de la requete HTTP courante
       (``apps.core.request_context.get_request_meta``, positionne par

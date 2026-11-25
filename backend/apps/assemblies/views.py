@@ -10,17 +10,23 @@ import os
 
 from django.http import FileResponse
 from rest_framework import status
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.services import InvalidPinError, PinError, PinLockedError
 from apps.assemblies import serializers as ser
 from apps.assemblies import services
-from apps.assemblies.models import AgendaItem, Assembly, AssemblyAttendance, Minutes
-from apps.assemblies.permissions import CanManageAssembly
+from apps.assemblies.models import AgendaItem, ArchivedDocument, Assembly, AssemblyAttendance, Minutes
+from apps.assemblies.permissions import (
+    CanConveneAssembly,
+    CanManageAssembly,
+    CanReadArchive,
+    CanWriteArchive,
+)
 from apps.clubs.models import Membership
 from apps.clubs.permissions import IsActiveClubMember
+from apps.core.private_files import private_file_response
 from apps.core.permissions import HasAcceptedLatestTerms, HasCompletedPasswordSetup, HasUsableLicence
 from apps.core.tenant import get_active_club
 
@@ -29,23 +35,13 @@ _GATE = [IsAuthenticated, HasCompletedPasswordSetup, HasAcceptedLatestTerms, Has
 DEFAULT_PAGE_SIZE = 10
 MAX_PAGE_SIZE = 50
 
-_ASSEMBLY_NOT_FOUND = "Cette assemblee n'existe pas dans ce club."
+_ASSEMBLY_NOT_FOUND = "Cette assemblée n'existe pas dans ce club."
 _MEMBER_NOT_FOUND = "Ce joueur n'existe pas dans ce club."
-_AGENDA_ITEM_NOT_FOUND = "Ce point d'ordre du jour n'existe pas dans cette assemblee."
+_AGENDA_ITEM_NOT_FOUND = "Ce point d'ordre du jour n'existe pas dans cette assemblée."
 
 
 def _not_found(message: str) -> Response:
     return Response({"detail": message}, status=status.HTTP_404_NOT_FOUND)
-
-
-def _pin_error_response(exc: PinError) -> Response:
-    if isinstance(exc, PinLockedError):
-        return Response({"detail": str(exc), "locked_until": exc.locked_until}, status=status.HTTP_423_LOCKED)
-    if isinstance(exc, InvalidPinError):
-        return Response(
-            {"detail": str(exc), "attempts_remaining": exc.attempts_remaining}, status=status.HTTP_400_BAD_REQUEST
-        )
-    return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 def _assembly_error_response(exc: services.AssemblyError) -> Response:
@@ -92,9 +88,9 @@ class AssemblyListCreateView(APIView):
         return Response({"results": data, "count": count, "next_offset": next_offset})
 
     def post(self, request):
-        if not CanManageAssembly().has_permission(request, self):
+        if not CanConveneAssembly().has_permission(request, self):
             return Response(
-                {"detail": CanManageAssembly.message}, status=status.HTTP_403_FORBIDDEN
+                {"detail": CanConveneAssembly.message}, status=status.HTTP_403_FORBIDDEN
             )
         serializer = ser.ConveneAssemblyInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -303,7 +299,7 @@ class AssemblyMinutesView(APIView):
 
 
 class AssemblyMinutesSignView(APIView):
-    """Signature du PV par code PIN (CDC 7.2 ; 10.2 n° 28)."""
+    """Signature du PV (Président / Vice-président). Aucun code PIN : un `pin` reçu est ignoré."""
 
     permission_classes = _GATE + [IsActiveClubMember]
 
@@ -313,15 +309,8 @@ class AssemblyMinutesSignView(APIView):
         except Assembly.DoesNotExist:
             return _not_found(_ASSEMBLY_NOT_FOUND)
 
-        serializer = ser.SignMinutesInputSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
         try:
-            minutes = services.sign_minutes(
-                assembly=assembly, actor=request.user, pin=serializer.validated_data["pin"]
-            )
-        except PinError as exc:
-            return _pin_error_response(exc)
+            minutes = services.sign_minutes(assembly=assembly, actor=request.user)
         except services.AssemblyError as exc:
             return _assembly_error_response(exc)
 
@@ -383,3 +372,127 @@ class QuorumThresholdView(APIView):
             return _assembly_error_response(exc)
 
         return Response({"percentage": str(club_settings.assembly_quorum_percentage)})
+
+
+# ---------------------------------------------------------------------------
+# Archive des documents officiels (CDC 4.15.1)
+# ---------------------------------------------------------------------------
+
+_DOCUMENT_NOT_FOUND = "Ce document n'existe pas dans l'archive de ce club."
+
+
+class ArchivedDocumentListCreateView(APIView):
+    """Liste (N derniers + « Voir plus », filtres categorie/annee) : Bureau.
+    Depot : Secretaire, President, VP. Multipart : category, title,
+    document_date, file."""
+
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        extra = CanWriteArchive if self.request.method == "POST" else CanReadArchive
+        return [permission() for permission in _GATE + [extra]]
+
+    def get(self, request):
+        try:
+            queryset = services.filter_archived_documents(
+                ArchivedDocument.objects.select_related("uploaded_by", "withdrawn_by"),
+                category=request.query_params.get("category", ""),
+                year=request.query_params.get("year", ""),
+                include_withdrawn=request.query_params.get("include_withdrawn") in ("1", "true", "True"),
+            )
+        except services.AssemblyError as exc:
+            return _assembly_error_response(exc)
+        items, count, next_offset = _paginate(request, queryset)
+        data = ser.ArchivedDocumentSerializer(items, many=True).data
+        return Response({"results": data, "count": count, "next_offset": next_offset})
+
+    def post(self, request):
+        serializer = ser.ArchivedDocumentInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            document = services.archive_document(
+                club=get_active_club(),
+                actor=request.user,
+                category=data["category"],
+                title=data["title"],
+                document_date=data["document_date"],
+                file=data["file"],
+            )
+        except services.AssemblyError as exc:
+            return _assembly_error_response(exc)
+        return Response(ser.ArchivedDocumentSerializer(document).data, status=status.HTTP_201_CREATED)
+
+
+class ArchivedDocumentDetailView(APIView):
+    permission_classes = _GATE + [CanReadArchive]
+
+    def get(self, request, pk):
+        try:
+            document = ArchivedDocument.objects.select_related("uploaded_by", "withdrawn_by").get(pk=pk)
+        except ArchivedDocument.DoesNotExist:
+            return _not_found(_DOCUMENT_NOT_FOUND)
+        services.record_archived_document_access(document=document, actor=request.user, downloaded=False)
+        return Response(ser.ArchivedDocumentSerializer(document).data)
+
+
+class ArchivedDocumentFileView(APIView):
+    """Telechargement authentifie (regle n 10) : Bureau du club du document."""
+
+    permission_classes = _GATE + [CanReadArchive]
+
+    def get(self, request, pk):
+        try:
+            document = ArchivedDocument.objects.get(pk=pk)
+        except ArchivedDocument.DoesNotExist:
+            return _not_found(_DOCUMENT_NOT_FOUND)
+        services.record_archived_document_access(document=document, actor=request.user, downloaded=True)
+        # Type et extension deduits du contenu reel, jamais du nom stocke.
+        return private_file_response(document.file, download_stem=f"archive-{document.pk}")
+
+
+class ArchivedDocumentReplaceView(APIView):
+    """Remplacement : l'ancien est retire et conserve, le nouveau le reference."""
+
+    parser_classes = [MultiPartParser, FormParser]
+    permission_classes = _GATE + [CanWriteArchive]
+
+    def post(self, request, pk):
+        try:
+            document = ArchivedDocument.objects.get(pk=pk)
+        except ArchivedDocument.DoesNotExist:
+            return _not_found(_DOCUMENT_NOT_FOUND)
+        serializer = ser.ArchivedDocumentInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            new_document = services.replace_archived_document(
+                document=document,
+                actor=request.user,
+                category=data["category"],
+                title=data["title"],
+                document_date=data["document_date"],
+                file=data["file"],
+            )
+        except services.AssemblyError as exc:
+            return _assembly_error_response(exc)
+        return Response(ser.ArchivedDocumentSerializer(new_document).data, status=status.HTTP_201_CREATED)
+
+
+class ArchivedDocumentWithdrawView(APIView):
+    permission_classes = _GATE + [CanWriteArchive]
+
+    def post(self, request, pk):
+        try:
+            document = ArchivedDocument.objects.get(pk=pk)
+        except ArchivedDocument.DoesNotExist:
+            return _not_found(_DOCUMENT_NOT_FOUND)
+        serializer = ser.ArchivedDocumentWithdrawInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            document = services.withdraw_archived_document(
+                document=document, actor=request.user, reason=serializer.validated_data["reason"]
+            )
+        except services.AssemblyError as exc:
+            return _assembly_error_response(exc)
+        return Response(ser.ArchivedDocumentSerializer(document).data)

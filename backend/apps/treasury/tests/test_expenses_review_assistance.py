@@ -28,7 +28,7 @@ from apps.treasury.models import (
     SocialAssistanceRequest,
     Transaction,
 )
-from apps.treasury.tests.conftest import PIN, make_member
+from apps.treasury.tests.conftest import PIN, assert_logged_by, make_member
 from apps.treasury.tests.expense_helpers import (
     PDF_CONTENT,
     club_today,
@@ -281,15 +281,16 @@ class TestDecisionEdgeCases:
         pay_mandatory(ctx, ctx.player, ctype, amount="10")
         assert release(ctx, expense).status == Expense.Status.RELEASED
 
-    def test_assistance_release_needs_the_pin_and_a_wrong_pin_changes_nothing(self, ctx):
-        from apps.accounts.services import InvalidPinError
+    def test_assistance_release_without_pin_logs_the_author(self, ctx):
+        """Décision client du 11/10/2026 : l'assistance approuvée est libérée
+        sans PIN, comme toute dépense ; l'auteur est journalisé."""
 
         make_scale(ctx)
         expense = services.approve_social_assistance_request(request_obj=submit(ctx), approved_by=ctx.president.user)
-        with pytest.raises(InvalidPinError):
-            services.release_expense(expense=expense, released_by=ctx.vice_president.user, pin="0000")
-        assert Expense.all_objects.get(pk=expense.pk).status == Expense.Status.PENDING
-        assert not Transaction.all_objects.exists()
+        released = services.release_expense(expense=expense, released_by=ctx.vice_president.user)
+        assert released.status == Expense.Status.RELEASED
+        assert Transaction.all_objects.filter(expense=expense).count() == 1
+        assert_logged_by("treasury.expense.released", ctx.vice_president.user, club=ctx.club)
 
     def test_assistance_expense_is_blocked_by_an_unjustified_expense_like_any_other(self, ctx):
         make_scale(ctx)
@@ -298,7 +299,7 @@ class TestDecisionEdgeCases:
         with pytest.raises(services.ExpenseReleaseBlockedError):
             release(ctx, expense)
         released = services.release_expense_with_derogation(
-            expense=expense, president=ctx.president.user, reason="Décès du père du joueur", pin=PIN
+            expense=expense, president=ctx.president.user, reason="Décès du père du joueur"
         )
         assert released.status == Expense.Status.RELEASED
 
@@ -344,7 +345,11 @@ class TestDecisionEdgeCases:
             make_scale(ctx, amount=amount)
 
     def test_scale_amount_is_rounded_half_up(self, ctx):
-        assert make_scale(ctx, amount="12.345").amount == Decimal("12.35")
+        # D7 : valeur Decimal arrondie ; une saisie texte à 3 décimales est refusée (D-A7).
+        scale = make_scale(ctx, amount=Decimal("12.345"))
+        assert scale.amount == Decimal("12.35")
+        with pytest.raises(services.InvalidAmountError, match="2 chiffres après la virgule"):
+            make_scale(ctx, amount="12.345", category=scale.expense_category)
 
 
 # ---------------------------------------------------------------------------

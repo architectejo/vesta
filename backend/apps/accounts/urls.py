@@ -38,7 +38,7 @@ urlpatterns = [
         views.MyPersonalInfoUpdateView.as_view(),
         name="profile-personal-info",
     ),
+    path("profile/export/", views.MyPersonalDataExportView.as_view(), name="profile-export"),
     path("profile/credentials/", views.MyCredentialsUpdateView.as_view(), name="profile-credentials"),
-    path("profile/pin/", views.MyPinUpdateView.as_view(), name="profile-pin"),
     path("profile/photo/", views.MyProfilePhotoView.as_view(), name="profile-photo"),
 ]

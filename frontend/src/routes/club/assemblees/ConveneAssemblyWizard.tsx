@@ -1,7 +1,18 @@
 import { useState } from "react";
 import { conveneAssembly, type Assembly, type AssemblyType } from "../../../api/assemblies";
 import { ApiError } from "../../../api/client";
-import { Banner, Button, IconButton, Modal, SegmentedControl, TextArea, TextField } from "../../../design-system";
+import {
+  Banner,
+  Button,
+  IconButton,
+  IconMoveDown,
+  IconMoveUp,
+  IconRemove,
+  Modal,
+  SegmentedControl,
+  TextArea,
+  TextField,
+} from "../../../design-system";
 import { assemblyTypeLabel, formatDateLong, formatTimeShort } from "./assembliesFormat";
 
 interface AgendaDraftItem {
@@ -16,22 +27,6 @@ function todayIso(): string {
   const now = new Date();
   const offsetMs = now.getTimezoneOffset() * 60_000;
   return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10);
-}
-
-function MoveIcon({ direction }: { direction: "up" | "down" }) {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2}>
-      <path d={direction === "up" ? "M12 19V5M5 12l7-7 7 7" : "M12 5v14M5 12l7 7 7-7"} strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function RemoveIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2}>
-      <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
-    </svg>
-  );
 }
 
 /** Assistant « Convoquer une assemblée générale » (assemblees-page-ag.md §4.1). */
@@ -188,21 +183,21 @@ export function ConveneAssemblyWizard({
                     <IconButton
                       aria-label="Monter"
                       variant="secondary"
-                      icon={<MoveIcon direction="up" />}
+                      icon={<IconMoveUp aria-hidden="true" className="h-4 w-4" />}
                       disabled={index === 0}
                       onClick={() => moveItem(index, -1)}
                     />
                     <IconButton
                       aria-label="Descendre"
                       variant="secondary"
-                      icon={<MoveIcon direction="down" />}
+                      icon={<IconMoveDown aria-hidden="true" className="h-4 w-4" />}
                       disabled={index === items.length - 1}
                       onClick={() => moveItem(index, 1)}
                     />
                     <IconButton
                       aria-label="Retirer"
                       variant="secondary"
-                      icon={<RemoveIcon />}
+                      icon={<IconRemove aria-hidden="true" className="h-4 w-4" />}
                       disabled={items.length === 1}
                       onClick={() => setItems((current) => current.filter((i) => i.key !== item.key))}
                     />

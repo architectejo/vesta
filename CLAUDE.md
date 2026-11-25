@@ -18,7 +18,7 @@ Vesta est une plateforme SaaS multi-clubs : réseau social de football amateur +
 4. Un paiement validé n'est **jamais supprimé** : on crée une écriture d'annulation.
 5. Un joueur en dette, suspendu, inapte ou en attente d'adhésion **ne peut être ni composé ni placé** dans un plan tactique.
 6. Toute action qui crée, modifie ou supprime une donnée **écrit une entrée dans le journal d'activité** (append-only).
-7. Les actions sensibles (validation de paiement ou dépense, dérogation, signature parrain, signature PV, annulation) exigent le **code PIN**.
+7. **Décidé le 11/10/2026 (demande des clubs partenaires, circuit 9.4) : plus aucun code PIN.** Les actions sensibles (validation de paiement ou dépense, dérogation, signature parrain, signature PV, annulation) se valident par un bouton suivi d'une **modale de confirmation** explicite (ex. « Valider ce paiement de 40 $ ? »). L'auteur de chaque action est écrit dans le journal d'activité (règle 6) ; c'est lui, avec la session ouverte, qui garantit la traçabilité. Cette décision remplace l'exigence antérieure du code PIN (CDC 7.2, 10.2 n° 36).
 
 ### Multi-tenant et sécurité
 8. **Toute donnée privée est filtrée par club.** Passe toujours par les managers/querysets tenant-aware. Une requête sans club actif est refusée. Jamais de `Model.objects.all()` sur une table privée dans une vue.

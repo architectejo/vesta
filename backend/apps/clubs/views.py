@@ -30,8 +30,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.serializers import TermsVersionSerializer, UserSummarySerializer
-from apps.accounts.services import InvalidPinError, PinError, PinLockedError, PinNotSetError
-from apps.clubs import club_creation
+from apps.clubs import board_dashboard, club_creation
 from apps.clubs import profile_services
 from apps.clubs import serializers
 from apps.clubs import services as clubs_services
@@ -41,7 +40,9 @@ from apps.clubs.permissions import (
     CanRecordMembershipFeePayment,
     IsActiveClubMember,
     IsClubCoach,
+    IsClubHeadCoach,
     IsClubPresident,
+    IsPresidentOrVicePresident,
     can_access_membership_application_file,
 )
 from apps.clubs.throttling import ClubCreationRateThrottle, ClubCreationSettingsRateThrottle
@@ -52,9 +53,16 @@ from apps.core.permissions import (
     IsSuperuser,
 )
 from apps.core.roles import has_any_role
-from apps.core.tenant import get_active_club
+from apps.core.tenant import TenantMismatchError, get_active_club
+from apps.sport import player_stats
 from apps.treasury.permissions import CanImportContributions
-from apps.treasury.services import LedgerFrozenError, LedgerKeyError, TreasuryError
+from apps.treasury.services import (
+    ClientUuidConflictError,
+    LedgerFrozenError,
+    LedgerKeyError,
+    TreasuryError,
+    TreasuryValidationError,
+)
 
 _CLUB_MEMBER_GATE = [
     IsAuthenticated,
@@ -92,36 +100,12 @@ def _validation_error_response(exc: DjangoValidationError) -> Response:
     return Response({"detail": exc.messages}, status=status.HTTP_400_BAD_REQUEST)
 
 
-def _pin_error_response(exc: PinError) -> Response:
-    """Traduit une erreur PIN (CDC 7.2) en reponse HTTP francaise claire.
-
-    Premier point de consommation de ces exceptions depuis une vue (les
-    autres appels existants a ``require_valid_pin`` restent, a ce jour,
-    internes a ``apps.treasury.services``) : les codes choisis ici
-    (423 « verrouille » pour le blocage temporaire, 400 pour le reste)
-    sont donc fixes par cette tache (1.4b), a reprendre a l'identique par
-    tout futur appelant du meme mecanisme.
-    """
-
-    if isinstance(exc, PinLockedError):
-        return Response(
-            {"detail": str(exc), "locked_until": exc.locked_until},
-            status=status.HTTP_423_LOCKED,
-        )
-    if isinstance(exc, InvalidPinError):
-        return Response(
-            {"detail": str(exc), "attempts_remaining": exc.attempts_remaining},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-    if isinstance(exc, PinNotSetError):
-        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-    return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-
-
 def _treasury_error_response(exc: TreasuryError) -> Response:
     """Traduit une erreur de tresorerie (interface `finance-engine`, non
     modifiee) en reponse HTTP francaise claire."""
 
+    if isinstance(exc, ClientUuidConflictError):
+        return Response({"detail": str(exc), "code": "client_uuid_conflict"}, status=status.HTTP_409_CONFLICT)
     if isinstance(exc, LedgerFrozenError):
         return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
     if isinstance(exc, LedgerKeyError):
@@ -190,7 +174,7 @@ class RoleRevocationView(APIView):
         try:
             role = MembershipRole.objects.get(pk=data["role_id"])
         except MembershipRole.DoesNotExist:
-            return Response({"detail": "Ce role n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Ce rôle n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             role = clubs_services.revoke_president_nominated_role(
@@ -248,10 +232,71 @@ class CaptainRevocationView(APIView):
         try:
             role = MembershipRole.objects.get(pk=data["role_id"])
         except MembershipRole.DoesNotExist:
-            return Response({"detail": "Ce role n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Ce rôle n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             role = clubs_services.revoke_captain(
+                coach_user=request.user, role=role, reason=data.get("reason", "")
+            )
+        except clubs_services.RoleManagementError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except PermissionError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        except DjangoValidationError as exc:
+            return _validation_error_response(exc)
+
+        return Response(serializers.MembershipRoleSerializer(role).data, status=status.HTTP_200_OK)
+
+
+class AssistantCoachAppointmentView(APIView):
+    """Nomination de l'Assistant du Coach (CDC 10.3 n179). Reserve au Coach
+    (pas a l'assistant, pas au President) ; remplace l'assistant precedent."""
+
+    permission_classes = _CLUB_MEMBER_GATE + [IsClubHeadCoach]
+
+    def post(self, request):
+        serializer = serializers.AssistantCoachAppointmentInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            target_membership = Membership.objects.get(pk=data["membership_id"])
+        except Membership.DoesNotExist:
+            return Response(
+                {"detail": "Ce joueur n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            role = clubs_services.appoint_assistant_coach(
+                coach_user=request.user, target_membership=target_membership
+            )
+        except clubs_services.RoleManagementError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except PermissionError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        except DjangoValidationError as exc:
+            return _validation_error_response(exc)
+
+        return Response(serializers.MembershipRoleSerializer(role).data, status=status.HTTP_201_CREATED)
+
+
+class AssistantCoachRevocationView(APIView):
+    """Retrait de l'Assistant du Coach (CDC 10.3 n179). Reserve au Coach."""
+
+    permission_classes = _CLUB_MEMBER_GATE + [IsClubHeadCoach]
+
+    def post(self, request):
+        serializer = serializers.RoleRevocationInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            role = MembershipRole.objects.get(pk=data["role_id"])
+        except MembershipRole.DoesNotExist:
+            return Response({"detail": "Ce rôle n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            role = clubs_services.remove_assistant_coach(
                 coach_user=request.user, role=role, reason=data.get("reason", "")
             )
         except clubs_services.RoleManagementError as exc:
@@ -323,7 +368,7 @@ class PresidencySuperuserOverrideView(APIView):
             to_membership = Membership.all_objects.get(pk=data["to_membership_id"], club_id=data["club_id"])
         except Membership.DoesNotExist:
             return Response(
-                {"detail": "Adhesion introuvable pour ce club."}, status=status.HTTP_404_NOT_FOUND
+                {"detail": "Adhésion introuvable pour ce club."}, status=status.HTTP_404_NOT_FOUND
             )
 
         try:
@@ -361,7 +406,7 @@ class BoardSeatsSettingsView(APIView):
             club_settings = ClubSettings.objects.get(pk=club.pk)
         except ClubSettings.DoesNotExist:
             return Response(
-                {"detail": "Les parametres de ce club ne sont pas encore configures."},
+                {"detail": "Les paramètres de ce club ne sont pas encore configurés."},
                 status=status.HTTP_404_NOT_FOUND,
             )
         return Response(serializers.ClubSettingsBoardSeatsSerializer(club_settings).data)
@@ -372,7 +417,7 @@ class BoardSeatsSettingsView(APIView):
             club_settings = ClubSettings.objects.get(pk=club.pk)
         except ClubSettings.DoesNotExist:
             return Response(
-                {"detail": "Les parametres de ce club ne sont pas encore configures."},
+                {"detail": "Les paramètres de ce club ne sont pas encore configurés."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
@@ -502,11 +547,18 @@ class ImportBatchSourceDownloadView(APIView):
         if not batch.source_file:
             return Response({"detail": "Le fichier source de ce lot n'est pas disponible."}, status=status.HTTP_404_NOT_FOUND)
 
-        return FileResponse(
-            batch.source_file.open("rb"),
-            as_attachment=True,
-            filename=f"import-{batch.pk}-source.csv",
-        )
+        return _csv_download(batch.source_file, f"import-{batch.pk}-source.csv")
+
+
+def _csv_download(stored_file, filename: str) -> FileResponse:
+    """CSV genere ou depose par le club : type et nom fixes cote serveur
+    (jamais ceux du client), en piece jointe, sans sniffing."""
+
+    response = FileResponse(
+        stored_file.open("rb"), as_attachment=True, filename=filename, content_type="text/csv; charset=utf-8"
+    )
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 class ImportBatchReportDownloadView(APIView):
@@ -530,11 +582,7 @@ class ImportBatchReportDownloadView(APIView):
         if not batch.report_file:
             return Response({"detail": "Le rapport de ce lot n'est pas disponible."}, status=status.HTTP_404_NOT_FOUND)
 
-        return FileResponse(
-            batch.report_file.open("rb"),
-            as_attachment=True,
-            filename=f"import-{batch.pk}-rapport.csv",
-        )
+        return _csv_download(batch.report_file, f"import-{batch.pk}-rapport.csv")
 
 
 # ---------------------------------------------------------------------------
@@ -614,23 +662,25 @@ class MembershipApplicationPdfDownloadView(APIView):
         try:
             application = _get_application(pk)
         except MembershipApplication.DoesNotExist:
-            return Response({"detail": "Ce dossier d'adhesion n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Ce dossier d'adhésion n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
 
         if not can_access_membership_application_file(user=request.user, application=application):
             return Response(
-                {"detail": "Vous n'etes pas autorise a consulter la fiche de ce dossier d'adhesion (CDC 2.4, 4.3)."},
+                {"detail": "Vous n'êtes pas autorisé à consulter la fiche de ce dossier d'adhésion."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
         if not application.application_pdf_file:
-            return Response({"detail": "La fiche d'adhesion n'a pas encore ete generee."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "La fiche d'adhésion n'a pas encore été générée."}, status=status.HTTP_404_NOT_FOUND)
 
-        return FileResponse(
+        response = FileResponse(
             application.application_pdf_file.open("rb"),
             as_attachment=True,
             filename=f"adhesion-{application.membership_id}.pdf",
             content_type="application/pdf",
         )
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
 
 
 class MembershipFeePaymentView(APIView):
@@ -650,7 +700,7 @@ class MembershipFeePaymentView(APIView):
         try:
             application = _get_application(data["application_id"])
         except MembershipApplication.DoesNotExist:
-            return Response({"detail": "Ce dossier d'adhesion n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Ce dossier d'adhésion n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             application = clubs_services.record_membership_fee_payment_for_application(
@@ -659,14 +709,12 @@ class MembershipFeePaymentView(APIView):
                 method=data["method"],
                 paid_on=data["paid_on"],
                 validated_by=request.user,
-                pin=data["pin"],
                 reference=data.get("reference", ""),
                 attachment=data.get("attachment"),
+                client_uuid=data.get("client_uuid"),
             )
         except PermissionError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
-        except PinError as exc:
-            return _pin_error_response(exc)
         except TreasuryError as exc:
             return _treasury_error_response(exc)
         except clubs_services.MembershipApplicationError as exc:
@@ -674,11 +722,13 @@ class MembershipFeePaymentView(APIView):
         except DjangoValidationError as exc:
             return _validation_error_response(exc)
 
+        # 200 dans tous les cas (cet endpoint ne renvoyait deja pas 201) ;
+        # un rejeu renvoie l'etat courant du dossier.
         return Response(serializers.MembershipApplicationSerializer(application).data)
 
 
 class SponsorSignatureView(APIView):
-    """Signature du parrain par code PIN (CDC 4.3 etape 4 ; 7.2). Ouvert a
+    """Signature du parrain (CDC 4.3 etape 4). Ouvert a
     tout membre actif du club : c'est le service qui verifie que
     l'appelant est bien le parrain designe de ce dossier precis (action
     « P » -- propres donnees -- de la matrice 2.4)."""
@@ -693,16 +743,14 @@ class SponsorSignatureView(APIView):
         try:
             application = _get_application(data["application_id"])
         except MembershipApplication.DoesNotExist:
-            return Response({"detail": "Ce dossier d'adhesion n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Ce dossier d'adhésion n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             application = clubs_services.sign_sponsor_application(
-                application=application, sponsor_user=request.user, pin=data["pin"]
+                application=application, sponsor_user=request.user
             )
         except PermissionError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
-        except PinError as exc:
-            return _pin_error_response(exc)
         except clubs_services.MembershipApplicationError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except DjangoValidationError as exc:
@@ -725,7 +773,7 @@ class SponsorRefusalView(APIView):
         try:
             application = _get_application(data["application_id"])
         except MembershipApplication.DoesNotExist:
-            return Response({"detail": "Ce dossier d'adhesion n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Ce dossier d'adhésion n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             application = clubs_services.refuse_sponsor_application(
@@ -755,7 +803,7 @@ class SponsorReassignmentView(APIView):
         try:
             application = _get_application(data["application_id"])
         except MembershipApplication.DoesNotExist:
-            return Response({"detail": "Ce dossier d'adhesion n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Ce dossier d'adhésion n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             new_sponsor = Membership.objects.get(pk=data["new_sponsor_membership_id"])
@@ -1009,9 +1057,16 @@ class PlayerListView(APIView):
         if search:
             queryset = queryset[: self.SEARCH_RESULT_LIMIT]
 
+        members = list(queryset)
+        club = get_active_club()
         return Response(
             serializers.PlayerPublicCardSerializer(
-                queryset, many=True, context={"request": request}
+                members,
+                many=True,
+                context={
+                    "request": request,
+                    "unavailable_ids": player_stats.unavailable_membership_ids(club, members),
+                },
             ).data
         )
 
@@ -1033,7 +1088,13 @@ class PlayerCardView(APIView):
             return Response({"detail": "Ce joueur n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
 
         return Response(
-            serializers.PlayerPublicCardSerializer(membership, context={"request": request}).data
+            serializers.PlayerPublicCardSerializer(
+                membership,
+                context={
+                    "request": request,
+                    "unavailable_ids": player_stats.unavailable_membership_ids(get_active_club(), [membership]),
+                },
+            ).data
         )
 
 
@@ -1051,7 +1112,7 @@ class MembershipApplicationCancellationView(APIView):
         try:
             application = _get_application(data["application_id"])
         except MembershipApplication.DoesNotExist:
-            return Response({"detail": "Ce dossier d'adhesion n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Ce dossier d'adhésion n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             application = clubs_services.cancel_membership_application(
@@ -1059,12 +1120,9 @@ class MembershipApplicationCancellationView(APIView):
                 president_user=request.user,
                 reason=data["reason"],
                 disposition=data["disposition"],
-                pin=data["pin"],
             )
         except PermissionError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
-        except PinError as exc:
-            return _pin_error_response(exc)
         except TreasuryError as exc:
             return _treasury_error_response(exc)
         except clubs_services.MembershipApplicationError as exc:
@@ -1073,3 +1131,130 @@ class MembershipApplicationCancellationView(APIView):
             return _validation_error_response(exc)
 
         return Response(serializers.MembershipApplicationSerializer(application).data)
+
+
+def _applications_queryset():
+    return MembershipApplication.objects.select_related(
+        "membership", "membership__user", "membership__sponsor", "membership__sponsor__user",
+        "membership_fee_payment",
+    )
+
+
+class MembershipApplicationByMembershipView(APIView):
+    """Dossier d'adhesion d'un joueur (lecture ; CDC 4.3). Memes identites
+    autorisees que le telechargement de la fiche (President, adherent,
+    parrain) : aucune nouvelle matrice de permission."""
+
+    permission_classes = _CLUB_MEMBER_GATE + [IsActiveClubMember]
+
+    def get(self, request, membership_id: int):
+        try:
+            application = _applications_queryset().get(membership_id=membership_id)
+        except MembershipApplication.DoesNotExist:
+            return Response({"detail": "Ce joueur n'a pas de dossier d'adhésion dans ce club."}, status=status.HTTP_404_NOT_FOUND)
+        # Le Tresorier et son adjoint (matrice 2.4 : enregistrement des
+        # paiements) doivent voir le dossier pour enregistrer les frais
+        # d'adhesion ; la fiche PDF reste, elle, reservee aux trois identites.
+        can_read = can_access_membership_application_file(
+            user=request.user, application=application
+        ) or has_any_role(
+            request.user, {MembershipRole.Role.TREASURER, MembershipRole.Role.ASSISTANT_TREASURER}
+        )
+        if not can_read:
+            return Response(
+                {"detail": "Vous n'êtes pas autorisé à consulter ce dossier d'adhésion."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return Response(serializers.MembershipApplicationSerializer(application, context={"request": request}).data)
+
+
+class PendingSponsorSignaturesView(APIView):
+    """Dossiers dont l'appelant est le parrain designe et dont la fiche est
+    prete a signer (fiche generee, decision en attente ; CDC 4.3 etape 4).
+    Donnees propres a l'appelant uniquement."""
+
+    permission_classes = _CLUB_MEMBER_GATE + [IsActiveClubMember]
+
+    def get(self, request):
+        queryset = _applications_queryset().filter(
+            membership__sponsor__user=request.user,
+            sponsor_decision=MembershipApplication.SponsorDecision.PENDING,
+            generated_at__isnull=False,
+            resolved_at__isnull=True,
+        ).order_by("generated_at")
+        return Response(serializers.MembershipApplicationSerializer(queryset, many=True, context={"request": request}).data)
+
+
+class PendingPresidentDecisionsView(APIView):
+    """Dossiers que le President doit suivre (CDC 4.3, cas limites) :
+    ``refused`` (decision a prendre : autre parrain ou annulation) et
+    ``awaiting_sponsor`` (parrain sans reponse apres 7 jours : alerte
+    seulement, aucune action supplementaire -- 10.3 n° 71)."""
+
+    permission_classes = _CLUB_MEMBER_GATE + [IsClubPresident]
+
+    def get(self, request):
+        base = _applications_queryset().filter(resolved_at__isnull=True)
+        ctx = {"request": request}
+        refused = base.filter(sponsor_decision=MembershipApplication.SponsorDecision.REFUSED).order_by("id")
+        awaiting = base.filter(
+            sponsor_decision=MembershipApplication.SponsorDecision.PENDING, president_alerted_at__isnull=False
+        ).order_by("president_alerted_at")
+        return Response(
+            {
+                "refused": serializers.MembershipApplicationSerializer(refused, many=True, context=ctx).data,
+                "awaiting_sponsor": serializers.MembershipApplicationSerializer(awaiting, many=True, context=ctx).data,
+            }
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tableau de bord du Président et du Vice-président (lecture seule)
+# ---------------------------------------------------------------------------
+
+
+class BoardDashboardView(APIView):
+    """Toutes les cartes du tableau de bord en un appel (fiche
+    club-tableau-de-bord-bureau §10). Permission : Président ou Vice-président
+    (matrice 2.4). Aucune écriture, aucune entrée de journal."""
+
+    permission_classes = _CLUB_MEMBER_GATE + [IsPresidentOrVicePresident]
+
+    def get(self, request):
+        club = get_active_club()
+        try:
+            period = board_dashboard.period_from_query(club, request.query_params)
+            data = board_dashboard.board_cards(club, period, request=request)
+        except (TreasuryValidationError, board_dashboard.BoardDashboardError) as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except TenantMismatchError:
+            return Response({"detail": "Club actif incohérent."}, status=status.HTTP_403_FORBIDDEN)
+        return Response(data)
+
+
+class BoardDashboardSectionView(APIView):
+    """Détail d'une carte pour sa modale : ``?period=…&limit=&offset=&only=``."""
+
+    permission_classes = _CLUB_MEMBER_GATE + [IsPresidentOrVicePresident]
+
+    def get(self, request, section):
+        club = get_active_club()
+        if section not in board_dashboard.ALL_SECTIONS:
+            return Response({"detail": "Section inconnue du tableau de bord."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            period = board_dashboard.period_from_query(club, request.query_params)
+            limit, offset = board_dashboard.paging_from_query(request.query_params)
+            data = board_dashboard.board_section(
+                club,
+                section,
+                period,
+                limit=limit,
+                offset=offset,
+                only=request.query_params.get("only") or None,
+                request=request,
+            )
+        except (TreasuryValidationError, board_dashboard.BoardDashboardError) as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except TenantMismatchError:
+            return Response({"detail": "Club actif incohérent."}, status=status.HTTP_403_FORBIDDEN)
+        return Response(data)

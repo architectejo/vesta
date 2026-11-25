@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { listChatChannels, type ChatChannel } from "../../../api/social";
-import { EmptyState, Skeleton, useClubBranding } from "../../../design-system";
+import { EmptyState, IconLock, IconPrivate, Skeleton, useClubBranding } from "../../../design-system";
+import { formatChannelCount } from "./chatFormat";
 import { ConversationModal } from "./ConversationModal";
 
 const CHANNEL_LABEL: Record<ChatChannel["channel_type"], { name: string; description: string }> = {
@@ -11,18 +12,9 @@ const CHANNEL_LABEL: Record<ChatChannel["channel_type"], { name: string; descrip
 
 function ChannelIcon({ type }: { type: ChatChannel["channel_type"] }) {
   if (type === "board") {
-    return (
-      <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.5}>
-        <rect x="5" y="11" width="14" height="9" rx="1.5" />
-        <path d="M8 11V8a4 4 0 018 0v3" />
-      </svg>
-    );
+    return <IconLock aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />;
   }
-  return (
-    <span aria-hidden="true" className="text-lg font-semibold">
-      #
-    </span>
-  );
+  return <IconPrivate aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />;
 }
 
 function lastMessagePreview(channel: ChatChannel): string {
@@ -58,7 +50,7 @@ export function ChatPage() {
       <header>
         <h1 className="text-xl font-semibold text-text">Chat</h1>
         <p className="text-sm text-text-muted">
-          {branding?.name ?? ""} · {query.data?.results.length ?? 0} canal{(query.data?.results.length ?? 0) > 1 ? "aux" : ""}
+          {branding?.name ?? ""} · {formatChannelCount(query.data?.results.length ?? 0)}
         </p>
       </header>
 

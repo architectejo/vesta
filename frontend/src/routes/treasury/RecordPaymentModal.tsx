@@ -12,9 +12,9 @@ import {
 } from "../../api/treasury";
 import {
   Banner,
+  ConfirmDialog,
   Modal,
   MoneyField,
-  PinPrompt,
   PlayerSearch,
   SegmentedControl,
   StatusBadge,
@@ -23,8 +23,8 @@ import {
   type PlayerSearchResult,
 } from "../../design-system";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
-import { formatAmount, formatMonthYear, todayIsoDate } from "./money";
-import { formatPinError } from "./pinErrors";
+import { CLIENT_UUID_CONFLICT_MESSAGE, useClientUuid } from "../../hooks/useClientUuid";
+import { formatAmount, formatMonthYear, isPositiveAmount, todayIsoDate, toApiAmount } from "./money";
 
 const CONTRIBUTION_TYPES_QUERY_KEY = ["treasury", "contribution-types"] as const;
 
@@ -50,6 +50,8 @@ const ALLOCATION_STATUS_LABELS: Record<string, string> = {
 function pickDefaultContributionTypeId(types: ContributionType[]): number | undefined {
   return types.find((type) => type.nature === "mandatory" && type.periodicity === "monthly")?.id;
 }
+
+const MAX_CONFIRM_LINES = 6;
 
 interface FormErrors {
   player?: string;
@@ -98,6 +100,7 @@ export function RecordPaymentModal({
   level = 1,
 }: RecordPaymentModalProps) {
   const { showToast } = useToast();
+  const clientUuid = useClientUuid();
 
   const [player, setPlayer] = useState<PlayerSearchResult | null>(initialPlayer ?? null);
   const [contributionTypeId, setContributionTypeId] = useState<number | "">(initialContributionTypeId ?? "");
@@ -110,9 +113,8 @@ export function RecordPaymentModal({
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const [pinOpen, setPinOpen] = useState(false);
-  const [pinSubmitting, setPinSubmitting] = useState(false);
-  const [pinError, setPinError] = useState<string | undefined>(undefined);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmSubmitting, setConfirmSubmitting] = useState(false);
 
   const typesQuery = useQuery({
     queryKey: CONTRIBUTION_TYPES_QUERY_KEY,
@@ -136,7 +138,8 @@ export function RecordPaymentModal({
       setAttachment(null);
       setErrors({});
       setSubmitError(null);
-      setPinError(undefined);
+      setConfirmOpen(false);
+      clientUuid.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -152,7 +155,7 @@ export function RecordPaymentModal({
 
   const debouncedAmount = useDebouncedValue(amount, 250);
   const previewEnabled =
-    open && Boolean(player) && contributionTypeId !== "" && Number(debouncedAmount.replace(",", ".")) > 0;
+    open && Boolean(player) && contributionTypeId !== "" && isPositiveAmount(debouncedAmount);
 
   const previewQuery = useQuery<PaymentPreview>({
     queryKey: [
@@ -167,11 +170,24 @@ export function RecordPaymentModal({
       previewPayment({
         membership_id: Number(player!.id),
         contribution_type_id: Number(contributionTypeId),
-        amount: debouncedAmount.replace(",", "."),
+        amount: toApiAmount(debouncedAmount),
         paid_on: paidOn,
       }),
     enabled: previewEnabled,
   });
+
+  // Répartition rappelée dans la confirmation (CDC 4.4.4) : uniquement celle
+  // de l'aperçu de l'API, jamais déduite ici ; rien si l'aperçu est absent,
+  // en erreur, périmé (montant en cours de saisie) ou si le type est libre.
+  const previewData = previewQuery.data;
+  const confirmAllocations =
+    previewEnabled &&
+    !previewQuery.isError &&
+    previewData &&
+    !previewData.is_free_type &&
+    amount === debouncedAmount
+      ? previewData.allocations
+      : [];
 
   // Un joueur ou un type prérempli (§4.1 de la fiche de la grille des
   // cotisations) ne rend pas la modale « modifiée » tant que la personne n'a
@@ -189,8 +205,7 @@ export function RecordPaymentModal({
     const next: FormErrors = {};
     if (!player) next.player = "Choisissez un joueur.";
     if (contributionTypeId === "") next.type = "Choisissez un type de cotisation.";
-    const numericAmount = Number(amount.replace(",", "."));
-    if (!amount || Number.isNaN(numericAmount) || numericAmount <= 0) {
+    if (!isPositiveAmount(amount)) {
       next.amount = "Saisissez un montant supérieur à 0.";
     }
     if (method !== "cash" && !reference.trim()) {
@@ -204,46 +219,60 @@ export function RecordPaymentModal({
     return next;
   }
 
+  function inputSignature(): string {
+    return JSON.stringify([
+      player?.id,
+      contributionTypeId,
+      toApiAmount(amount),
+      method,
+      reference.trim(),
+      paidOn,
+      attachment ? [attachment.name, attachment.size, attachment.lastModified] : null,
+    ]);
+  }
+
   function handleConfirm(): void {
     const nextErrors = validate();
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
     setSubmitError(null);
-    setPinError(undefined);
-    setPinOpen(true);
+    // Un UUID par tentative : créé à l'ouverture de la confirmation, conservé
+    // pour un nouvel essai tant que la saisie ne change pas.
+    clientUuid.get(inputSignature());
+    setConfirmOpen(true);
   }
 
-  async function submitPayment(pin: string): Promise<void> {
+  async function submitPayment(): Promise<void> {
     if (!player || contributionTypeId === "") return;
-    setPinSubmitting(true);
-    setPinError(undefined);
+    if (confirmSubmitting) return;
+    setConfirmSubmitting(true);
     try {
       const payment = await createPayment({
         membership_id: Number(player.id),
         contribution_type_id: Number(contributionTypeId),
-        amount: amount.replace(",", "."),
+        amount: toApiAmount(amount),
         paid_on: paidOn,
         method,
         reference: reference.trim(),
         attachment,
-        pin,
+        client_uuid: clientUuid.get(inputSignature()),
       });
-      setPinOpen(false);
+      clientUuid.reset();
+      setConfirmOpen(false);
       onRecorded();
       showToast(`Paiement enregistré. Reçu n° ${payment.receipt_number} envoyé à ${player.firstName}.`);
       onClose();
     } catch (error) {
-      if (error instanceof ApiError && (error.status === 400 || error.status === 423) && error.raw &&
-        typeof error.raw === "object" && ("attempts_remaining" in (error.raw as object) || "locked_until" in (error.raw as object))) {
-        setPinError(formatPinError(error));
-      } else {
-        // Erreur métier (gel des écritures, type archivé…) : la modale de
-        // paiement reprend la main avec le bandeau d'erreur du corps.
-        setPinOpen(false);
-        setSubmitError(apiErrorMessage(error));
-      }
+      // Erreur métier (gel des écritures, type archivé…) : la modale de
+      // paiement reprend la main avec le bandeau d'erreur du corps.
+      setConfirmOpen(false);
+      setSubmitError(
+        error instanceof ApiError && error.status === 409 && error.code === "client_uuid_conflict"
+          ? CLIENT_UUID_CONFLICT_MESSAGE
+          : apiErrorMessage(error),
+      );
     } finally {
-      setPinSubmitting(false);
+      setConfirmSubmitting(false);
     }
   }
 
@@ -351,15 +380,43 @@ export function RecordPaymentModal({
         </div>
       </Modal>
 
-      <PinPrompt
-        open={pinOpen}
+      <ConfirmDialog
+        open={confirmOpen}
+        danger={false}
+        title={`Valider ce paiement de ${formatAmount(amount || "0", currency)} ?`}
         description={
-          player ? `Valider le paiement de ${formatAmount(amount || "0", currency)} pour ${player.firstName} ${player.lastName}.` : ""
+          player ? (
+            <div className="space-y-2 text-base">
+              <p>
+                Le paiement de {player.firstName} {player.lastName} sera enregistré et un reçu lui sera
+                envoyé. Il ne pourra plus être supprimé, seulement annulé.
+              </p>
+              {confirmAllocations.length > 0 ? (
+                <div>
+                  <p className="font-medium text-text">Répartition</p>
+                  <ul className="mt-1 space-y-1 text-sm" data-testid="confirm-allocations">
+                    {confirmAllocations.slice(0, MAX_CONFIRM_LINES).map((line) => (
+                      <li key={line.period} className="flex justify-between gap-2">
+                        <span>{formatMonthYear(line.period)}</span>
+                        <span className="tabular-nums">{formatAmount(line.amount, currency)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {confirmAllocations.length > MAX_CONFIRM_LINES ? (
+                    <p className="mt-1 text-sm">
+                      et {confirmAllocations.length - MAX_CONFIRM_LINES} autres
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : undefined
         }
-        isSubmitting={pinSubmitting}
-        error={pinError}
-        onSubmit={(pin) => void submitPayment(pin)}
-        onClose={() => setPinOpen(false)}
+        confirmLabel="Valider"
+        loadingLabel="Validation…"
+        loading={confirmSubmitting}
+        onConfirm={() => void submitPayment()}
+        onCancel={() => setConfirmOpen(false)}
       />
     </>
   );

@@ -11,9 +11,9 @@ from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.accounts import services as accounts_services
 from apps.assemblies.models import Assembly, Minutes
 from apps.assemblies.tests.factories import AgendaItemFactory, AssemblyFactory
+from apps.audit.models import AuditLog
 from apps.clubs.models import MembershipRole
 from apps.clubs.tests.factories import ClubFactory, ClubSettingsFactory, MembershipFactory, MembershipRoleFactory
 
@@ -87,6 +87,7 @@ class TestConveneEndpoint:
         )
 
         assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert response.data["detail"] == "Cette assemblée n'existe pas dans ce club."
 
 
 class TestAttendanceEndpoint:
@@ -159,8 +160,6 @@ class TestMinutesSignAndPdf:
         club = _club()
         president = _president(club)
         vp = _vp(club)
-        accounts_services.define_pin(user=president.user, pin="1234", confirm_pin="1234")
-        accounts_services.define_pin(user=vp.user, pin="5678", confirm_pin="5678")
         assembly = AssemblyFactory(club=club)
 
         pres_client = _authenticated_client(president.user)
@@ -172,13 +171,13 @@ class TestMinutesSignAndPdf:
         assert draft_response.status_code == status.HTTP_200_OK
 
         sign1 = pres_client.post(
-            reverse("assemblies:assembly-minutes-sign", kwargs={"pk": assembly.pk}), {"pin": "1234"}, format="json"
+            reverse("assemblies:assembly-minutes-sign", kwargs={"pk": assembly.pk}), {}, format="json"
         )
         assert sign1.status_code == status.HTTP_200_OK
         assert sign1.data["is_complete"] is False
 
         sign2 = vp_client.post(
-            reverse("assemblies:assembly-minutes-sign", kwargs={"pk": assembly.pk}), {"pin": "5678"}, format="json"
+            reverse("assemblies:assembly-minutes-sign", kwargs={"pk": assembly.pk}), {}, format="json"
         )
         assert sign2.status_code == status.HTTP_200_OK
         assert sign2.data["is_complete"] is True
@@ -194,7 +193,6 @@ class TestMinutesSignAndPdf:
         club_b = _club()
         president_a = _president(club_a)
         president_b = _president(club_b)
-        accounts_services.define_pin(user=president_b.user, pin="1234", confirm_pin="1234")
         assembly_b = AssemblyFactory(club=club_b)
 
         b_client = _authenticated_client(president_b.user)
@@ -202,7 +200,7 @@ class TestMinutesSignAndPdf:
             reverse("assemblies:assembly-minutes", kwargs={"pk": assembly_b.pk}), {"content": "Texte"}, format="json"
         )
         b_client.post(
-            reverse("assemblies:assembly-minutes-sign", kwargs={"pk": assembly_b.pk}), {"pin": "1234"}, format="json"
+            reverse("assemblies:assembly-minutes-sign", kwargs={"pk": assembly_b.pk}), {}, format="json"
         )
 
         response = _authenticated_client(president_a.user).get(
@@ -211,19 +209,39 @@ class TestMinutesSignAndPdf:
 
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    def test_wrong_pin_is_rejected_with_400(self):
+    def test_signature_succeeds_without_pin_and_a_sent_pin_is_ignored(self):
         club = _club()
         president = _president(club)
-        accounts_services.define_pin(user=president.user, pin="1234", confirm_pin="1234")
+        vp = _vp(club)
         assembly = AssemblyFactory(club=club)
-        client = _authenticated_client(president.user)
-        client.put(reverse("assemblies:assembly-minutes", kwargs={"pk": assembly.pk}), {"content": "Texte"}, format="json")
+        pres_client = _authenticated_client(president.user)
+        vp_client = _authenticated_client(vp.user)
+        pres_client.put(reverse("assemblies:assembly-minutes", kwargs={"pk": assembly.pk}), {"content": "Texte"}, format="json")
+        url = reverse("assemblies:assembly-minutes-sign", kwargs={"pk": assembly.pk})
 
-        response = client.post(
-            reverse("assemblies:assembly-minutes-sign", kwargs={"pk": assembly.pk}), {"pin": "0000"}, format="json"
+        without_pin = pres_client.post(url, {}, format="json")
+        with_garbage_pin = vp_client.post(url, {"pin": "0000"}, format="json")
+
+        assert without_pin.status_code == status.HTTP_200_OK
+        assert with_garbage_pin.status_code == status.HTTP_200_OK
+        assert with_garbage_pin.data["is_complete"] is True
+        entry = AuditLog.objects.filter(action_type="assemblies.minutes.signed").order_by("id")
+        assert [e.actor_id for e in entry] == [president.user.id, vp.user.id]
+
+    def test_unauthorized_role_is_still_refused_without_pin(self):
+        club = _club()
+        president = _president(club)
+        player = MembershipFactory(club=club)
+        assembly = AssemblyFactory(club=club)
+        _authenticated_client(president.user).put(
+            reverse("assemblies:assembly-minutes", kwargs={"pk": assembly.pk}), {"content": "Texte"}, format="json"
         )
 
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        response = _authenticated_client(player.user).post(
+            reverse("assemblies:assembly-minutes-sign", kwargs={"pk": assembly.pk}), {}, format="json"
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
 class TestQuorumThresholdEndpoint:

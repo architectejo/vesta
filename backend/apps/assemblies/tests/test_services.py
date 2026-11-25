@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo
 import pytest
 from django.utils import timezone
 
-from apps.accounts import services as accounts_services
 from apps.assemblies import services
 from apps.assemblies.models import Assembly, Minutes
 from apps.assemblies.tests.factories import AgendaItemFactory, AssemblyFactory
@@ -94,7 +93,7 @@ class TestConveneAssembly:
         future_date = (timezone.now() + timedelta(days=5)).date()
 
         with active_club(club):
-            with pytest.raises(services.AssemblyValidationError, match="ordre du jour"):
+            with pytest.raises(services.AssemblyValidationError, match="Ajoutez au moins un point à l'ordre du jour."):
                 services.convene_assembly(
                     club=club,
                     actor=president.user,
@@ -232,24 +231,19 @@ class TestRecordDecision:
 
 
 class TestMinutesSignature:
-    def _set_pin(self, user, pin="1234"):
-        accounts_services.define_pin(user=user, pin=pin, confirm_pin=pin)
-
     def test_president_and_vice_president_signatures_complete_the_pv_and_generate_the_pdf(self):
         club = _club()
         president = _president(club)
         vice_president = _vice_president(club)
-        self._set_pin(president.user)
-        self._set_pin(vice_president.user)
         assembly = AssemblyFactory(club=club)
 
         with active_club(club):
             services.draft_minutes(assembly=assembly, actor=president.user, content="Texte du PV.")
-            minutes = services.sign_minutes(assembly=assembly, actor=president.user, pin="1234")
+            minutes = services.sign_minutes(assembly=assembly, actor=president.user)
             assert minutes.is_complete is False
             assert minutes.generated_at is None
 
-            minutes = services.sign_minutes(assembly=assembly, actor=vice_president.user, pin="1234")
+            minutes = services.sign_minutes(assembly=assembly, actor=vice_president.user)
 
         assert minutes.is_complete is True
         assert minutes.vp_vacant_at_signature is False
@@ -261,12 +255,11 @@ class TestMinutesSignature:
 
         club = _club()
         president = _president(club)
-        self._set_pin(president.user)
         assembly = AssemblyFactory(club=club)
 
         with active_club(club):
             services.draft_minutes(assembly=assembly, actor=president.user, content="Texte du PV.")
-            minutes = services.sign_minutes(assembly=assembly, actor=president.user, pin="1234")
+            minutes = services.sign_minutes(assembly=assembly, actor=president.user)
 
         assert minutes.is_complete is True
         assert minutes.vp_vacant_at_signature is True
@@ -277,12 +270,11 @@ class TestMinutesSignature:
         club = _club()
         president = _president(club)
         MembershipRoleFactory(membership=president, role=MembershipRole.Role.VICE_PRESIDENT)
-        self._set_pin(president.user)
         assembly = AssemblyFactory(club=club)
 
         with active_club(club):
             services.draft_minutes(assembly=assembly, actor=president.user, content="Texte du PV.")
-            minutes = services.sign_minutes(assembly=assembly, actor=president.user, pin="1234")
+            minutes = services.sign_minutes(assembly=assembly, actor=president.user)
 
         # Signe au titre de President -- la signature VP reste vacante
         # (personne d'autre ne porte le role), donc le PV est complet. Le
@@ -298,49 +290,77 @@ class TestMinutesSignature:
     def test_minutes_cannot_be_edited_after_the_first_signature(self):
         club = _club()
         president = _president(club)
-        self._set_pin(president.user)
         assembly = AssemblyFactory(club=club)
 
         with active_club(club):
             services.draft_minutes(assembly=assembly, actor=president.user, content="V1")
-            services.sign_minutes(assembly=assembly, actor=president.user, pin="1234")
+            services.sign_minutes(assembly=assembly, actor=president.user)
             with pytest.raises(services.AssemblyLockedError):
                 services.draft_minutes(assembly=assembly, actor=president.user, content="V2")
 
-    def test_wrong_pin_raises_pin_error_without_signing(self):
+    def test_signature_succeeds_without_pin_and_journal_records_the_author(self):
         club = _club()
         president = _president(club)
-        self._set_pin(president.user)
         assembly = AssemblyFactory(club=club)
 
         with active_club(club):
             services.draft_minutes(assembly=assembly, actor=president.user, content="Texte")
-            with pytest.raises(accounts_services.InvalidPinError):
-                services.sign_minutes(assembly=assembly, actor=president.user, pin="0000")
-
+            services.sign_minutes(assembly=assembly, actor=president.user)
             minutes = Minutes.all_objects.get(assembly=assembly)
-        assert minutes.president_signed_by_id is None
+        assert minutes.president_signed_by_id == president.user.id
+        entry = AuditLog.objects.filter(action_type="assemblies.minutes.signed").latest("id")
+        assert entry.actor_id == president.user.id
+
+    def test_same_signatory_twice_gives_a_single_journal_entry(self):
+        club = _club()
+        president = _president(club)
+        vice_president = _vice_president(club)
+        assembly = AssemblyFactory(club=club)
+
+        with active_club(club):
+            services.draft_minutes(assembly=assembly, actor=president.user, content="Texte")
+            services.sign_minutes(assembly=assembly, actor=president.user)
+            with pytest.raises(services.AssemblyValidationError):
+                services.sign_minutes(assembly=assembly, actor=president.user)
+            # La signature du Vice-president n'est pas perdue par la tentative rejetee.
+            minutes = services.sign_minutes(assembly=assembly, actor=vice_president.user)
+
+        assert minutes.president_signed_by_id == president.user_id
+        assert minutes.vp_signed_by_id == vice_president.user_id
+        assert AuditLog.objects.filter(action_type="assemblies.minutes.signed").count() == 2
+        assert AuditLog.objects.filter(
+            action_type="assemblies.minutes.signed", actor_id=president.user_id
+        ).count() == 1
+
+    def test_signing_a_complete_pv_is_refused_and_not_journaled_again(self):
+        club = _club()
+        president = _president(club)
+        assembly = AssemblyFactory(club=club)
+
+        with active_club(club):
+            services.draft_minutes(assembly=assembly, actor=president.user, content="Texte")
+            services.sign_minutes(assembly=assembly, actor=president.user)
+            with pytest.raises(services.AssemblyLockedError):
+                services.sign_minutes(assembly=assembly, actor=president.user)
+
+        assert AuditLog.objects.filter(action_type="assemblies.minutes.signed").count() == 1
 
     def test_a_plain_player_cannot_sign(self):
         club = _club()
         president = _president(club)
         player = MembershipFactory(club=club)
-        self._set_pin(player.user)
         assembly = AssemblyFactory(club=club)
 
         with active_club(club):
             services.draft_minutes(assembly=assembly, actor=president.user, content="Texte")
-            with pytest.raises(services.AssemblyPermissionError):
-                services.sign_minutes(assembly=assembly, actor=player.user, pin="1234")
+            with pytest.raises(services.AssemblyPermissionError, match="Réservé au Président et au Vice-président."):
+                services.sign_minutes(assembly=assembly, actor=player.user)
 
 
 class TestMinutesPdfContent:
     """Contenu du PDF genere (docs/annexes/modeles-documents.md §3, §6.1) :
     aucune troncature, heures dans le fuseau du club, libelle correct
     quand le President cumule le role de Vice-president."""
-
-    def _set_pin(self, user, pin="1234"):
-        accounts_services.define_pin(user=user, pin=pin, confirm_pin=pin)
 
     def _pdf_text(self, minutes: Minutes) -> str:
         minutes.pdf_file.open("rb")
@@ -358,8 +378,6 @@ class TestMinutesPdfContent:
         club = _club()
         president = _president(club)
         vice_president = _vice_president(club)
-        self._set_pin(president.user)
-        self._set_pin(vice_president.user)
         assembly = AssemblyFactory(club=club)
         long_decision = (
             "Decision detaillee votee a l'unanimite concernant le renouvellement complet du "
@@ -380,8 +398,8 @@ class TestMinutesPdfContent:
                 outcome=long_decision,
             )
             services.draft_minutes(assembly=assembly, actor=president.user, content="Texte du PV.")
-            services.sign_minutes(assembly=assembly, actor=president.user, pin="1234")
-            minutes = services.sign_minutes(assembly=assembly, actor=vice_president.user, pin="1234")
+            services.sign_minutes(assembly=assembly, actor=president.user)
+            minutes = services.sign_minutes(assembly=assembly, actor=vice_president.user)
 
         text = self._pdf_text(minutes)
         # Le marqueur se trouve au-dela du caractere 120 de la phrase :
@@ -396,12 +414,11 @@ class TestMinutesPdfContent:
         club = _club()
         president = _president(club)
         MembershipRoleFactory(membership=president, role=MembershipRole.Role.VICE_PRESIDENT)
-        self._set_pin(president.user)
         assembly = AssemblyFactory(club=club)
 
         with active_club(club):
             services.draft_minutes(assembly=assembly, actor=president.user, content="Texte du PV.")
-            minutes = services.sign_minutes(assembly=assembly, actor=president.user, pin="1234")
+            minutes = services.sign_minutes(assembly=assembly, actor=president.user)
 
         text = self._pdf_text(minutes)
         # ReportLab echappe les caracteres accentues en octal dans le flux
@@ -415,12 +432,11 @@ class TestMinutesPdfContent:
     def test_genuine_vacancy_wording_when_there_is_no_vp(self):
         club = _club()
         president = _president(club)
-        self._set_pin(president.user)
         assembly = AssemblyFactory(club=club)
 
         with active_club(club):
             services.draft_minutes(assembly=assembly, actor=president.user, content="Texte du PV.")
-            minutes = services.sign_minutes(assembly=assembly, actor=president.user, pin="1234")
+            minutes = services.sign_minutes(assembly=assembly, actor=president.user)
 
         text = self._pdf_text(minutes)
         assert "vacant" in text.lower()
@@ -428,7 +444,6 @@ class TestMinutesPdfContent:
     def test_signature_timestamps_are_shown_in_the_clubs_timezone(self):
         club = _club()
         president = _president(club)
-        self._set_pin(president.user)
         assembly = AssemblyFactory(club=club)
         # 23h30 UTC un jour donne = 00h30 le lendemain a Kinshasa (UTC+1,
         # sans heure d'ete) : verifie que le PDF affiche l'heure et la date
@@ -437,7 +452,7 @@ class TestMinutesPdfContent:
 
         with active_club(club):
             services.draft_minutes(assembly=assembly, actor=president.user, content="Texte du PV.")
-            minutes = services.sign_minutes(assembly=assembly, actor=president.user, pin="1234", now=utc_instant)
+            minutes = services.sign_minutes(assembly=assembly, actor=president.user, now=utc_instant)
 
         text = self._pdf_text(minutes)
         assert "28/09/2026" in text
@@ -447,12 +462,11 @@ class TestMinutesPdfContent:
     def test_no_cdc_reference_in_generated_pdf(self):
         club = _club()
         president = _president(club)
-        self._set_pin(president.user)
         assembly = AssemblyFactory(club=club)
 
         with active_club(club):
             services.draft_minutes(assembly=assembly, actor=president.user, content="Texte du PV.")
-            minutes = services.sign_minutes(assembly=assembly, actor=president.user, pin="1234")
+            minutes = services.sign_minutes(assembly=assembly, actor=president.user)
 
         text = self._pdf_text(minutes)
         assert "CDC" not in text

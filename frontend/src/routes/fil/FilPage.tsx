@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { listPosts, type PostScope } from "../../api/social";
+import { useDeepLink } from "../../hooks/useDeepLink";
 import { Button, EmptyState, SegmentedControl, Skeleton, useClubBranding } from "../../design-system";
 import { NewPostModal } from "./NewPostModal";
 import { PostCard } from "./PostCard";
@@ -18,6 +19,7 @@ export function FilPage() {
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [newPostOpen, setNewPostOpen] = useState(false);
   const [openPostId, setOpenPostId] = useState<number | null>(null);
+  useDeepLink("publication", setOpenPostId);
 
   const query = useQuery({
     queryKey: ["social", "posts", scope, limit],

@@ -19,7 +19,7 @@ from apps.clubs.models import Membership, MembershipRole
 from apps.clubs.tests.factories import MembershipRoleFactory
 from apps.clubs.tests.test_membership_application import add_player, build_context, pay
 from apps.notifications.models import Notification
-from apps.treasury.tests.conftest import PIN, make_member
+from apps.treasury.tests.conftest import make_member
 
 pytestmark = pytest.mark.django_db
 
@@ -39,7 +39,7 @@ class TestNotificationFicheASignerEtRappel:
         )
         assert notification.body == (
             f"{recruit_name} attend votre parrainage. Ouvrez sa fiche d'adhésion "
-            "pour la signer avec votre code PIN, ou pour refuser en indiquant un "
+            "pour la signer, ou pour refuser en indiquant un "
             "motif."
         )
         assert notification.club_id == ctx.club.id
@@ -66,7 +66,7 @@ class TestNotificationFicheASignerEtRappel:
         )
         assert notification.body == (
             f"La fiche d'adhésion de {recruit_name} attend votre réponse "
-            "depuis 3 jours. Signez-la avec votre code PIN, ou refusez en "
+            "depuis 3 jours. Signez-la, ou refusez en "
             "indiquant un motif."
         )
 

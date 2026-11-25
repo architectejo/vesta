@@ -36,6 +36,13 @@ vi.mock("../api/clubs", async () => {
   return { ...actual, getMyProfile: vi.fn() };
 });
 
+vi.mock("../api/notifications", () => ({
+  getUnreadCount: vi.fn().mockResolvedValue({ unread_count: 0 }),
+  getNotifications: vi.fn().mockResolvedValue({ count: 0, next: null, previous: null, results: [] }),
+  markNotificationRead: vi.fn(),
+  markAllNotificationsRead: vi.fn(),
+}));
+
 import { getMyProfile } from "../api/clubs";
 
 const FRESH_PROFILE: MyProfile = {
@@ -111,5 +118,42 @@ describe("AppLayout — branding (couleurs Classic)", () => {
 
     expect(screen.getByTestId("primary")).toHaveTextContent("#111111");
     expect(screen.getByTestId("secondary")).toHaveTextContent("#222222");
+  });
+});
+
+describe("AppLayout — entrée « Tableau de bord du club »", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("apparaît en tête du menu quand l'API accorde le droit, et « Accueil » reste présent", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue({
+      ...FRESH_PROFILE,
+      capabilities: { can_view_board_dashboard: true },
+    });
+    renderLayout();
+
+    await waitFor(() => expect(screen.getAllByText("Tableau de bord du club").length).toBeGreaterThan(0));
+    expect(screen.getAllByText("Accueil").length).toBeGreaterThan(0);
+  });
+
+  it("n'apparaît pas sans le droit (le rôle seul ne suffit pas : l'API décide)", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(FRESH_PROFILE);
+    renderLayout();
+
+    // Le profil est chargé quand les couleurs à jour apparaissent.
+    await waitFor(() => expect(screen.getByTestId("primary")).toHaveTextContent("#1b2143"));
+    expect(screen.queryByText("Tableau de bord du club")).not.toBeInTheDocument();
+  });
+});
+
+describe("AppLayout — menu Sport", () => {
+  it("ne contient plus « Plan tactique » (les plans sont dans l'onglet Plans du Vestiaire)", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(FRESH_PROFILE);
+    renderLayout();
+
+    await waitFor(() => expect(screen.getByTestId("primary")).toHaveTextContent("#1b2143"));
+    expect(screen.getAllByText("Vestiaire du jour").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Plan tactique")).not.toBeInTheDocument();
   });
 });

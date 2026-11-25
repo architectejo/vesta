@@ -10,7 +10,7 @@ Le Président est, comme tout le monde dans Vesta, un joueur du club : il a sa p
 - **Nommer le bureau** : Vice-président, Directeur sportif, Trésorier, Trésorier adjoint, Intendant, Médecin — tous choisis parmi les joueurs déjà inscrits (jamais par saisie libre, toujours par recherche de joueur).
 - **Ajouter ou retirer le Coach.**
 - **Désigner quels joueurs ont le droit d'ajouter d'autres joueurs** (délégation de l'inscription).
-- **Valider ou refuser une dépense** soumise par le Trésorier/Trésorier adjoint (menu Trésorerie → Dépenses), avec votre code PIN.
+- **Valider ou refuser une dépense** soumise par le Trésorier/Trésorier adjoint (menu Trésorerie → Dépenses), en confirmant dans la fenêtre qui s'ouvre.
 - **Convoquer une assemblée générale**, rédiger l'ordre du jour, enregistrer les décisions, rédiger et signer le procès-verbal (menu Club → Assemblées générales). Si le poste de Vice-président est vacant au moment de la signature, vous signez seul — l'écran l'indique.
 - **Publier un communiqué officiel** (menu Club → Communiqués).
 - **Répondre aux offres de mercato** reçues d'autres clubs, ou en envoyer (menu Club → Mercato).
@@ -29,7 +29,7 @@ Le Président est, comme tout le monde dans Vesta, un joueur du club : il a sa p
 ## Parcours type pour la présentation
 
 1. Ouvrez « Comité et bureau » pour montrer l'identité du club et les couleurs.
-2. Ouvrez « Dépenses » (Trésorerie) et validez une dépense en attente avec votre PIN.
+2. Ouvrez « Dépenses » (Trésorerie) et validez une dépense en attente en confirmant dans la fenêtre qui s'ouvre.
 3. Ouvrez « Assemblées générales » pour montrer un procès-verbal déjà signé (ou signez-en un en attente).
 4. Ouvrez « Communiqués » et publiez-en un.
 

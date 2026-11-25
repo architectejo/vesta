@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { IconRemove, IconSearch } from "../icons";
 import { Avatar } from "./Avatar";
 import { StatusBadge } from "./StatusBadge";
 import type { StatusKey } from "./statusMap";
@@ -138,17 +139,10 @@ function PlayerComboboxField({
         {ariaLabel}
       </label>
       <div className="relative">
-        <svg
+        <IconSearch
           aria-hidden="true"
-          viewBox="0 0 24 24"
           className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
-          <circle cx="11" cy="11" r="7" />
-          <path d="M21 21l-4.3-4.3" strokeLinecap="round" />
-        </svg>
+        />
         <input
           id={inputId}
           type="text"
@@ -360,7 +354,7 @@ export function PlayerMultiSearch({
                 aria-label={`Retirer ${playerFullName(player)}`}
                 className="text-text-muted hover:text-text disabled:opacity-60"
               >
-                ×
+                <IconRemove aria-hidden="true" className="h-4 w-4" />
               </button>
             </li>
           ))}

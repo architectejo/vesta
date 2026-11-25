@@ -58,6 +58,7 @@ from apps.accounts import services as accounts_services
 from apps.accounts.models import TermsVersion, User
 from apps.clubs.models import Club, ClubCreationRequest, ClubSettings, Membership, MembershipRole
 from apps.clubs.services import notify_role_change
+from apps.core.reserved_accounts import validate_email_not_reserved
 from apps.core.services import log_action
 from apps.licences.models import Licence
 from apps.licences.services import TRIAL_DURATION_DAYS
@@ -89,7 +90,7 @@ class EmailAlreadyUsedError(ClubCreationError):
     """
 
     def __init__(self):
-        super().__init__("Cette adresse email est deja utilisee.")
+        super().__init__("Cette adresse email est déjà utilisée.")
 
 
 class TermsVersionOutdatedError(ClubCreationError):
@@ -104,7 +105,7 @@ class TermsVersionOutdatedError(ClubCreationError):
     def __init__(self, latest_terms_version: Optional[TermsVersion]):
         self.latest_terms_version = latest_terms_version
         super().__init__(
-            "Les conditions generales ont ete mises a jour. Lisez la "
+            "Les conditions générales ont été mises à jour. Lisez la "
             "nouvelle version et acceptez-la pour continuer."
         )
 
@@ -278,6 +279,7 @@ def create_club_with_founder(
         raise TermsVersionOutdatedError(latest_terms_version)
 
     normalized_email = (email or "").strip().lower()
+    validate_email_not_reserved(normalized_email)
     if User.objects.filter(email=normalized_email).exists():
         raise EmailAlreadyUsedError()
 

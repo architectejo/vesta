@@ -1,10 +1,11 @@
 """Tableau de bord Trésorerie : indicateurs, derniers paiements, détail d'un
-paiement et circuit d'annulation par l'API (CDC 4.4.4, 4.4.6, 7.2 ; fiche
+paiement et circuit d'annulation par l'API (CDC 4.4.4, 4.4.6 ; fiche
 docs/ecrans/tresorerie-tableau-de-bord.md §3 et §4.4).
 
 Couvre : formules des indicateurs (encaissé, taux de recouvrement, dettes,
 caisse), rôles (matrice 2.4), étanchéité entre clubs (404), pagination
-« Voir plus », contenu du détail, PIN et motif du circuit d'annulation.
+« Voir plus », contenu du détail, motif du circuit d'annulation (sans PIN
+depuis la décision client du 11/10/2026 ; auteur journalisé).
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from apps.clubs.models import Membership
 from apps.treasury import services
 from apps.treasury.models import Payment, PaymentReversal, Transaction
 from apps.treasury.tests.cash_helpers import club_today, free_type, monthly_type, named_member, put_in_debt
-from apps.treasury.tests.conftest import PIN, WRONG_PIN
+from apps.treasury.tests.conftest import PIN, WRONG_PIN, assert_logged_by
 
 pytestmark = pytest.mark.django_db
 
@@ -55,7 +56,6 @@ def pay(ctx, membership, ctype, *, amount="10", paid_on, method="cash", referenc
         reference=reference,
         paid_on=paid_on,
         recorded_by=ctx.treasurer.user,
-        pin=PIN,
     )
 
 
@@ -63,7 +63,7 @@ def reverse_payment(ctx, payment):
     reversal = services.request_payment_reversal(
         payment=payment, reason="Saisie en double", requested_by=ctx.treasurer.user
     )
-    return services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user, pin=PIN)
+    return services.approve_payment_reversal(reversal=reversal, approved_by=ctx.president.user)
 
 
 def detail_url(payment) -> str:
@@ -341,18 +341,12 @@ class TestReversalApi:
         )
         assert response.status_code == 403
 
-    def test_validation_par_le_president_avec_pin(self, ctx, scenario):
+    def test_validation_par_le_president_sans_pin(self, ctx, scenario):
         payment = scenario["pay_a"]
         services.request_payment_reversal(payment=payment, reason="Erreur", requested_by=ctx.treasurer.user)
         client = client_for(ctx.president.user)
 
-        wrong = client.post(action_url(payment, "approve"), {"pin": WRONG_PIN}, format="json")
-        assert wrong.status_code == 400
-        assert "attempts_remaining" in wrong.json()
-        assert PaymentReversal.all_objects.get(payment=payment).status == PaymentReversal.Status.PENDING_APPROVAL
-        assert client.post(action_url(payment, "approve"), {}, format="json").status_code == 400
-
-        response = client.post(action_url(payment, "approve"), {"pin": PIN}, format="json")
+        response = client.post(action_url(payment, "approve"), {}, format="json")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "cancelled"
@@ -363,13 +357,26 @@ class TestReversalApi:
         assert Transaction.all_objects.filter(club=ctx.club, kind=Transaction.Kind.PAYMENT_REVERSAL).count() == 2
         assert services.get_balance(scenario["a"]) == Decimal("-10.00")
         assert AuditLog.objects.filter(action_type="treasury.payment_reversal.approved").count() == 2
+        latest = AuditLog.objects.filter(action_type="treasury.payment_reversal.approved").order_by("-id").first()
+        assert latest.actor_id == ctx.president.user.pk  # auteur journalisé
+
+    def test_validation_ignore_un_pin_envoye_par_un_ancien_client(self, ctx, scenario):
+        payment = scenario["pay_a"]
+        services.request_payment_reversal(payment=payment, reason="Erreur", requested_by=ctx.treasurer.user)
+        response = client_for(ctx.president.user).post(
+            action_url(payment, "approve"), {"pin": WRONG_PIN}, format="json"
+        )
+        assert response.status_code == 200
+        assert "attempts_remaining" not in response.json()
+        assert PaymentReversal.all_objects.get(payment=payment).status == PaymentReversal.Status.APPROVED
+        ctx.president.user.refresh_from_db()
 
     @pytest.mark.parametrize("role", ["treasurer", "assistant_treasurer", "vice_president"])
     def test_validation_et_refus_reserves_au_president(self, ctx, scenario, role):
         payment = scenario["pay_a"]
         services.request_payment_reversal(payment=payment, reason="Erreur", requested_by=ctx.treasurer.user)
         client = client_for(getattr(ctx, role).user)
-        assert client.post(action_url(payment, "approve"), {"pin": PIN}, format="json").status_code == 403
+        assert client.post(action_url(payment, "approve"), {}, format="json").status_code == 403
         assert client.post(action_url(payment, "reject"), {"rejection_reason": "Non"}, format="json").status_code == 403
 
     def test_refus_par_le_president_motif_obligatoire(self, ctx, scenario):
@@ -388,7 +395,7 @@ class TestReversalApi:
 
     def test_pas_de_demande_404(self, ctx, scenario):
         response = client_for(ctx.president.user).post(
-            action_url(scenario["pay_a"], "approve"), {"pin": PIN}, format="json"
+            action_url(scenario["pay_a"], "approve"), {}, format="json"
         )
         assert response.status_code == 404
 
@@ -400,7 +407,7 @@ class TestReversalApi:
 
     @pytest.mark.parametrize("action,body", [
         ("request", {"reason": "x"}),
-        ("approve", {"pin": PIN}),
+        ("approve", {}),
         ("reject", {"rejection_reason": "x"}),
     ])
     def test_404_inter_club(self, ctx, other_ctx, scenario, action, body):

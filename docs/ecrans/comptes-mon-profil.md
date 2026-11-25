@@ -1,6 +1,6 @@
 # Écran — Mon profil
 
-Sources : CDC 4.1 (page « Mon profil », modale à onglets), 4.2, 4.4.7 (sa propre ligne de grille), 4.5.3 (assistance sociale), 4.6 (Contribuer, J'ai payé), 2.4 et 4.12 (aptitude, consentement médical, 10.2 n° 15), 4.14 (disponibilité mercato), 4.17 (préférence email), 7.1, 7.2, 7.5. Composants : `docs/lot0/design-system.md`.
+Sources : CDC 4.1 (page « Mon profil », modale à onglets), 4.2, 4.4.7 (sa propre ligne de grille), 4.5.3 (assistance sociale), 4.6 (Contribuer, J'ai payé), 2.4 et 4.12 (aptitude, consentement médical, 10.2 n° 15), 4.14 (disponibilité mercato), 4.17 (préférence email), 7.1, 7.5. Composants : `docs/lot0/design-system.md`.
 
 ## 1. Objectif
 
@@ -39,7 +39,7 @@ Footer.
 
 ## 4. Modales
 
-### 4.1 « Modifier mon profil » (4.1) — taille `md`, 4 onglets, un « Enregistrer » par onglet
+### 4.1 « Modifier mon profil » (4.1) — taille `md`, 3 onglets, un « Enregistrer » par onglet
 
 **Onglet « Informations »**
 
@@ -67,16 +67,6 @@ Succès : « Profil mis à jour. »
 | Mot de passe actuel | TextField `password` | Oui | « Mot de passe actuel incorrect. » |
 
 Succès : « Identifiants mis à jour. »
-
-**Onglet « Code PIN »** (7.2) : explication « Le code PIN confirme les actions sensibles : validation de paiement ou de dépense, signature, annulation. »
-
-| Champ | Composant | Obligatoire | Règle / erreur |
-| --- | --- | --- | --- |
-| Mot de passe actuel | TextField `password` | Oui (sert aussi en cas de code oublié) | « Mot de passe actuel incorrect. » |
-| Nouveau code PIN | Champ PIN 4–6 chiffres | Oui | « Le code PIN doit contenir 4 à 6 chiffres. » |
-| Confirmez le code | Champ PIN | Oui | « Les deux codes ne correspondent pas. » |
-
-Succès : « Code PIN enregistré. »
 
 ### 4.2 « J'ai payé » (4.6) — taille `md`
 
@@ -129,7 +119,7 @@ Pied (toujours visible) :
 - non accordé : « Annuler » / « Autoriser » (action principale). Succès : toast « Autorisation accordée au Président. » ; la modale se ferme, la carte Santé affiche « Accordé ».
 - accordé : « Fermer » / « Révoquer » (bouton de type danger). Clic → ConfirmDialog « Révoquer l'autorisation ? » — texte « La révocation prend effet immédiatement : le Président ne pourra plus consulter votre dossier médical complet. » — boutons « Annuler » / « Révoquer ». Succès : toast « Autorisation révoquée. » ; la carte Santé affiche « Non accordé ».
 
-Pas de code PIN (le consentement n'est pas une action sensible au sens du 7.2) ; confirmation uniquement pour la révocation. Bouton en état `loading` pendant l'envoi. Erreur : message réseau standard, l'état affiché reste l'état serveur précédent (aucune mise à jour optimiste). Un club a toujours un et un seul Président (CDC 2.3) : l'autorisation vise toujours le titulaire en fonction au moment où elle est donnée.
+Pas de confirmation à l'octroi ; confirmation uniquement pour la révocation. Bouton en état `loading` pendant l'envoi. Erreur : message réseau standard, l'état affiché reste l'état serveur précédent (aucune mise à jour optimiste). Un club a toujours un et un seul Président (CDC 2.3) : l'autorisation vise toujours le titulaire en fonction au moment où elle est donnée.
 
 ### 4.6 Actions du menu « … »
 

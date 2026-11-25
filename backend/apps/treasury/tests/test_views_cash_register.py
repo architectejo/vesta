@@ -1,10 +1,10 @@
-"""API de la Caisse Terrain Express (tâche 2.4 ; CDC 4.4.5, 6.6, 7.2 ;
+"""API de la Caisse Terrain Express (tâche 2.4 ; CDC 4.4.5, 6.6 ;
 10.2 n° 22 ; matrice 2.4, ligne « Enregistrement des paiements »).
 
 Permissions explicites (Trésorier et adjoint), 401 sans jeton, 403 pour les
 autres rôles, 404 pour une session d'un autre utilisateur ou d'un autre
-club (aucune fuite d'existence), PIN à l'ouverture seulement, jamais
-renvoyé ; synchronisation rejouée idempotente ; N+1 de la recherche.
+club (aucune fuite d'existence), plus aucun PIN (décision client du
+11/10/2026 ; un ``pin`` envoyé est ignoré) ; synchronisation rejouée idempotente ; N+1 de la recherche.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from apps.treasury import services
 from apps.treasury.models import CashSession, Payment
 from apps.treasury.tests.cash_helpers import club_today, local_dt, monthly_type, named_member, open_session, put_in_debt
-from apps.treasury.tests.conftest import PIN, WRONG_PIN
+from apps.treasury.tests.conftest import PIN, WRONG_PIN, assert_logged_by
 
 pytestmark = pytest.mark.django_db
 
@@ -53,7 +53,7 @@ def pay_body(membership, **extra):
 
 def all_endpoints(session_id):
     return [
-        ("post", url("cash-session-open"), {"pin": PIN}),
+        ("post", url("cash-session-open"), {}),
         ("get", url("cash-session-current"), None),
         ("post", url("cash-session-close", session_id), {}),
         ("get", url("cash-session-players", session_id) + "?q=a", None),
@@ -79,9 +79,9 @@ class TestPermissions:
 
 
 class TestOpenAndCurrent:
-    def test_ouverture_201_puis_200_sans_pin_dans_la_reponse(self, ctx):
+    def test_ouverture_201_puis_200_sans_pin(self, ctx):
         client = client_for(ctx.treasurer)
-        response = client.post(url("cash-session-open"), {"pin": PIN}, format="json")
+        response = client.post(url("cash-session-open"), {}, format="json")
         assert response.status_code == 201, response.data
         session = response.data["session"]
         assert session["status"] == "open" and session["is_open"] is True
@@ -93,7 +93,7 @@ class TestOpenAndCurrent:
         }
         assert PIN not in str(response.content)
 
-        again = client.post(url("cash-session-open"), {"pin": PIN}, format="json")
+        again = client.post(url("cash-session-open"), {}, format="json")
         assert again.status_code == 200
         assert again.data["session"]["id"] == session["id"]
 
@@ -110,25 +110,25 @@ class TestOpenAndCurrent:
         open_session(ctx, ctx.treasurer)
         assert client_for(ctx.assistant_treasurer).get(url("cash-session-current")).data == {"session": None}
 
-    def test_pin_faux_400_puis_verrouille_423(self, ctx):
-        client = client_for(ctx.treasurer)
-        response = client.post(url("cash-session-open"), {"pin": WRONG_PIN}, format="json")
-        assert response.status_code == 400
-        assert response.data["attempts_remaining"] == 2
-        client.post(url("cash-session-open"), {"pin": WRONG_PIN}, format="json")
-        locked = client.post(url("cash-session-open"), {"pin": WRONG_PIN}, format="json")
-        assert locked.status_code == 423
-        assert client.post(url("cash-session-open"), {"pin": PIN}, format="json").status_code == 423
-        assert CashSession.all_objects.count() == 0
+    def test_pin_envoye_par_un_ancien_client_ignore(self, ctx):
+        """Un ``pin`` (même faux, répété) n'est ni vérifié ni compté."""
 
-    def test_pin_absent_400(self, ctx):
-        response = client_for(ctx.treasurer).post(url("cash-session-open"), {}, format="json")
-        assert response.status_code == 400
-        assert CashSession.all_objects.count() == 0
+        client = client_for(ctx.treasurer)
+        first = client.post(url("cash-session-open"), {"pin": WRONG_PIN}, format="json")
+        assert first.status_code == 201, first.data
+        for _ in range(3):
+            assert client.post(url("cash-session-open"), {"pin": WRONG_PIN}, format="json").status_code == 200
+        assert CashSession.all_objects.count() == 1
+        ctx.treasurer.user.refresh_from_db()
+
+    def test_ouverture_sans_pin_auteur_journalise(self, ctx):
+        response = client_for(ctx.assistant_treasurer).post(url("cash-session-open"), {}, format="json")
+        assert response.status_code == 201, response.data
+        assert_logged_by("treasury.cash_session.opened", ctx.assistant_treasurer.user, club=ctx.club)
 
     def test_ecritures_gelees_409(self, ctx):
         services.freeze_ledger(club=ctx.club, reason="Rupture simulée", actor=None)
-        response = client_for(ctx.treasurer).post(url("cash-session-open"), {"pin": PIN}, format="json")
+        response = client_for(ctx.treasurer).post(url("cash-session-open"), {}, format="json")
         assert response.status_code == 409
         assert response.data["code"] == "ledger_frozen"
 
@@ -229,7 +229,6 @@ class TestPayments:
         )
         assert response.status_code == 201
         ctx.treasurer.user.refresh_from_db()
-        assert ctx.treasurer.user.pin_failed_attempts == 0
 
     def test_apercu_avec_mensuelle_par_defaut(self, ctx):
         ctype = monthly_type(ctx)

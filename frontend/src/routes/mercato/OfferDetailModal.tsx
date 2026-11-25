@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ApiError, triggerBlobDownload } from "../../api/client";
 import { getClubIdentity } from "../../api/clubs";
 import { downloadQuitus, getOffer, respondOffer, type TransferOffer } from "../../api/mercato";
-import { Avatar, Button, ConfirmDialog, Modal, StatusBadge, TransferTimeline, useToast } from "../../design-system";
+import { Avatar, Button, ConfirmDialog, IconButton, IconMore, Modal, StatusBadge, TransferTimeline, useToast } from "../../design-system";
+import { useClosingState } from "../../hooks/useClosingState";
 import { buildTransferTimeline, offerStatusKey } from "./mercatoLabels";
 
 function apiErrorMessage(error: unknown): string {
@@ -46,6 +47,8 @@ export function OfferDetailModal({
   const [responding, setResponding] = useState(false);
   const [responseError, setResponseError] = useState<string | undefined>(undefined);
   const [menuOpen, setMenuOpen] = useState(false);
+  const { mounted: menuMounted, dataState: menuDataState, onAnimationEnd: onMenuAnimationEnd } =
+    useClosingState(menuOpen, 200);
 
   const offerQuery = useQuery({
     queryKey: ["mercato", "offer", offerId],
@@ -222,11 +225,17 @@ export function OfferDetailModal({
             <StatusBadge status={offerStatusKey(offer.status)} />
             {!viewerIsTargetPlayer && onWriteToClub && otherClubForManager ? (
               <div className="relative">
-                <Button size="sm" variant="ghost" onClick={() => setMenuOpen((v) => !v)}>
-                  …
-                </Button>
-                {menuOpen ? (
-                  <div className="absolute right-0 z-10 mt-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated">
+                <IconButton
+                  aria-label="Plus d'actions"
+                  onClick={() => setMenuOpen((v) => !v)}
+                  icon={<IconMore aria-hidden="true" className="h-5 w-5" />}
+                />
+                {menuMounted ? (
+                  <div
+                    data-state={menuDataState}
+                    onAnimationEnd={onMenuAnimationEnd}
+                    className="vesta-anim-menu absolute right-0 z-10 mt-1 w-56 rounded-md border border-border bg-surface py-1 shadow-elevated"
+                  >
                     <button
                       type="button"
                       className="block w-full px-3 py-2 text-left text-sm text-text hover:bg-surface-muted"

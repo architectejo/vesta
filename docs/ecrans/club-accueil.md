@@ -12,7 +12,7 @@ Route `/`. Tous les joueurs du club (tous rôles). Le contenu varie selon les r�
 
 | Section | Visible par |
 | --- | --- |
-| Communiqués épinglés | Tous ; bouton « Publier un communiqué » : Président, VP |
+| Communiqués épinglés | Tous ; bouton « Publier un communiqué » : Président, VP, Secrétaire (révision 11/10, voir `fil-public-communication.md` B2) |
 | À faire — *reporté après le Lot 5* | Tous (contenu selon les rôles) |
 | Vestiaire du jour | Tous ; mis en avant (position 2, déplié) pour le Président (4.7) |
 | Ma situation | Tous |
@@ -40,7 +40,7 @@ Enchaînement bloquant, dans cet ordre, à la première connexion ou après une 
 
 Sections en cartes, dans l'ordre :
 
-1. **Communiqués** — au plus 3 communiqués épinglés, du plus récent au plus ancien. Chaque ligne : titre (16 px/600), auteur (avatar 24 px + nom), date, pastille « Non lu » si non lu. Clic → modale « Communiqué ». Pied : « Voir tous les communiqués » (lien vers la page Communiqués). Action de carte (Président, VP) : « Publier un communiqué ».
+1. **Communiqués** — au plus 3 communiqués épinglés, du plus récent au plus ancien. Chaque ligne : titre (16 px/600), auteur (avatar 24 px + nom), date, pastille « Non lu » si non lu. Clic → modale « Communiqué ». Pied : « Voir tous les communiqués » (lien vers la page Communiqués). Action de carte (Président, VP, Secrétaire — révision 11/10) : « Publier un communiqué ».
 2. **Vestiaire du jour** (4.7) — seulement s'il y a une séance ou un match aujourd'hui.
    - Président : carte dépliée avec `PitchBoard` `readonly` compact (liste des présents par équipe A/B, avatars 32 px) et compteur « {n} présents ».
    - Autres rôles : ligne résumé « {Séance / Match contre X} · {n} présents · Vous êtes en équipe {A/B} » + lien « Ouvrir le vestiaire ».
@@ -69,9 +69,9 @@ Footer.
 - En-tête : titre du communiqué ; sous-titre « Publié par {nom} le {date} ».
 - Corps : texte (16 px), images éventuelles.
 - Pied : « Fermer » ; action principale « J'ai lu » (accusé de lecture, 4.16) — remplacée par « Lu le {date} » (texte) une fois fait. Secondaire : « Partager sur WhatsApp » (ouvre WhatsApp avec le titre et le lien Vesta ; le contenu reste accessible après connexion uniquement).
-- Menu « … » (Président, VP) : « Désépingler », « Voir les accusés de lecture » (liste : avatar, nom, date de lecture, filtre « Lu / Non lu »).
+- Menu « … » (Président, VP, Secrétaire — révision 11/10) : « Désépingler », « Voir les accusés de lecture » (liste : avatar, nom, date de lecture, filtre « Lu / Non lu »).
 
-### 5.2 « Publier un communiqué » (Président, VP)
+### 5.2 « Publier un communiqué » (Président, VP, Secrétaire — révision 11/10)
 
 | Champ | Composant | Obligatoire | Règle | Erreur |
 | --- | --- | --- | --- | --- |
@@ -86,7 +86,7 @@ Pied : « Annuler » / « Publier ». Succès : toast « Communiqué publié. To
 
 La carte « À faire » et les raccourcis étant reportés après le Lot 5, **aucune de ces modales n'est ouverte depuis l'accueil au MVP**. Chacune s'ouvre depuis la notification correspondante (4.17 : « un clic sur une notification mène à l'élément concerné ») et depuis la page de son module. Définies dans les specs des écrans concernés (non dupliquées ici) : déclaration « J'ai payé » à valider (`tresorerie-tableau-de-bord.md` §4.5), signature de PV (`assemblees-page-ag.md`), évaluation rapide (`sport-espace-coach.md` §4.6), enregistrement d'un paiement et Caisse Terrain Express (`tresorerie-tableau-de-bord.md`), création de séance et de match (`sport-espace-coach.md`), offre de transfert (`mercato-marche.md`).
 
-Les quatre modales suivantes n'ont pas encore d'écran de module au Lot 0. Les modales d'adhésion restent spécifiées ici au minimum et seront détaillées au Lot 1 (§5.4 à §5.5). Les modales de dépense et d'assistance sont détaillées dans `tresorerie-depenses-assistance.md` (§3.3 et §4.2) ; cette page ne les duplique pas. Les actions sensibles utilisent le `PinPrompt` du design system selon CDC 7.2.
+Les quatre modales suivantes n'ont pas encore d'écran de module au Lot 0. Les modales d'adhésion restent spécifiées ici au minimum et seront détaillées au Lot 1 (§5.4 à §5.5). Les modales de dépense et d'assistance sont détaillées dans `tresorerie-depenses-assistance.md` (§3.3 et §4.2) ; cette page ne les duplique pas. Les actions sensibles utilisent la modale de confirmation (`ConfirmDialog`, variante action sensible) du design system : texte explicite de l'action, boutons « Annuler » / action ; l'auteur est écrit au journal d'activité (décision du 11/10/2026 : le code PIN est supprimé).
 
 ### 5.4 « Fiche d'adhésion de {nom} » — signature par le parrain (4.3) — taille `lg`
 
@@ -98,10 +98,10 @@ Les quatre modales suivantes n'ont pas encore d'écran de module au Lot 0. Les m
   2. **Fiche du joueur** ouverte depuis l'Effectif de « Comité et bureau » (`club-comite-bureau.md` §3, section 6) : pour le parrain désigné, si le joueur est « En attente » et la fiche générée, bouton principal « Signer la fiche d'adhésion » dans le pied de la fiche → ouvre cette modale au niveau 2.
 - Si l'utilisateur n'est plus le parrain désigné, ou si la fiche n'est plus en attente, la modale s'ouvre en lecture seule avec le message « Cette fiche a déjà été signée ou n'est plus en attente. »
 - Lecture : aperçu de la fiche d'adhésion PDF (servie par vue authentifiée, 10), identité du nouveau joueur (avatar, nom, poste), « Frais d'adhésion payés le {date} » (la fiche n'est générée qu'après le paiement, 4.3 étapes 2–3).
-- Pied : « Refuser » (secondaire) / « Signer la fiche » (principal) → `PinPrompt` « Saisissez votre code PIN pour signer la fiche d'adhésion de {prénom}. »
+- Pied : « Refuser » (secondaire) / « Signer la fiche » (principal) → modale de confirmation (`ConfirmDialog`, variante action sensible) « Signer la fiche d'adhésion de {prénom} ? » — texte « Votre signature est enregistrée dans le journal d'activité du club. » — « Annuler » / « Signer »
 - « Refuser » ouvre un niveau 2 : TextArea « Motif du refus » (obligatoire, « Indiquez le motif. ») ; pied « Annuler » / « Refuser le parrainage ».
 - Succès : « Fiche signée. {prénom} est maintenant inscrit. » / « Refus enregistré. Le Président a été prévenu. »
-- Erreurs : « Code PIN incorrect. » ; « Cette fiche a déjà été signée ou n'est plus en attente. »
+- Erreurs : « Cette fiche a déjà été signée ou n'est plus en attente. »
 
 ### 5.5 « Adhésion de {nom} » — décision du Président après refus ou silence du parrain (4.3) — taille `md`
 
@@ -114,7 +114,7 @@ Les quatre modales suivantes n'ont pas encore d'écran de module au Lot 0. Les m
 - Lecture : joueur, parrain actuel, `StatusBadge` « Parrainage refusé » (rouge) avec motif et date, ou « Sans réponse depuis {n} jours » (orange) ; état des frais d'adhésion (« Payés le {date} · {montant} » ou « Non payés »).
 - Choix (SegmentedControl, obligatoire) : « Désigner un autre parrain » / « Annuler l'adhésion ».
   - « Désigner un autre parrain » : PlayerSearch « Nouveau parrain » (joueurs inscrits seulement). Pied : « Annuler » / « Désigner ». Succès : « {nom du parrain} a été prévenu et doit signer la fiche. »
-  - « Annuler l'adhésion » : si les frais ont été payés, « Sort du paiement d'adhésion » (SegmentedControl, obligatoire : « Rembourser » / « Conserver ») — le sort est enregistré (4.3) ; aide : « Un paiement validé n'est jamais supprimé : un remboursement passe par une écriture d'annulation. » ; TextArea « Motif » (obligatoire). Pied : « Annuler » / « Annuler l'adhésion » (bouton `danger`) → `PinPrompt` si « Rembourser » (annulation d'un paiement, CLAUDE.md §2.7). Succès : « Adhésion de {nom} annulée. »
+  - « Annuler l'adhésion » : si les frais ont été payés, « Sort du paiement d'adhésion » (SegmentedControl, obligatoire : « Rembourser » / « Conserver ») — le sort est enregistré (4.3) ; aide : « Un paiement validé n'est jamais supprimé : un remboursement passe par une écriture d'annulation. » ; TextArea « Motif » (obligatoire). Pied : « Annuler » / « Annuler l'adhésion » (bouton `danger`) → modale de confirmation dans les deux cas (`ConfirmDialog`, variante action sensible) : « Annuler l'adhésion de {nom} et rembourser les frais ? » si « Rembourser » (annulation d'un paiement), « Annuler l'adhésion de {nom} ? » si « Conserver ». Succès : « Adhésion de {nom} annulée. »
 - Point à trancher au Lot 1 avec `finance-engine` : traduction comptable exacte du choix « Rembourser » / « Conserver ».
 
 ### 5.6 « Dépense à valider » (4.5.2) — taille `md`
@@ -130,7 +130,7 @@ Les quatre modales suivantes n'ont pas encore d'écran de module au Lot 0. Les m
 | Zone | Chargement | Vide | Erreur |
 | --- | --- | --- | --- |
 | Page | Barre de progression + squelettes de 4 cartes | — | Chaque carte gère son erreur séparément |
-| Communiqués | 2 lignes squelettes | « Aucun communiqué pour l'instant. » + (Pdt, VP) « Publier un communiqué » | « Impossible de charger les communiqués. » + « Réessayer » |
+| Communiqués | 2 lignes squelettes | « Aucun communiqué pour l'instant. » + (Pdt, VP, Secrétaire) « Publier un communiqué » | « Impossible de charger les communiqués. » + « Réessayer » |
 | Vestiaire du jour | Squelette `pitch` compact | Carte masquée s'il n'y a ni séance ni match aujourd'hui ; si séance sans présent : « Personne n'est encore pointé. » | Idem modèle |
 | À faire (*reporté après le Lot 5*) | 3 lignes squelettes | « Rien à faire pour l'instant. » | Idem modèle |
 | Ma situation | Squelette KPI | — (toujours une valeur, solde à 0 compris) | Idem modèle |

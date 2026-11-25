@@ -39,7 +39,7 @@ Sur Vesta, **tout utilisateur d'un club est un joueur**, à commencer par le Pr�
 | En ordre | Joueur dont le solde des cotisations obligatoires échues est positif ou nul. |
 | Quitus | Attestation numérique qu'un joueur n'a aucune dette envers son club. Requise pour un transfert. |
 | Parrain | Joueur du club qui valide l'adhésion d'un nouveau joueur par sa signature électronique. |
-| Code PIN | Code de 4 à 6 chiffres qui confirme une action sensible. |
+| Confirmation | Modale qui récapitule une action sensible avant son exécution ; l'auteur de l'action est inscrit au journal. Remplace le code PIN, supprimé le 11/10/2026 (10.3 n° 177). |
 | Séance | Entraînement du club, avec pointage et répartition en équipes A et B. |
 | Feuille de match | Composition officielle d'un match, avec résultats et incidents. |
 | Incident de terrain | Carton, blessure ou fait disciplinaire survenu en séance ou en match. |
@@ -127,7 +127,9 @@ Seuls les Superusers n'ont pas de fiche joueur. Ils n'apparaissent dans aucune l
 | Trésorier | Club | Encaissements, dépenses, types de cotisation, grille des cotisations |
 | Trésorier adjoint | Club | Encaissements et saisie des dépenses |
 | Intendant | Club | Matériel et inventaires |
+| Secrétaire | Club | Communiqués officiels, archive des documents de réunion, préparation des assemblées générales (décidé le 11/10/2026, 10.3 n° 169) |
 | Coach | Club | Séances, matchs, compositions, tactique, discipline, évaluations |
+| Assistant du Coach | Club | Mêmes droits que le Coach, sauf nommer ou retirer un assistant ; nommé et retiré par le Coach seul (décidé le 13/11/2026, 10.3 n° 179) |
 | Capitaine | Club | Pointage des présences, répartition A/B, saisie des incidents |
 | Médecin | Club | Fiches de santé, blessures, soins et suivi |
 | Joueur | Club | Profil, cotisations, consultation des compositions et du vestiaire |
@@ -140,7 +142,7 @@ Un joueur peut cumuler plusieurs rôles (par exemple Capitaine et Trésorier adj
 flowchart TD
     SU[Superuser] -->|active la licence| C[Créateur du club]
     C -->|devient| P[Président]
-    P -->|nomme parmi les joueurs| B[VP, Directeur sportif,<br/>Trésorier, Trésorier adj.,<br/>Intendant, Médecin]
+    P -->|nomme parmi les joueurs| B[VP, Directeur sportif,<br/>Trésorier, Trésorier adj.,<br/>Intendant, Secrétaire, Médecin]
     P -->|ajoute ou retire| CO[Coach]
     CO -->|choisit parmi les joueurs| CA[Capitaine]
     P -->|désigne| D[Joueurs autorisés<br/>à ajouter des joueurs]
@@ -156,44 +158,49 @@ Règles de nomination :
 - Le changement de Président se fait par passation (le Président sortant désigne son successeur) ou, en cas de blocage, par le Superuser sur demande écrite du club, après une assemblée générale.
 - Un club a toujours un et un seul Président. Le nombre de titulaires par rôle du bureau est **configurable par club**, un seul par défaut (décidé le 25/09/2026, 10.2 n° 24 — extension acceptée du 10.2 n° 3).
 - Toute nomination ou révocation génère un log et une notification au joueur concerné.
+- **Secrétaire** (décision du client du 11/10/2026, demande formulée après la démonstration, circuit 9.4 ; 10.3 n° 169) : membre du bureau nommé et révoqué par le Président comme le Vice-président, **un seul titulaire** par club (même mécanisme que les autres rôles du bureau, réglage `board_seats_per_role`, un par défaut). Il fait partie du canal « Bureau » (10.3 n° 165). Il peut cumuler avec un autre rôle ; ses droits sont alors l'union (2.2).
+- **Assistant du Coach** (décision du client du 13/11/2026, circuit 9.4 ; 10.3 n° 179) : joueur du club (règle « tout utilisateur est un joueur ») auquel le **Coach seul** ajoute le rôle `assistant_coach`. Il a **exactement les mêmes droits que le Coach** (colonne « Coach » de la matrice 2.4, y compris le choix du Capitaine et les notifications de cartons ou de blessures), **sauf nommer ou retirer un assistant**. Même restriction médicale que le Coach : aptitude et date de retour prévue seulement, jamais le diagnostic, sans exception (2.4, 4.12). **Un seul assistant par Coach** : en nommer un nouveau remplace le précédent (le retrait de l'ancien est journalisé et notifié). **Si le Coach change ou perd son rôle, l'assistant garde son poste** (aucune révocation automatique) jusqu'à ce que le nouveau Coach le retire ou le remplace. Le Président ne nomme ni ne retire l'assistant. Nomination et retrait sont journalisés avec leur auteur et notifient l'intéressé ; l'assistant reste soumis aux règles habituelles d'un joueur (dette, suspension, inaptitude).
 
 ### 2.4 Matrice des permissions
 
-Légende : **É** = lecture et écriture, **L** = lecture seule, **P** = uniquement ses propres données, **D** = seulement si désigné par le Président, **—** = aucun accès. Abréviations : Pdt (Président), VP, DS (Directeur sportif), Trés (Trésorier), Adj (Trésorier adjoint), Int (Intendant), Coach, Cap (Capitaine), Méd (Médecin), J (Joueur).
+Légende : **É** = lecture et écriture, **L** = lecture seule, **P** = uniquement ses propres données, **D** = seulement si désigné par le Président, **—** = aucun accès. Abréviations : Pdt (Président), VP, DS (Directeur sportif), Trés (Trésorier), Adj (Trésorier adjoint), Int (Intendant), Séc (Secrétaire), Coach, Cap (Capitaine), Méd (Médecin), J (Joueur).
 
-| Fonctionnalité | Pdt | VP | DS | Trés | Adj | Int | Coach | Cap | Méd | J |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Identité du club (nom, logo, couleurs) | É | L | L | L | L | L | L | L | L | L |
-| Nomination du bureau et du Médecin | É | L | L | L | L | L | L | L | L | L |
-| Ajout ou retrait du Coach | É | L | L | L | L | L | L | L | L | L |
-| Choix du Capitaine | L | L | L | L | L | L | É | L | L | L |
-| Ajout et import de joueurs | É | D | D | D | D | D | D | D | D | D |
-| Profil et fiche joueur | P | P | P | P | P | P | P | P | P | P |
-| Numéro de maillot et poste des joueurs | L | L | L | L | L | L | É | L | L | L |
-| Types de cotisation | É | L | — | É | L | — | — | — | — | — |
-| Enregistrement des paiements | L | L | — | É | É | — | — | — | — | P |
-| Grille des cotisations (tous joueurs) | L | L | — | É | É | — | — | — | — | P |
-| Catégories de dépenses | É | L | — | É | L | — | — | — | — | — |
-| Saisie d'une dépense | L | L | — | É | É | — | — | — | — | — |
-| Validation d'une dépense | É | É | — | L | L | — | — | — | — | — |
-| Demande d'assistance sociale | P | P | P | P | P | P | P | P | P | P |
-| Séances : création | L | L | L | — | — | — | É | L | L | L |
-| Séances et matchs : pointage, répartition A/B | É | L | L | — | — | — | É | É | L | L |
-| Feuille de match et composition | L | L | L | L | L | L | É | L | L | L |
-| Incidents et cartons | L | L | L | — | — | — | É | É | L | P |
-| Évaluation des performances | É | É | L | — | — | — | É | — | — | P |
-| Plan tactique | L | L | L | L | L | L | É | L | L | L |
-| Fiches de santé et blessures | L | — | — | — | — | — | L | — | É | P |
-| Matériel et inventaires | L | L | — | L | — | É | L | — | — | — |
-| Mercato : offres et transferts | É | L | É | L | — | — | L | — | — | P |
-| Assemblées générales | É | É | L | L | L | L | L | L | L | L |
-| Communiqués officiels | É | É | L | L | L | L | L | L | L | L |
-| Fil public : publier | É | É | É | É | É | É | É | É | É | É |
-| Chat d'équipe | É | É | É | É | É | É | É | É | É | É |
-| Journal d'activité | — | — | — | — | — | — | — | — | — | — |
+| Fonctionnalité | Pdt | VP | DS | Trés | Adj | Int | Séc | Coach | Cap | Méd | J |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Identité du club (nom, logo, couleurs) | É | L | L | L | L | L | L | L | L | L | L |
+| Nomination du bureau et du Médecin | É | L | L | L | L | L | L | L | L | L | L |
+| Ajout ou retrait du Coach | É | L | L | L | L | L | L | L | L | L | L |
+| Choix du Capitaine | L | L | L | L | L | L | L | É | L | L | L |
+| Nomination ou retrait de l'Assistant du Coach | L | L | L | L | L | L | L | É | L | L | L |
+| Ajout et import de joueurs | É | D | D | D | D | D | D | D | D | D | D |
+| Profil et fiche joueur | P | P | P | P | P | P | P | P | P | P | P |
+| Numéro de maillot et poste des joueurs | L | L | L | L | L | L | L | É | L | L | L |
+| Types de cotisation | É | L | — | É | L | — | — | — | — | — | — |
+| Enregistrement des paiements | L | L | — | É | É | — | — | — | — | — | P |
+| Grille des cotisations (tous joueurs) | L | L | — | É | É | — | — | — | — | — | P |
+| Catégories de dépenses | É | L | — | É | L | — | — | — | — | — | — |
+| Saisie d'une dépense | L | L | — | É | É | — | — | — | — | — | — |
+| Validation d'une dépense | É | É | — | L | L | — | — | — | — | — | — |
+| Demande d'assistance sociale | P | P | P | P | P | P | P | P | P | P | P |
+| Séances : création | L | L | L | — | — | — | — | É | L | L | L |
+| Séances et matchs : pointage, répartition A/B | É | L | L | — | — | — | — | É | É | L | L |
+| Feuille de match et composition | L | L | L | L | L | L | L | É | L | L | L |
+| Incidents et cartons | L | L | L | — | — | — | — | É | É | L | P |
+| Évaluation des performances | É | É | L | — | — | — | — | É | — | — | P |
+| Plan tactique | L | L | L | L | L | L | L | É | L | L | L |
+| Fiches de santé et blessures | L | — | — | — | — | — | — | L | — | É | P |
+| Matériel et inventaires | L | L | — | L | — | É | — | L | — | — | — |
+| Mercato : offres et transferts | É | L | É | L | — | — | — | L | — | — | P |
+| Assemblées générales | É | É | L | L | L | L | É | L | L | L | L |
+| Communiqués officiels | É | É | L | L | L | L | É | L | L | L | L |
+| Archive des documents officiels (PV de réunion, convocations, autres) | É | É | L | L | L | L | É | — | — | — | — |
+| Fil public : publier | É | É | É | É | É | É | É | É | É | É | É |
+| Chat d'équipe | É | É | É | É | É | É | É | É | É | É | É |
+| Journal d'activité | — | — | — | — | — | — | — | — | — | — | — |
 
 Précisions :
 
+- **Assistant du Coach** : il n'a pas de colonne propre ; ses droits sont **identiques à la colonne « Coach »** pour chaque ligne de la matrice, à l'exception de la ligne « Nomination ou retrait de l'Assistant du Coach », réservée au Coach (10.3 n° 179). Un assistant est aussi un joueur : il cumule avec les droits de la colonne « J ».
 - Sur les fiches de santé, le Coach ne voit que l'aptitude (apte, apte avec restriction, inapte) et la date de retour prévue, jamais le diagnostic, **sans aucune exception**. Le Président voit la même chose par défaut, sauf si le joueur lui a donné, depuis son profil, un consentement explicite à un accès complet à son dossier médical ; ce consentement est révocable à tout moment par le joueur, avec effet immédiat, et attaché à la fonction de Président (il ne se transmet pas automatiquement à un nouveau titulaire). Chaque octroi, chaque révocation et chaque consultation du dossier par le Président sont journalisés, sans copier le contenu médical dans le journal (voir 4.12 et 10.2 n° 15).
 - Le Joueur voit en lecture seule le plan tactique, les compositions publiées et le vestiaire.
 - Le journal d'activité n'est visible que par les Superusers.
@@ -234,7 +241,7 @@ La règle couvre notamment :
 
 - la création et la modification de toute donnée (joueur, paiement, dépense, séance, match, incident, type de cotisation, catégorie de dépense, publication) ;
 - la modification du profil, de l'identifiant et du mot de passe ;
-- la confirmation par code PIN ;
+- la confirmation d'une action sensible (modale de confirmation, 7.2) ;
 - les imports CSV ;
 - les demandes (assistance sociale, offre de transfert) ;
 - la gestion de la composition d'un match (liste à cases à cocher).
@@ -262,7 +269,7 @@ Exception : un processus à plusieurs étapes (inscription d'un club, création 
 
 - **Loader** : affiché à chaque chargement de page et pendant chaque action. Sur les listes, on affiche des blocs gris animés à la place du contenu.
 - **États vides** : chaque section vide affiche un message et, si le rôle le permet, l'action pour commencer (« Aucun incident pour l'instant »).
-- **Confirmations** : toute suppression ou action irréversible demande une confirmation ; les actions sensibles demandent le code PIN.
+- **Confirmations** : toute suppression ou action irréversible demande une confirmation ; les actions sensibles (7.2) se confirment par une modale qui récapitule l'action, avec les boutons « Annuler » et un verbe explicite.
 - **Badges de statut** : couleurs fixes pour toute l'application.
 
 | Statut | Couleur |
@@ -351,7 +358,7 @@ Aucun nom d'utilisateur n'est demandé : l'email est l'identifiant. Le mot de pa
 - Situation financière : solde, prochaines échéances, derniers paiements, bouton « Contribuer » (voir 4.6).
 - Statistiques de la saison et historique de carrière.
 - Aptitude médicale (apte, restriction, inapte).
-- Bouton « Modifier mon profil » : modale à onglets « Informations », « Photo », « Identifiant et mot de passe », « Code PIN ».
+- Bouton « Modifier mon profil » : modale à onglets « Informations », « Photo », « Identifiant et mot de passe » (l'onglet « Code PIN » est supprimé depuis le 11/10/2026, 10.3 n° 177).
 
 **Mot de passe oublié** : le joueur envoie une demande depuis la page de connexion. Le Superuser réinitialise le mot de passe : un mot de passe temporaire aléatoire de 8 caractères est généré, affiché une seule fois au Superuser, valable 48 heures ; le joueur doit le changer obligatoirement à la connexion suivante (décidé le 25/09/2026, 10.2 n° 21). La création initiale d'un compte reste inchangée : mot de passe = email, changement obligatoire à la première connexion.
 
@@ -400,18 +407,20 @@ Les statuts « Suspendu » (discipline) et « Blessé » (médical) se superpose
 Déroulement :
 
 1. Le joueur est ajouté avec le statut « En attente » et un parrain choisi parmi les joueurs inscrits.
-2. Les frais d'adhésion sont payés. Ils correspondent au type de cotisation marqué « adhésion », dont le montant est fixé par le club (5 $ pour Discovery).
+2. Les frais d'adhésion sont payés. Ils correspondent au type de cotisation marqué « adhésion », dont le montant est fixé par le club (5 $ pour Discovery). **Décidé le 17/11/2026 (10.3 n° 100) : les frais d'adhésion sont une somme à payer.** À l'ouverture de l'adhésion, un montant dû unique est créé (tarif « adhésion » du club à la date d'entrée, échéance à la date d'entrée) ; le paiement des frais, total ou en plusieurs fois, s'y impute : une fois payés, le solde du joueur est à 0 et ses mensualités ne sont pas touchées (un surplus reste un crédit). Tant que les frais ne sont pas réglés, le joueur reste « En attente », jamais « En dette ». Sans type « adhésion » défini, aucun montant dû n'est créé.
 3. Le système génère la fiche d'adhésion en PDF, aux couleurs du club.
-4. Le parrain reçoit une notification et signe par son code PIN.
+4. Le parrain reçoit une notification et signe par un bouton, après une modale de confirmation ; la signature (parrain, date) est journalisée.
 5. La fiche signée est archivée ; le joueur passe « Inscrit ».
 
 Cas limites :
 
-- **Le parrain refuse** : il indique un motif ; le Président est notifié et décide de désigner un autre parrain ou d'annuler l'adhésion. Le sort du paiement (remboursement ou conservation) est enregistré.
+- **Le parrain refuse** : il indique un motif ; le Président est notifié et décide de désigner un autre parrain ou d'annuler l'adhésion. Le sort du paiement (remboursement ou conservation) est enregistré. En cas d'annulation, le montant dû d'adhésion est neutralisé par une écriture d'annulation motivée (jamais supprimé), sauf si les frais entièrement payés sont conservés.
 - **Le parrain ne répond pas** : rappel après 3 jours, alerte au Président après 7 jours.
 - **Le joueur ne paie pas** : il reste « En attente » et ne peut être aligné nulle part.
 
 **Logs et notifications** : ajout, paiement, génération de la fiche, signature ou refus.
+
+**Double envoi du paiement des frais** : même mécanisme anti-doublon que 4.4.4 (identifiant `client_uuid`, 10.3 n° 178) : un double envoi de la confirmation ne crée qu'un seul paiement, un seul reçu et une seule notification ; le dossier est renvoyé tel quel ; refus si le même identifiant est réutilisé avec un contenu différent.
 
 ### 4.4 Trésorerie et cotisations
 
@@ -448,6 +457,8 @@ Le solde n'est jamais saisi ni stocké. Il est recalculé à chaque consultation
 
 Les cotisations libres (spéciale, vestiaire) sont suivies et affichées, mais n'entrent jamais dans le solde. Le solde est reporté d'un mois et d'une saison à l'autre.
 
+Frais d'adhésion (décidé le 17/11/2026, 10.3 n° 100) : un montant dû unique par adhésion, créé à l'ouverture de l'adhésion, échéance à la date d'entrée ; il entre dans le solde comme tout montant dû d'un type obligatoire (voir 4.3).
+
 Un joueur est « En ordre » si son solde est positif ou nul, « En dette » sinon. Le statut change dès qu'un paiement est validé.
 
 Cas particuliers à trancher par le club : joueur arrivé en cours de mois (mois entier dû ou non), joueur blessé de longue durée ou absent (suspension temporaire des cotisations par décision du Président, tracée).
@@ -469,9 +480,11 @@ Modale « Enregistrer un paiement » (Trésorier ou adjoint) :
 - montant, mode (espèces, mobile money, lien de paiement), référence, date ;
 - pièce jointe facultative ;
 - aperçu de la répartition et du nouveau solde ;
-- confirmation par code PIN.
+- validation par un bouton, suivie d'une modale de confirmation qui rappelle le joueur, le montant et la répartition.
 
 Chaque paiement validé génère un reçu numéroté (PDF aux couleurs du club) envoyé au joueur par email et consultable dans son profil.
+
+**Double envoi de la confirmation** (10.3 n° 178, à valider par le client) : l'interface joint à la saisie un identifiant `client_uuid` généré à l'ouverture de la modale. Un double envoi de la confirmation (double clic, renvoi réseau) ne crée qu'un seul paiement, un seul reçu, une seule entrée de journal et une seule notification : le paiement déjà enregistré est renvoyé (200 au lieu de 201). Si le même identifiant est réutilisé avec un contenu différent, la saisie est refusée (409, code `client_uuid_conflict`).
 
 Un paiement validé n'est jamais supprimé. Une erreur se corrige par une écriture d'annulation, avec motif, validée par le Président.
 
@@ -479,12 +492,12 @@ Un paiement validé n'est jamais supprimé. Une erreur se corrige par une écrit
 
 Écran simplifié pour le dimanche au bord du terrain :
 
-- ouverture d'une **session de caisse** par le Trésorier ou l'adjoint, en ligne, avec vérification du code PIN par le serveur ; la session reste valable jusqu'à minuit (fuseau du club) ;
+- ouverture d'une **session de caisse** par le Trésorier ou l'adjoint, en ligne, par un bouton suivi d'une confirmation ; la session reste valable jusqu'à minuit (fuseau du club) ; **position provisoire, à poser au client** : la session de caisse est maintenue sans code PIN (10.3 n° 177) ;
 - recherche du joueur par nom ou numéro, avec photo et solde affichés ;
-- saisie du montant en espèces et du type (par défaut la mensuelle du joueur) ; aucun code PIN n'est redemandé pendant la session de caisse, y compris hors connexion ;
+- saisie du montant en espèces et du type (par défaut la mensuelle du joueur) ; chaque encaissement se valide par le bouton « Encaisser », sans confirmation supplémentaire (position provisoire, à poser au client) ;
 - le joueur devient immédiatement sélectionnable s'il est désormais en ordre.
 
-Cet écran fonctionne hors connexion (voir 6.6) : les encaissements saisis hors connexion pendant une session de caisse ouverte sont synchronisés au retour du réseau et journalisés avec l'identifiant de la session (décidé le 25/09/2026, 10.2 n° 22 ; aucun code PIN n'est stocké sur l'appareil).
+Cet écran fonctionne hors connexion (voir 6.6) : les encaissements saisis hors connexion pendant une session de caisse ouverte sont synchronisés au retour du réseau et journalisés avec l'identifiant de la session (décidé le 25/09/2026, 10.2 n° 22, modifié le 11/10/2026 : plus de code PIN, 10.3 n° 177 ; aucun secret n'est stocké sur l'appareil).
 
 #### 4.4.6 Tableau de bord Trésorerie
 
@@ -515,7 +528,7 @@ L'import reprend les fichiers de suivi existants du club (une ligne par joueur, 
 - Colonnes : email ou nom du joueur, puis un mois par colonne.
 - « ok » dans une cellule = mois payé au montant plein du type.
 - Un montant dans une cellule = paiement de ce montant, réparti selon la règle 4.4.3 (60 $ sur un type à 10 $ couvrent le mois et les 5 suivants).
-- Une cellule vide = rien payé.
+- Une cellule vide = rien payé : le mois est dû et non payé, donc une dette réelle (décidé le 17/11/2026, 10.3 n° 174). Le Trésorier valide la grille de l'aperçu avant l'import définitif.
 - Un aperçu de la grille résultante est montré avant l'import définitif.
 - Le rapport liste les lignes en échec (joueur introuvable, valeur illisible).
 
@@ -531,7 +544,7 @@ Le Président et le Trésorier créent, modifient et archivent les catégories :
 stateDiagram-v2
     [*] --> EnAttente: saisie par Trésorier ou adjoint
     EnAttente --> Refusee: refus motivé (Pdt ou VP)
-    EnAttente --> Liberee: validation PIN (Pdt ou VP)
+    EnAttente --> Liberee: validation confirmée (Pdt ou VP)
     Liberee --> Justifiee: facture téléversée
     Liberee --> NonJustifiee: délai dépassé
     NonJustifiee --> Justifiee: facture téléversée
@@ -545,7 +558,7 @@ stateDiagram-v2
 
 **Blocage automatique** : tant qu'une dépense est « Non justifiée », aucune nouvelle dépense ne peut être libérée. Le Trésorier, l'adjoint et le Président reçoivent une alerte rouge.
 
-**Dérogation** : en cas d'urgence (décès, blessé à soigner), le Président peut libérer une dépense malgré le blocage, avec un motif et son code PIN. La dérogation est journalisée et signalée à la prochaine assemblée générale.
+**Dérogation** : en cas d'urgence (décès, blessé à soigner), le Président peut libérer une dépense malgré le blocage, avec un motif obligatoire, après une modale de confirmation. La dérogation est journalisée et signalée à la prochaine assemblée générale.
 
 #### 4.5.3 Assistance sociale
 
@@ -735,12 +748,23 @@ Décidé (10.2 n° 11, confirmé le 25/09/2026 aux n° 30 et n° 34) : le club A
 
 ### 4.15 Assemblées générales
 
-- **Création** (Président ou VP, assistant en modale) : type (ordinaire, extraordinaire), date, heure, lieu, ordre du jour point par point.
+- **Création** (Président, VP ou Secrétaire, assistant en modale ; le Secrétaire prépare la convocation et l'ordre du jour mais ne pointe pas les présences, ne saisit pas les votes, ne signe pas le PV et ne clôture pas l'assemblée — 10.3 n° 170) : type (ordinaire, extraordinaire), date, heure, lieu, ordre du jour point par point.
 - **Convocation** : notification à tous les joueurs, rappel la veille.
 - **Présences** : pointage le jour de l'AG, calcul du quorum. Seuil de quorum exprimé en pourcentage des joueurs actifs à la date de l'AG, configurable par club, **50 % par défaut** (décidé le 25/09/2026, 10.2 n° 18).
 - **Décisions** : pour chaque point, résultat du vote (pour, contre, abstention) et décision retenue. Une décision peut être liée à une action dans Vesta (par exemple une nouvelle grille de cotisations).
-- **Procès-verbal** : rédigé dans l'application, signé par le Président et le VP par code PIN, généré en PDF. Si le poste de Vice-président est vacant, le Président signe seul ; la vacance est actée dans le PV (10.2 n° 28).
+- **Procès-verbal** : rédigé dans l'application, signé par le Président et le VP, chacun par un bouton suivi d'une modale de confirmation, généré en PDF avec la mention « Signé électroniquement par {nom}, {fonction}, le {date} » (libellé provisoire, à poser au client). Si le poste de Vice-président est vacant, le Président signe seul ; la vacance est actée dans le PV (10.2 n° 28).
 - **Page AG** : les AG passées et à venir sous forme de cartes (date, type, statut) ; clic sur une carte pour ouvrir le détail en modale.
+
+### 4.15.1 Archive des documents officiels
+
+Fonction ajoutée par décision du client du 11/10/2026 (demande des clubs partenaires après la démonstration, circuit 9.4 ; 10.3 n° 169 à 173).
+
+- **Contenu** : documents officiels du club déposés au format PDF ou image (JPEG, PNG, WebP), 10 Mo au plus, type vérifié sur le contenu réel (6.7, 7.6). Catégories : PV de réunion, lettre de convocation, autre document officiel. Chaque document porte un titre, la date du document, l'auteur du dépôt et la date de dépôt.
+- **Qui** : dépôt, remplacement et retrait par le Secrétaire, le Président et le VP ; consultation et téléchargement par le Bureau (Président, VP, DS, Trésorier, adjoint, Intendant, Secrétaire). Les autres rôles et les joueurs n'y ont aucun accès (10.3 n° 171, position par défaut).
+- **Stockage** : privé, hors accès public ; servi uniquement par une vue authentifiée qui vérifie le club et le rôle. Un club ne voit jamais l'archive d'un autre club.
+- **Jamais de suppression** : un document est retiré (motif obligatoire) ou remplacé (l'ancien reste conservé, marqué « Retiré », et référence son remplaçant). Le fichier n'est jamais effacé.
+- **Liste** : les N derniers documents avec « Voir plus », filtrables par catégorie et par année ; les documents retirés sont masqués par défaut ; clic sur un élément = modale de détail ; tout dépôt et tout retrait passent par une modale.
+- **Journal d'activité** : un dépôt, une consultation du détail, un téléchargement, un remplacement et un retrait écrivent chacun une entrée (titre et catégorie seulement, jamais le contenu du fichier).
 
 ### 4.16 Communication
 
@@ -753,11 +777,11 @@ Décidé (10.2 n° 11, confirmé le 25/09/2026 aux n° 30 et n° 34) : le club A
 - visibilité : publique ou réservée au club ;
 - suppression par l'auteur ou le Président ; bouton **« Signaler »** sur chaque publication, accessible à tout joueur, qui notifie le Superuser et écrit une entrée dans le journal d'activité (décidé le 25/09/2026, 10.2 n° 23).
 
-**Communiqués officiels** (Président ou VP) : épinglés en tête de l'accueil, avec accusé de lecture. Un bouton « Partager sur WhatsApp » ouvre WhatsApp avec le texte et le lien Vesta ; le contenu reste accessible uniquement après connexion.
+**Communiqués officiels** (Président, VP ou Secrétaire ; décision du 11/10/2026, 10.3 n° 169) : épinglés en tête de l'accueil, avec accusé de lecture. Un bouton « Partager sur WhatsApp » ouvre WhatsApp avec le texte et le lien Vesta ; le contenu reste accessible uniquement après connexion.
 
 **Chat d'équipe** :
 
-- un canal général par club et un canal du bureau ;
+- un canal général par club et un canal du bureau (Président, VP, DS, Trésorier, adjoint, Intendant, Secrétaire — 10.3 n° 165) ;
 - messages texte et images ;
 - mise à jour toutes les 10 secondes environ (pas de temps réel strict, voir 6.5).
 
@@ -788,6 +812,7 @@ La liaison automatique avec un groupe WhatsApp (API WhatsApp Business, payante) 
 | Convocation d'AG | Tous les joueurs | In-app, email |
 | Nomination ou révocation | Joueur concerné | In-app |
 | Licence proche de l'expiration | Président | In-app, email |
+| Mesures de performance disponibles (« Vos mesures de la séance du jj/mm/aaaa sont disponibles. », une par joueur et par séance, 1 h après la dernière mesure) | Joueur mesuré | In-app |
 
 ### 4.18 Espace Superuser
 
@@ -818,7 +843,7 @@ Toute action qui crée, modifie ou supprime une donnée écrit une entrée dans 
 
 ### 5.2 Types d'actions journalisées
 
-- Comptes : connexion, échec de connexion, changement de mot de passe, réinitialisation, changement de code PIN.
+- Comptes : connexion, échec de connexion, changement de mot de passe, réinitialisation.
 - Club et rôles : modification du club, nomination, révocation, ajout et départ de joueur, import.
 - Finances : type de cotisation, paiement, annulation, déclaration « J'ai payé », dépense (chaque changement d'état), dérogation, assistance sociale.
 - Sport : séance, pointage, répartition A/B, match, composition, statistiques, incident, suspension, évaluation, plan tactique.
@@ -932,12 +957,15 @@ Les actions sont enregistrées sur le téléphone avec leur heure réelle, puis 
 - « Déconnecter tous mes appareils » disponible dans le profil.
 - Imitation de la blockchain
 
-### 7.2 Code PIN
+### 7.2 Confirmation des actions sensibles
 
-- 4 à 6 chiffres, défini par le joueur à sa première action sensible.
-- Exigé pour : validation d'un paiement ou d'une dépense, dérogation, signature du parrain, signature d'un PV, annulation d'un paiement — y compris l'annulation d'une adhésion avec remboursement après un refus de parrain (10.2 n° 36).
-- Après 3 codes erronés, les actions sensibles sont bloquées 30 minutes.
-- Code oublié : redéfinition après saisie du mot de passe.
+Décision du client du 11/10/2026 (10.3 n° 177) : le code PIN est supprimé de toute l'application.
+
+- Plus de code PIN : aucun code à définir, à saisir ni à stocker.
+- Plus de verrouillage après 3 essais (30 minutes) et plus de procédure « code oublié ».
+- Actions sensibles : validation d'un paiement ou d'une dépense, dérogation, signature du parrain, signature d'un PV, annulation d'un paiement ou d'une adhésion (avec ou sans remboursement).
+- Chaque action sensible se valide par un bouton, puis par une modale de confirmation qui récapitule l'action (objet, montant, personne concernée) ; les annulations et dérogations sont présentées comme des actions à risque.
+- L'auteur, la date et l'objet de chaque action sensible sont inscrits au journal d'activité (5.1).
 
 ### 7.3 Adresse et page de connexion
 
@@ -1108,7 +1136,7 @@ Les entrées 15 à 37 ci-dessous ne sont pas des propositions par défaut : ce s
 | 19 | Q6 — Une licence suspendue passe-t-elle en lecture seule ? | 1.4 | Non : elle bloque l'accès du club ; seule une licence expirée après la période de grâce passe en lecture seule |
 | 20 | Q5 — Formules et tarifs de licence | 1.4 | Aucune formule ni tarif au MVP ; une licence = date de début + date de fin saisies par le Superuser ; modèle de données permettant d'ajouter des formules plus tard sans migration destructive |
 | 21 | Q7 — Réinitialisation du mot de passe par le Superuser | 7.1 | Mot de passe temporaire aléatoire de 8 caractères, affiché une seule fois au Superuser, valable 48 h, changement obligatoire à la connexion suivante. La création initiale reste mot de passe = email |
-| 22 | Q16 — Vérification du code PIN en mode hors connexion (Caisse Terrain Express) | 4.4.5, 6.6 | Aucun PIN stocké sur l'appareil : le Trésorier ouvre une session de caisse en ligne (PIN vérifié par le serveur), valable jusqu'à minuit (fuseau du club) ; les encaissements hors connexion de cette session ne redemandent pas le PIN et sont synchronisés/journalisés avec l'identifiant de la session |
+| 22 | Q16 — Session de caisse en mode hors connexion (Caisse Terrain Express) — **modifié le 11/10/2026 (n° 177) : plus de code PIN** | 4.4.5, 6.6 | Le Trésorier ouvre une session de caisse en ligne (bouton + confirmation), valable jusqu'à minuit (fuseau du club) ; les encaissements hors connexion de cette session sont synchronisés/journalisés avec l'identifiant de la session ; aucun secret stocké sur l'appareil. Session maintenue sans PIN : position provisoire, à poser au client (n° 177) |
 | 23 | Q11 — Signalement d'une publication du fil public | 4.16 | Bouton « Signaler » sur chaque publication, accessible à tout joueur ; notifie le Superuser et écrit une entrée dans le journal |
 | 24 | Nombre de titulaires par rôle du bureau (extension acceptée du n° 3) | 2.3 | Configurable par club, un seul par défaut |
 | 25 | Comptage d'un retardataire comme absent (extension acceptée du n° 6) | 4.7 | Configurable par club, compté absent par défaut |
@@ -1122,10 +1150,161 @@ Les entrées 15 à 37 ci-dessous ne sont pas des propositions par défaut : ce s
 | 33 | Q14 — Un joueur non éligible à l'assistance sociale peut-il envoyer sa demande ? | 4.5.3 | Oui, avec bandeau d'avertissement et montant à régulariser ; le Président/VP tranche au cas par cas |
 | 34 | Q15 — Frais de sortie du club d'origine en plus du quitus | 4.14 | Aucun frais de sortie ; seuls les frais d'adhésion au club B sont dus |
 | 35 | Q17 — Portée des durées de conservation du journal (n° 14) | 5.5, 5.3 | Conservation minimale sans purge automatique au MVP ; les durées motivent un futur archivage, pas une suppression |
-| 36 | Q18 — PIN pour l'annulation d'une adhésion avec remboursement (refus de parrain) | 4.3, 7.2 | Oui, par analogie avec l'annulation d'un paiement |
+| 36 | Q18 — Confirmation pour l'annulation d'une adhésion avec remboursement (refus de parrain) — PIN : sans objet depuis le 11/10/2026 (n° 177) | 4.3, 7.2 | Modale de confirmation, par analogie avec l'annulation d'un paiement |
 | 37 | Q19 — Une demande d'assistance sociale d'un joueur non éligible peut-elle être approuvée et libérée ? | 4.5.1, 4.5.3 | Non : l'éligibilité reste une condition de validation, pas seulement d'envoi |
 | 38 | Q21 — Un joueur en retard, compté absent, en équipe A/B de séance ? **Tranché le 25/09/2026** | 4.7 | Compté absent, non réparti automatiquement, arrive en zone « Non répartis », mais **placeable manuellement** par le Coach ou le Capitaine — à la différence d'un joueur en dette/suspendu/inapte, jamais placeable même manuellement |
 | 39 | Équipes A/B de séance : terrain positionné (max. 11 par équipe, excédent sur un banc), échange par glisser-déposer, formation propre à chaque équipe. **Décidé le 30/09/2026**, hors périmètre initial de 4.7 (qui ne décrivait qu'une répartition en deux groupes) | 4.7 | Extension acceptée (comparable au n° 24) : chaque équipe a sa propre formation (bibliothèque déjà utilisée par le plan tactique, 4.11) et son propre terrain plafonné à 11 joueurs sur le terrain ; l'excédent reste sur un banc par équipe ; déposer un joueur du banc sur un coéquipier déjà en place les échange (celui en place repasse au banc) ; les règles d'éligibilité (dette/suspension/inaptitude, n° 5 des règles non négociables) s'appliquent à tout moment, y compris à un placement sur le terrain, pas seulement à la répartition initiale |
 | 40 | Vestiaire du jour, vue « Terrain » : rendre le terrain modifiable, alors que `docs/ecrans/sport-vestiaire.md` §3 point 3 et §4 décrivent explicitement une consultation pure (« aucun glisser-déposer ni aucun menu d'action », « aucun bouton "Passer en A/B" »). **Décidé le 01/10/2026**, après signalement de la contradiction avant développement | 4.7 | Extension acceptée, par exception au principe de consultation pure de cet écran : pour le Coach, le Capitaine et le Président uniquement (mêmes rôles que 4.7 pour la répartition A/B), le terrain du Vestiaire devient éditable à l'identique de la page Séance (n° 39), avec en plus un glisser-déposer entre les bancs des deux équipes pour changer un joueur d'équipe directement depuis cette page. Pour tous les autres rôles, le terrain reste strictement en lecture seule. `docs/ecrans/sport-vestiaire.md` n'a pas encore été mis à jour pour refléter cette exception — à faire si la décision reste définitive |
 
 Sans réponse du client à la fin du Lot 0, la proposition par défaut s'applique.
+
+### 10.3 Décisions ouvertes accumulées aux Lots 2 à 4
+
+Les entrées 41 à 168 ci-dessous viennent de l'audit de conformité `cdc-reviewer` du 06/10/2026, mené sur l'ensemble des specs d'écran (`docs/ecrans/*.md`), des annexes, de `schema-donnees.md`/`schema-treasury.md`/`design-system.md` et du code (commentaires « point ouvert »/« à trancher »/« provisoire »). **Aucune n'est tranchée, à l'exception des n° 169 à 173 et 177, qui sont des décisions du client (circuit 9.4), des n° 100 et 174, confirmés par le client le 17/11/2026, et du n° 175, devenu sans objet.** La colonne de droite reprend la position provisoire déjà appliquée dans le code/les specs, ou la proposition qui y est écrite ; « aucune » signifie qu'aucune position n'est encore appliquée nulle part. Trois entrées (82, 87, 154) sont des contradictions entre CLAUDE.md et le présent document, à traiter selon le protocole du §1 (position la plus restrictive appliquée à titre provisoire, question posée au client, aucun arbitrage unilatéral).
+
+| N° | Question | Section | Position provisoire / proposition |
+| --- | --- | --- | --- |
+| 41 | Mode de paiement des licences côté Éditeur, et canal « Contactez le support Vesta » | 1.4, 4.18 | Aucune ; texte générique en attendant |
+| 42 | Ligne isolée « Imitation de la blockchain » au 7.1 (`analyse.md` §1.4) | 7.1, 5.3 | Aucune règle tirée de cette ligne ; le chaînage relève du 5.3 seul |
+| 43 | Licence résiliée : accès bloqué ou lecture seule ? | 1.4, 4.18 | Même traitement que la suspension : accès bloqué |
+| 44 | Expiration d'une licence d'essai : même mécanique que les autres licences ? | 1.4 | Oui, même mécanique |
+| 45 | Fuseau des dates de licence | 1.4, CLAUDE.md §7 | Date UTC |
+| 46 | Licence « fournie par le Superuser » à la création d'un club | 4.1 | Le club démarre toujours en essai ; le support active ensuite la licence |
+| 47 | Actions Superuser soumises à une confirmation ? — sans objet depuis le 11/10/2026 (n° 177) | 7.2, 4.18 | Pas de PIN ; sans objet depuis le 11/10/2026 (n° 177) |
+| 48 | Le Superuser est-il soumis à l'acceptation des CGU ? | 7.5 | Non soumis |
+| 49 | Paramètres globaux du Superuser : une table `PlatformSettings` suffit-elle ? | 4.18 | Aucune |
+| 50 | Étendue des modèles de documents modifiables par le Superuser | 4.18, 10.1 D | Seuls les textes de mention sont modifiables ; structure, identité, attestation et signature restent fixes |
+| 51 | Mot de passe du créateur d'un club | 4.1, 7.1 | Application littérale : mot de passe = email, changement exigé immédiatement |
+| 52 | Statut d'adhésion du créateur, qui n'a ni parrain ni type de cotisation | 4.1, 4.3 | Adhésion « Inscrit » directement |
+| 53 | Email déjà inscrit sur Vesta lors de la création d'un club | 4.1, 6.3 | Erreur « Cette adresse email est déjà utilisée. » |
+| 54 | Adresse du club (`slug`) : génération automatique, modifiable ensuite ? | 4.1 | Générée par l'API à partir du nom ; non modifiable |
+| 55 | Devises proposées | 4.1 | USD et CDF |
+| 56 | Changement de devise après des transactions | 4.1, 4.4 | Interdit (lecture seule dès qu'un paiement existe) |
+| 57 | Couleurs du club : facultatives à la création, obligatoires dans la modale « Identité du club » ? | 3.5, 4.1 | Facultatives dans les deux modales |
+| 58 | Une ou deux cases à cocher pour les CGU et la politique de confidentialité | 7.5 | Une seule case |
+| 59 | Page de connexion réduite à un formulaire (dérogation au 3.2) | 3.2, 7.3 | Page dédiée maintenue |
+| 60 | Caisse Terrain Express et saisie rapide des évaluations : modale plein écran ? | 3.2, 4.4.5, 4.10 | Modales plein écran |
+| 61 | Refus d'un nouveau mot de passe identique au mot de passe temporaire | 7.1 | Refusé |
+| 62 | Demandes de réinitialisation sans alerte au Superuser | 4.1, 4.17, 4.18 | Aucune (notification in-app, ou filtre dans le tableau des utilisateurs) |
+| 63 | Connexion d'un compte sans adhésion en cours | 4.1, 6.3 | « Votre compte n'est rattaché à aucun club pour l'instant. », sans ouverture de session |
+| 64 | Qui traite une demande de suppression de compte ? Suppression physique ou anonymisation hors trésorerie ? | 7.5 | Traitée par le Superuser ; anonymisation (on conserve la ligne, on vide l'identité) |
+| 65 | Mineurs : âge minimum, consentement parental, carte masquée | 7.5 | Aucune (hors périmètre du club pilote) |
+| 66 | Portée du consentement de publication de la carte : globale ou par club ? | 4.2, 7.5 | Portée globale (sur `User`) |
+| 67 | Poste et numéro de maillot : par club ou par carrière ? | 4.2 | Par club |
+| 68 | Passation de présidence : confirmation ? — PIN sans objet depuis le 11/10/2026 (n° 177) | 2.3, 7.2 | Confirmation simple |
+| 69 | Qui configure le lien de paiement ? | 4.6 | Le Président, dans la modale « Identité du club » |
+| 70 | Réduction du nombre de titulaires autorisés sous le nombre de titulaires actifs | 2.3, 10.2 n° 24 | Aucune révocation ; nouvelles nominations bloquées |
+| 71 | Le parrain ne répond pas : le Président peut-il désigner un autre parrain ou annuler l'adhésion ? | 4.3 | Aucune action au-delà de l'alerte à 7 jours |
+| 72 | Import CSV des joueurs, email déjà actif dans un autre club | 4.1 | La ligne échoue avec un message neutre |
+| 73 | Accès du Vice-président à la grille des cotisations (contradiction 4.4.7 / matrice 2.4) | 2.4, 4.4.7 | Le VP voit la grille en lecture seule |
+| 74 | Rôles autorisés à importer des cotisations historiques | 4.4.8, 2.4 | Mêmes rôles que l'enregistrement des paiements (Trésorier et adjoint) |
+| 75 | Seuil de suspension au 5e carton jaune et remise à zéro des compteurs par saison | 4.9 | 5e jaune de la saison ; remise à zéro en début de saison ; configurables par club |
+| 76 | Le Président peut-il placer un retardataire à la main ? (contradiction 10.2 n° 38 / matrice 2.4) | 4.7, 2.4 | Non (lecture littérale du n° 38) |
+| 77 | L'attente d'adhésion bloque-t-elle la répartition A/B ? | 4.7 | Oui, bloqué comme les autres |
+| 78 | Motif d'indisponibilité visible par le Capitaine ; montant de dette visible par le DS et le Médecin | 4.7, 2.4 | « Indisponible », sans motif |
+| 79 | Joueur pointé à l'heure puis régularisé : ajouté automatiquement à une équipe ? | 4.7 | Ajout automatique à l'équipe suivante |
+| 80 | Un club qui ne compte pas le retard comme une absence répartit-il automatiquement ses retardataires ? | 4.7, 10.2 n° 25 | Jamais de répartition automatique d'un retardataire |
+| 81 | Retardataires dans le Vestiaire ; carte « Pas encore pointés » réservée au staff | 4.7 | Retardataire affiché dans son équipe ou « En attente de placement » ; carte réservée au Coach, au Capitaine et au Président |
+| 82 | **Contradiction CLAUDE.md / CDC.** Un joueur en attente d'adhésion peut-il être placé dans un plan tactique ? Le CDC 4.11 cite « en dette, suspendus ou inaptes » ; CLAUDE.md règle 5 ajoute « ou en attente d'adhésion » | 4.11 | Provisoire, la plus restrictive : non plaçable. Non tranché — à poser au client |
+| 83 | Composition ou plan déjà enregistré dont un joueur devient non éligible | 4.8, 4.11 | Joueur conservé mais grisé ; publication bloquée ; aucun retrait automatique |
+| 84 | Répartition A/B pour un match | 4.8, 2.4 | Pointage seul, sans équipes A/B |
+| 85 | Heure limite du pointage d'un match | 4.8 | Le coup d'envoi sert d'heure limite |
+| 86 | Cartons saisis après minuit (feuille remplie le lendemain) | 4.7, 4.8, 4.9 | Verrouillés à minuit |
+| 87 | **Contradiction CLAUDE.md / CDC.** Transitions automatiques par cron (expiration de licence, dépense « Non justifiée », relance parrain, gel du registre) sans acteur réel, donc sans entrée de journal ; CLAUDE.md règle 6 exige au contraire une entrée pour toute modification | 5.1, CLAUDE.md règle 6 | Aucune entrée de journal ; trace portée par le statut et l'horodatage. Non tranché — à poser au client |
+| 88 | Équipements hors connexion sur la feuille de match | 6.6, 4.13 | Connexion exigée pour les équipements |
+| 89 | Qui enregistre le retour des équipements d'un match ? | 4.13 | Coach et Intendant |
+| 90 | Périmètre d'accès à l'« Espace coach » | 2.4, 4.10 | Coach, Capitaine, Président, VP, DS |
+| 91 | Qui voit un plan tactique en brouillon ? | 4.11, 2.4 | Le Coach seul |
+| 92 | Destinataires de « Plan publié » quand le plan n'est rattaché à aucun match ou à une composition non publiée | 4.11, 4.17 | Les joueurs placés sur le plan |
+| 93 | Formations à 7 et à 8 joueurs ; enregistrement des formations personnalisées | 4.11 | À 7 : 2-3-1, 3-2-1, 3-1-2 ; à 8 : 3-3-1, 3-2-2, 2-3-2 ; pas d'enregistrement de formation personnalisée |
+| 94 | Numéro de maillot en double dans les fiches joueurs | 4.11, 4.2 | Avertissement non bloquant |
+| 95 | Modification d'un plan déjà publié : renvoie-t-elle une notification ? | 4.11, 4.17 | Pas de nouvelle notification |
+| 96 | Règle de calcul de la note globale de la carte | 4.2, 4.10 | Aucune formule codée (`overall_rating = null`) ; proposition du designer : moyenne des attributs du radar sur 100 |
+| 97 | Axes du radar : deux listes différentes au 4.2 et au 4.10 | 4.2, 4.10 | Axes servis par l'API |
+| 98 | Attributs du radar issus des évaluations : publics pour les autres clubs ? | 4.2 | Non publics |
+| 99 | Période des indicateurs de la carte | 4.2 | Saison en cours sur la carte ; cumul de carrière dans la fiche |
+| 100 | Frais d'adhésion et solde : montant dû unique créé à l'ouverture de l'adhésion ? | 4.3, 4.4.2 | **Confirmée le 17/11/2026 (décision du client : « A : une somme à payer »).** Montant dû unique, échéance à la date d'entrée. Positions provisoires associées, à confirmer : le dû d'adhésion est exigible dès la date d'entrée, sans tolérance (le joueur reste « En attente », jamais « En dette ») ; les joueurs importés (membres historiques, « Inscrit » d'office, 4.1) ne reçoivent pas de dû d'adhésion ; une adhésion annulée voit son dû neutralisé par une écriture d'annulation, sauf frais entièrement payés et conservés |
+| 101 | Paiement des frais d'adhésion supérieur au montant dû | 4.3 | Accepté sans plafond |
+| 102 | Une seule cotisation mensuelle obligatoire par joueur ? | 4.4.2 | Oui, un seul rattachement actif |
+| 103 | Échéance et génération des montants dus pour les cotisations obligatoires annuelles et ponctuelles | 4.4.1, 4.4.2 | Aucun montant dû généré tant que la décision n'est pas prise (champ `due_month` prévu) |
+| 104 | Échéance du mois d'arrivée (le n° 5 fixe « mois entier dû », pas la date d'échéance) | 4.4.2 | Date d'arrivée + tolérance du club, ou le 10 du mois suivant |
+| 105 | Les mensuelles courent-elles avant « Inscrit » ? Mois de départ dû en entier ? Sort d'un crédit au départ/transfert ? Paiement par un joueur « Parti » ? | 4.4.2, 4.14 | Un joueur « Parti » ne peut plus payer ; le reste sans proposition |
+| 106 | Écriture d'annulation d'un montant dû généré par erreur, ou d'une suspension rétroactive | 4.4.2, 5.3 | Oui (motif + Président + modale de confirmation ; PIN supprimé le 11/10/2026, n° 177) |
+| 107 | Chaîner aussi les montants dus dans la chaîne cryptographique | 5.3 | Oui |
+| 108 | Levée du gel de la chaîne et échéances pendant le gel | 5.3, 4.4.2 | Échéances plafonnées à la date du gel ; aucune dette créée tant que les joueurs ne peuvent pas payer |
+| 109 | Changement de tarif après un paiement anticipé : figer le tarif des mois déjà payés ? | 4.4.3 | Aucune (la formule actuelle fait payer le complément) |
+| 110 | Type/catégorie déjà utilisé : archivage seul ; remboursement des frais d'adhésion = annulation validée par le Président ; date de valeur d'une annulation | 4.4.1, 4.3, 4.4.4 | Propositions telles qu'écrites dans `schema-treasury.md` §13 |
+| 111 | Circuit de l'annulation d'un paiement | 4.4.4 | Demande par le Trésorier ou l'adjoint ; validation par le Président avec modale de confirmation (PIN supprimé le 11/10/2026, n° 177) |
+| 112 | Paiement d'une dette sur un type archivé ; le Trésorier peut-il valider son propre paiement ; le Président peut-il approuver l'annulation d'un paiement qui le concerne ? | 4.4.4, 4.4.1 | Aucune |
+| 113 | Session de caisse : délai max de synchronisation et horloge fausse ; synchronisation pendant un gel ; sort de la session si l'auteur perd le rôle ; fermeture hors connexion ; plafond d'un encaissement | 4.4.5, 6.6 | 72 h, tolérance d'horloge 2 min ; rôle exigé à la réception ; effet immédiat sur l'appareil ; aucun plafond |
+| 114 | Déclaration « J'ai payé » : référence/capture obligatoires ? Date de valeur ; refus si le club n'a pas de lien ; motif de refus obligatoire | 4.6 | Référence obligatoire, capture facultative ; motif de refus obligatoire ; date = jour de la déclaration |
+| 115 | Accès à la messagerie mercato (contradiction schéma « tous les membres » / 4.14 « Président et DS ») ; pas de destinataire individuel | 4.14, 2.4 | Position provisoire, la plus prudente : Président et DS seulement ; fil de club à club |
+| 116 | Un seul fil de discussion par couple de clubs, ou plusieurs ? | 4.14 | Plusieurs fils (un par offre) |
+| 117 | Accès des simples joueurs au Marché (contradiction 1.2 « espace public » / matrice 2.4) | 1.2, 2.4, 4.14 | La matrice fait foi : Président, VP, DS, Trésorier, Coach |
+| 118 | Onglet « Aptitude » de la fiche vue par un autre club (contradiction interne au 4.2) | 4.2, 10.2 n° 16 | Pas d'onglet « Aptitude » hors du club |
+| 119 | Ce que le club acheteur voit d'un blocage pour dette | 4.14 | « Quitus en attente », sans montant ni mention de dette |
+| 120 | Montant du blocage visible du DS et du Coach du club d'origine (le 4.8 le montre au Coach, la matrice 2.4 non) | 2.4, 4.8, 4.14 | Pas de montant |
+| 121 | Confirmation à l'acceptation d'une offre de transfert — PIN sans objet depuis le 11/10/2026 (n° 177) | 7.2, 4.14 | Confirmation simple |
+| 122 | Notifications de suivi du mercato (refus, blocage, transfert effectué) : canal, et prévenir le Trésorier du club d'origine ? | 4.17 | In-app et email, comme l'offre |
+| 123 | Qui télécharge le quitus ? | 4.14, 6.7 | Le joueur ; Président et Trésorier du club d'origine ; Président et DS du club d'accueil |
+| 124 | Offres concurrentes : simultanéité, sort des autres offres au transfert, deux offres du même club | 4.14 | Aucune ; l'interface suit l'API |
+| 125 | Cas limites du transfert : retrait d'acceptation d'un joueur bloqué ; passage en « Fermé aux offres » ; annulation ultérieure du paiement débloquant ; licence du club d'accueil expirée au déblocage | 4.14 | Aucune |
+| 126 | Parrainage exigé pour l'adhésion au club d'accueil (4.3 l'exige toujours, le schéma prévoit une adhésion sans parrainage) | 4.3, 4.14 | Dossier standard au club d'accueil, sans blocage si ce club n'exige pas de parrain |
+| 127 | Vérification d'authenticité du quitus (code ou QR) — demande nouvelle, circuit 9.4 | 4.14, 9.4 | Non intégrée |
+| 128 | Coach qui serait aussi Médecin (contradiction 4.12/2.4 « sans exception » / 2.2 « union des droits ») | 2.2, 4.12 | L'union des droits ne s'applique que dans le module Médical ; aucun diagnostic dans les écrans sportifs |
+| 129 | Libellé « Médecin / référent santé » pour tous les titulaires, faute de champ de qualification | 4.12, 10.2 n° 17 | Libellé unique pour tous |
+| 130 | Moment où le joueur devient inapte : dès la déclaration, ou après le bilan du Médecin (4.12) ? | 4.12 | Dès la déclaration |
+| 131 | Blessure d'un joueur qui n'a pas consenti au traitement de ses données de santé | 4.12, 7.5 | Déclaration et aptitude possibles ; bilan, suivi et fiche bloqués |
+| 132 | « Apte avec restriction » : sélectionnable ? Texte de la restriction ? Qui le voit ? | 4.12 | Sélectionnable ; aucun texte de restriction |
+| 133 | Notifications médicales absentes du 4.17 (retour déclaré, blessure déclarée, consentement accordé/révoqué, fin du consentement à la passation) | 4.17 | Aucune ajoutée |
+| 134 | Correction d'une entrée de suivi médical | 4.12 | Nouvelle entrée seulement, pas de modification/suppression |
+| 135 | Mot « blessure » dans la notification au Coach, alors que les listes affichent « Inapte » | 4.17 | On suit le 4.17 |
+| 136 | Journalisation des consultations de la liste d'aptitudes par le Coach et le Président | 7.5, 5.2 | Journaliser l'ouverture de la page Médical, pas chaque affichage |
+| 137 | **Contradiction CLAUDE.md / CDC — en réalité interne au CDC.** Accès du Superuser (Ghost Mode) aux données médicales : CDC 2.5 « a accès à tout » contre CDC 4.12 « que par le Médecin et le joueur » | 2.5, 4.12, 5.4 | Aucun accès au contenu médical ; journal (métadonnées) seulement |
+| 138 | Pièces jointes médicales (citées au 6.7, absentes du 4.12) | 4.12, 6.7 | Aucun champ |
+| 139 | Contact d'urgence saisi par le joueur lui-même ? | 4.12 | Non, par le Médecin seul |
+| 140 | Dossier médical d'un joueur parti/transféré : consultation, export ; Médecin fixant sa propre aptitude ; champs obligatoires du bilan | 4.12, 7.5 | Dossier conservé dans le club d'origine ; aucun contrôle sur l'auto-aptitude ; champs obligatoires sans position écrite |
+| 141 | Effet d'un quorum non atteint (4.15 impose le calcul, pas la conséquence) | 4.15 | Aucun blocage ; avertissement et mention dans le PDF |
+| 142 | Plusieurs Vice-présidents : une seule signature suffit, ou celle de chaque titulaire ? | 4.15, 10.2 n° 24 | Aucune ; c'est l'API qui déclare le PV complet. Position la plus restrictive : tous les VP en poste |
+| 143 | Date d'appréciation de la vacance du poste de VP (date de l'AG ou date de la signature) | 4.15, 10.2 n° 28 | Date de la signature |
+| 144 | Libellé du PV quand le Président cumule le rôle de VP | 4.15 | « Le Président exerçant aussi la fonction de Vice-président, le procès-verbal est signé par lui seul. » |
+| 145 | Un club peut-il se passer de quorum ? | 4.15 | Champ obligatoire (1 à 100) |
+| 146 | Effet d'un changement de seuil de quorum sur une AG convoquée et non clôturée | 4.15 | Seuil en vigueur à la tenue de l'AG, figé à la clôture |
+| 147 | Modification ou annulation d'une AG après convocation | 4.15 | Aucune |
+| 148 | Nature de l'« action liée » à une décision d'AG | 4.15 | Simple lien vers l'écran concerné |
+| 149 | Total des votes supérieur au nombre de présents | 4.15 | Avertissement non bloquant |
+| 150 | Point « Dérogations accordées depuis la dernière AG » ajouté d'office à l'ordre du jour — circuit 9.4 | 4.5.2, 4.15 | Ajouté d'office |
+| 151 | PV non modifiable après la première signature | 4.15 | Non modifiable |
+| 152 | Notification « Signature du PV attendue », absente du 4.17 | 4.17 | Notification envoyée au second signataire |
+| 153 | Liste nominative des présents dans le PV — demande nouvelle, circuit 9.4 | 4.15, 9.4 | Décompte seulement |
+| 154 | **Contradiction CLAUDE.md / CDC.** Mention « IMARA TECH Group » sur les PDF et dans les emails : CLAUDE.md §2.19 l'interdit hors du footer de l'interface, le CDC 3.5 est muet sur les documents générés | 3.5, 1.1, CLAUDE.md §2.19 | Aucune mention sur les documents ni dans les emails. Non tranché — à poser au client |
+| 155 | Mention « Vesta » sur les documents générés | 3.5 | Identité du club seule |
+| 156 | Gabarit d'email distinct (formule d'appel, lien, désinscription, expéditeur) | 4.17 | Aucune |
+| 157 | Préférences de notification par type d'événement : granularité nécessaire ? | 4.17 | Choix global unique |
+| 158 | Notification « Communiqué publié », absente du 4.17 mais annoncée par l'écran | 4.16, 4.17 | Notification à tous les joueurs |
+| 159 | Lecture du fil public sans connexion ; interactions sur une publication publique d'un autre club | 4.16, 7.4 | Lecture réservée aux utilisateurs connectés ; interactions limitées aux publications de son propre club |
+| 160 | Visibilité par défaut d'une publication ; publications automatiques pour un joueur sans consentement ou mineur | 4.16, 7.5 | « Club » par défaut ; jamais public sans consentement |
+| 161 | Signalement : une fois par personne ? Traitement par le Superuser (masquer/supprimer/classer) ? | 4.16, 5.2, 10.2 n° 23 | Une fois par personne ; traitement non spécifié |
+| 162 | Suppression d'un commentaire ; modification/suppression/signalement d'un message de chat — circuit 9.4 | 4.16 | Commentaire supprimé par son auteur ou par le Président ; rien pour le chat |
+| 163 | Contenu public d'un résultat de match ; texte partagé sur WhatsApp | 4.16 | Buteurs seulement ; titre et lien seulement |
+| 164 | Publications publiques d'un club suspendu/résilié ; actions possibles en lecture seule | 4.16, 1.4 | Publications non servies ; « Signaler » maintenu, écriture bloquée |
+| 165 | Composition du canal « Bureau » | 2.3, 4.16 | Président, VP, DS, Trésorier, adjoint, Intendant, Secrétaire depuis le 11/10/2026 (sans Médecin, Coach ni Capitaine) |
+| 166 | Images publiques (publications « Club », communiqués, chat) ; pied de la modale de conversation sans « Annuler » ; chat journalisé sans son texte ; longueur max des textes | 4.16, 7.4, 3.2, 5.1 | Images par vue authentifiée ; pied sans « Annuler » ; journal sans texte ; 2 000 caractères |
+| 167 | Logistique : accès de l'Intendant aux dépenses ; dépenses rattachables ; alerte d'inventaire ; part non rendue ; correction d'un mouvement ; archivage d'un article en stock ; type « Stock initial » ; comptage ; date future ; sortie partielle ; « trimestre non clôturé » ; ajustement à la clôture ; Intendant vacant | 4.13, 2.4, 4.17 | Recherche sans bénéficiaire ni motif ; dépenses libérées seulement ; aucune correction de mouvement ; comptage à l'aveugle ; date future refusée ; tout ou rien ; alerte une fois le trimestre terminé ; autres sous-points sans proposition |
+| 168 | Trésorerie : plafond de catégorie ; barème ; régularisation après l'événement ; approbation = libération ? ; option « réservée aux membres en ordre » ; consultation Président/VP ; type de bénéficiaire ; rôle qui téléverse le justificatif ; dépense sans justificatif obligatoire ; correction d'une dépense libérée | 4.5.1, 4.5.2, 4.5.3, 2.4 | Plafond par dépense, bloquant ; barème géré par Président et Trésorier ; paiement après l'événement compte ; approbation crée une dépense « En attente » libérée après modale de confirmation (PIN supprimé le 11/10/2026, n° 177) ; justificatif par Trésorier ou adjoint ; sans justificatif, dépense « Libérée » ; dernier point sans proposition |
+| 169 | Rôle Secrétaire — décision du client du 11/10/2026 (circuit 9.4, demande des clubs partenaires après la démonstration) | 2.2, 2.3, 2.4, 4.16 | Rôle `secretary`, un titulaire par club, nommé par le Président, membre du Bureau et du canal « Bureau » ; publie les communiqués officiels (avec Président et VP, accusé de lecture inchangé). Le nombre de titulaires passe par le réglage commun `board_seats_per_role` (un par défaut) : à confirmer que « un seul » doit rester non configurable |
+| 170 | Périmètre du Secrétaire sur les assemblées générales | 4.15, 2.4 | Convoque, rédige l'ordre du jour et invite (convocation, notification des joueurs) ; **ni** pointage des présences, **ni** vote, **ni** rédaction ou signature du PV, **ni** quorum, **ni** clôture (position prudente). Aucune modification de l'ordre du jour après convocation n'existe aujourd'hui, pour personne |
+| 171 | Archive des documents : qui lit, qui écrit | 4.15.1, 2.4 | Écriture : Secrétaire, Président, VP ; lecture : Bureau (Président, VP, DS, Trésorier, adjoint, Intendant, Secrétaire) ; les joueurs et les autres rôles n'ont aucun accès. Ouverture aux joueurs ou à d'autres rôles : non tranché |
+| 172 | Archive : retrait, remplacement, conservation, catégories | 4.15.1, 5.3 | Jamais de suppression en dur ; retrait avec motif obligatoire, remplacement conservant l'ancien document ; documents retirés masqués par défaut mais téléchargeables par le Bureau ; trois catégories (PV de réunion, convocation, autre) ; 10 Mo, PDF/JPEG/PNG/WebP ; pas de date future refusée ; pas de durée de conservation propre |
+| 173 | Archive : journalisation et rattachement à une AG | 4.15.1, 5.2 | Journal à chaque dépôt, consultation du détail, téléchargement, remplacement et retrait (pas à l'affichage de la liste) ; aucun lien automatique avec une AG ni avec le PV généré en 4.15 (les deux restent distincts) ; Superuser en Ghost Mode affiché « Système Vesta » |
+| 174 | L'import historique de cotisations (4.4.8) crée des montants dus pour les mois importés (proposition Q17 de `schema-treasury.md` §14) : une cellule vide produit-elle une dette ? | 4.4.8, 4.4.3 | Position provisoire = comportement actuel du code (`apps/treasury/services.py`, commentaire « Montants dus ») : pour chaque ligne réussie d'un type mensuel obligatoire, l'import crée les montants dus manquants des mois de l'année importée jusqu'au mois courant (mêmes règles que la génération mensuelle, source « import »), donc une cellule vide produit une dette. **Décidé le 17/11/2026 : une case vide du fichier historique = un montant dû non payé, donc une dette réelle ; le Trésorier valide la grille avant l'import définitif.** |
+| 175 | Contradiction CLAUDE.md / CDC sur le PIN à l'annulation d'une adhésion (avec ou sans remboursement) | 7.2, 4.3, 10.2 n° 36, CLAUDE.md règle 7 | Sans objet depuis le 11/10/2026 (n° 177) : le PIN est supprimé ; l'annulation d'une adhésion, avec ou sans remboursement, se valide par modale de confirmation |
+| 176 | **Contradiction interne au CDC / code.** Journal des traitements automatiques (cron) : le n° 87 dit « aucune entrée de journal » pour les transitions automatiques sans acteur réel, mais la constatation de dette et l'émission des reçus écrivent une entrée avec l'acteur « Système » | 5.1, 10.2 n° 87, 4.4 | À unifier : soit toutes les tâches cron écrivent une entrée avec l'acteur « Système », soit aucune. Non tranché — à poser au client |
+| 177 | **Suppression du code PIN** — décision du client du 11/10/2026 (circuit 9.4, demande des clubs partenaires, confirmée directement par l'utilisateur) | 0.4, 3.2, 3.4, 4.1, 4.3, 4.4.4, 4.4.5, 4.5.2, 4.15, 5.2, 7.2, 10.2 n° 22, 36, 47, 68, 106, 111, 121, 168, 10.3 n° 175 | Toutes les actions sensibles (validation de paiement ou de dépense, dérogation, signature du parrain, signature du PV, annulation d'un paiement ou d'une adhésion) se valident par un bouton puis une modale de confirmation ; auteur, date et objet sont inscrits au journal. Ni définition du PIN, ni verrouillage 3 essais/30 min, ni « code oublié », ni onglet « Code PIN » du profil. Colonnes supprimées le 13/11/2026 (décision expresse du client « Suppression de code pin ») : `User.pin_hash`, `pin_failed_attempts`, `pin_locked_until` et `CashSession.pin_verified_at` avec sa contrainte ; les hashes existants sont perdus volontairement. Caisse Terrain Express : session de caisse maintenue (ouverture en ligne par bouton + confirmation, valable jusqu'à minuit). **Positions provisoires, à poser au client** : (1) session de caisse maintenue sans PIN ; (2) import historique (4.4.8) avec confirmation simple ; (3) aucune confirmation par encaissement de la Caisse Terrain Express ; (4) libellé de signature du PV « Signé électroniquement par {nom}, {fonction}, le {date} » |
+| 178 | **Correctif de sécurité (audit du 12/10/2026, M4), sans nouvelle règle métier** : le code PIN étant supprimé (n° 177), ajout d'un identifiant anti-doublon `client_uuid` facultatif sur la saisie en ligne d'un paiement (4.4.4) et sur le paiement des frais d'adhésion (4.3), réutilisant la colonne et la contrainte unique `(club, client_uuid)` de la Caisse Terrain Express. **À faire valider par le client** | 4.3, 4.4.4, 6.6 | Un double envoi ne crée qu'un seul paiement/reçu/notification ; réponse existante renvoyée (200) ; refus (409, `client_uuid_conflict`) si même identifiant avec contenu différent (comparaison : joueur, type, montant, mode, référence, date, auteur) ; sans identifiant, comportement inchangé |
+| 179 | **Assistant du Coach** — décision du client du 13/11/2026 (circuit 9.4) | 2.2, 2.3, 2.4, 4.7 à 4.12 | Rôle `assistant_coach` (« Assistant du Coach »). (a) **Mêmes droits que le Coach**, sauf nommer ou retirer un assistant ; même restriction médicale (aptitude et date de retour seulement, jamais le diagnostic). (b) **Nommé et retiré par le Coach seul** (ni le Président ni l'assistant) ; nomination et retrait journalisés avec leur auteur, l'intéressé est notifié. (c) **Un seul assistant par Coach** : un nouveau remplace le précédent (retrait de l'ancien journalisé et notifié). (d) Si le Coach change ou perd son rôle, **l'assistant garde son poste** (aucune révocation automatique) ; le nouveau Coach peut le retirer ou le remplacer (un assistant dont le nominateur n'est plus Coach est dit « orphelin »). **Positions par défaut appliquées, à confirmer** : (1) l'assistant n'est pas plafonné par `board_seats_per_role` (la règle est « un par Coach ») ; (2) un joueur ne peut pas se nommer lui-même ni nommer un autre Coach ; (3) avec plusieurs Coachs (réglage `board_seats_per_role` > 1), chaque Coach a son assistant et ne peut retirer que le sien ou un assistant orphelin ; (4) l'assistant n'accède ni aux communiqués, ni à l'archive, ni au canal « Bureau » (le Coach non plus) ; (5) libellé du rôle : « Assistant du Coach ». **Questions restantes** : faut-il un plafond de deux assistants par Coach ? l'assistant doit-il être prévenu du changement de Coach ? l'assistant peut-il rester en poste si le club reste sans Coach pendant une longue période ? |
+| 180 | **Score d'un match verrouillé après minuit** — décision du client du 16/11/2026 | 4.7, 4.8 | Le score d'un match n'est plus modifiable après minuit (fuseau du club), comme le pointage, la répartition et les cartons (n° 86) : refus 409, code `event_locked`, appliqué dans le service. Le Superuser en session de support reste autorisé, à la demande du Président. Les buts et passes restent modifiables après coup (4.8). Le score se saisit donc le jour du match. Si le résultat a déjà été publié sur le fil, toute modification du score ou des buteurs met à jour le même post (pas de doublon, visibilité « Club » inchangée) et est journalisée (`sport.match_result_post_updated`, avec l'auteur et l'avant/après du score) |
+
+Quatre entrées confirment la liste indicative transmise par le client : cumul Coach/Médecin → n° 128 ; accès Ghost Mode aux données médicales → n° 137 ; lecture de la messagerie mercato → n° 115 ; nombre de signatures de VP sur un PV → n° 142.
+
+Cinq propositions d'interface, hors périmètre métier, restent aussi à valider : correspondance statuts/couleurs et autres propositions du design system (`design-system.md` §6) ; palette par défaut de la plateforme (`design-system.md` §7.3) ; effet 3D de la carte (relief statique, sans gyroscope) ; carte aux couleurs du club ou selon le thème de l'utilisateur ; écart de couleur des badges de licence entre `superuser-espace.md` et `design-system.md`.

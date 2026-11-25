@@ -78,20 +78,29 @@ def test_duplicate_skips_ineligible_players(ctx):
     assert not TacticalPlanPlacement.all_objects.filter(club=ctx.club, plan=new_plan, membership=ctx.captain).exists()
 
 
-def test_update_number_and_position_updates_membership_and_warns_on_duplicate(ctx):
+def test_update_number_and_position_updates_membership_and_refuses_duplicate(ctx):
     plan = _create_plan(ctx)
     placement = services.place_on_plan(plan=plan, membership=ctx.player, x_coord=Decimal("50"), y_coord=Decimal("80"), placed_by=ctx.coach.user)
 
     ctx.captain.jersey_number = 7
     ctx.captain.save()
 
-    updated, warning = services.update_plan_placement_number_and_position(
-        placement=placement, jersey_number=7, position=Membership.Position.FORWARD, updated_by=ctx.coach.user
+    with pytest.raises(services.SportValidationError, match="déjà porté"):
+        services.update_plan_placement_number_and_position(
+            placement=placement, jersey_number=7, position=Membership.Position.FORWARD, updated_by=ctx.coach.user
+        )
+    services.update_plan_placement_number_and_position(
+        placement=placement, jersey_number=8, position=Membership.Position.FORWARD, updated_by=ctx.coach.user
     )
     ctx.player.refresh_from_db()
-    assert ctx.player.jersey_number == 7
+    assert ctx.player.jersey_number == 8
     assert ctx.player.position == Membership.Position.FORWARD
-    assert warning is not None and "7" in warning
+
+    # D4 : champ non transmis = inchangé.
+    services.update_plan_placement_number_and_position(placement=placement, jersey_number=9, updated_by=ctx.coach.user)
+    ctx.player.refresh_from_db()
+    assert ctx.player.jersey_number == 9
+    assert ctx.player.position == Membership.Position.FORWARD
 
 
 def test_annotation_add_and_delete(ctx):

@@ -47,4 +47,14 @@ describe("session (CDC 7.4 : session propre à chaque onglet)", () => {
     setStoredIdentity(IDENTITY);
     expect(getStoredIdentity()).toEqual(IDENTITY);
   });
+
+  it.each([
+    ["sans utilisateur", JSON.stringify({ club: null })],
+    ["avec un utilisateur nul", JSON.stringify({ user: null, club: null })],
+    ["qui n'est pas un objet", JSON.stringify("texte")],
+    ["illisible", "{pas du json"],
+  ])("traite comme absente une identité stockée %s", (_label, raw) => {
+    window.sessionStorage.setItem("vesta:identity", raw);
+    expect(getStoredIdentity()).toBeNull();
+  });
 });

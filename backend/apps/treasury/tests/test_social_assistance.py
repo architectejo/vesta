@@ -23,7 +23,7 @@ from apps.treasury.models import (
     SocialAssistanceRequest,
     SocialAssistanceScale,
 )
-from apps.treasury.tests.conftest import PIN, make_member
+from apps.treasury.tests.conftest import make_member
 from apps.treasury.tests.expense_helpers import (
     club_today,
     days_ago,
@@ -279,7 +279,7 @@ class TestDecision:
         release(ctx, make_expense(ctx, make_category(ctx, name="Autre")), now=days_ago(10))
         with pytest.raises(services.TreasuryValidationError, match="Assistance sociale non libérable"):
             services.release_expense_with_derogation(
-                expense=expense, president=ctx.president.user, reason="Urgence", pin=PIN
+                expense=expense, president=ctx.president.user, reason="Urgence"
             )
         assert Expense.all_objects.get(pk=expense.pk).status == Expense.Status.PENDING
 

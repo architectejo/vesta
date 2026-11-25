@@ -39,7 +39,8 @@ from typing import Any, Optional
 
 from django.utils import timezone
 
-from apps.clubs.models import Membership, MembershipRole, PresidencyTransfer
+from apps.clubs.models import COACHING_STAFF_ROLES, Membership, MembershipRole, PresidencyTransfer
+from apps.core.private_files import rename_upload_to_real_type
 from apps.core.roles import get_active_roles, has_any_role
 from apps.core.services import log_action
 from apps.medical.models import HealthRecord, Injury, InjuryFollowUp, MedicalDocument
@@ -73,8 +74,10 @@ __all__ = [
     "list_recent_injuries",
     "list_unfit_and_restricted",
     "log_fitness_list_viewed",
+    "log_injury_viewed",
     "attach_document",
     "can_access_document",
+    "log_document_viewed",
 ]
 
 
@@ -91,7 +94,7 @@ class MedicalPermissionError(MedicalError, PermissionError):
 
 
 class ConsentMissingError(MedicalValidationError):
-    """Le consentement au traitement des donnees de sante du joueur manque
+    """Le consentement au traitement des données de santé du joueur manque
     (CDC 4.12, 7.5 ; medical.md §4.2, point ouvert 4) : bloque le bilan, le
     suivi et la fiche -- pas la declaration ni l'aptitude (CLAUDE.md
     regle n5, priorite a la securite du joueur)."""
@@ -176,6 +179,21 @@ def get_unfitness_reason(membership: Membership, *, at_date: Optional[date] = No
     return ("Inapte · date de retour non fixée", None)
 
 
+def get_unfit_membership_dates(club, membership_ids) -> dict[int, Optional[date]]:
+    """Version groupée (une requête) de :func:`get_unfitness_reason` : renvoie
+    ``{adhésion: date de retour ou None}`` pour les seuls joueurs INAPTES
+    parmi ``membership_ids``. Même règle (seule l'inaptitude bloque), jamais
+    de diagnostic ni de contenu de la fiche."""
+
+    ids = list(membership_ids)
+    if not ids:
+        return {}
+    rows = HealthRecord.all_objects.filter(
+        club_id=club.pk, membership_id__in=ids, fitness_status=HealthRecord.FitnessStatus.UNFIT
+    ).values_list("membership_id", "fitness_return_date")
+    return dict(rows)
+
+
 def get_fitness_summary(membership: Membership) -> dict[str, Any]:
     """Contrat N1 (medical.md §5.1 point 1) : ``fitness_status`` +
     ``fitness_return_date`` UNIQUEMENT -- jamais ``has_open_injury``, un
@@ -240,7 +258,7 @@ def has_full_record_access(*, viewer, membership: Membership) -> bool:
 
 def _require_full_record_access(*, viewer, membership: Membership) -> None:
     if not has_full_record_access(viewer=viewer, membership=membership):
-        raise MedicalPermissionError("Vous n'avez pas acces au dossier medical complet de ce joueur (CDC 2.4, 4.12).")
+        raise MedicalPermissionError("Vous n'avez pas accès au dossier médical complet de ce joueur.")
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +268,7 @@ def _require_full_record_access(*, viewer, membership: Membership) -> None:
 
 def view_health_record_as_doctor(*, membership: Membership, actor) -> HealthRecord:
     if not has_any_role(actor, {MembershipRole.Role.DOCTOR}, club=membership.club):
-        raise MedicalPermissionError("Reserve au Medecin / referent sante (CDC 2.4, 4.12).")
+        raise MedicalPermissionError("Réservé au Médecin / référent santé.")
     record = get_or_create_health_record(membership)
     log_action(actor=actor, club=membership.club, action_type="medical.record.viewed", obj=record)
     return record
@@ -258,7 +276,7 @@ def view_health_record_as_doctor(*, membership: Membership, actor) -> HealthReco
 
 def view_health_record_as_player(*, membership: Membership, actor) -> HealthRecord:
     if getattr(actor, "id", None) != membership.user_id:
-        raise MedicalPermissionError("Reserve au joueur concerne (CDC 2.4, 4.12).")
+        raise MedicalPermissionError("Réservé au joueur concerné.")
     record = get_or_create_health_record(membership)
     log_action(actor=actor, club=membership.club, action_type="medical.record.viewed", obj=record)
     return record
@@ -271,12 +289,27 @@ def view_health_record_as_president(*, membership: Membership, actor) -> HealthR
     cours de session)."""
 
     if not has_any_role(actor, {MembershipRole.Role.PRESIDENT}, club=membership.club):
-        raise MedicalPermissionError("Reserve au President du club (CDC 2.4, 4.12).")
+        raise MedicalPermissionError("Réservé au Président du club.")
     record = get_health_record(membership)
     if record is None or not can_president_read_full_record(record):
         raise MedicalPermissionError("Ce dossier n'est plus accessible.")
     log_action(actor=actor, club=membership.club, action_type="medical.record.viewed_by_president", obj=record)
     return record
+
+
+def log_injury_viewed(*, actor, injury: Injury) -> None:
+    """Consultation du detail d'une blessure (medical.md §4.3 ; CDC 5.2, 7.5),
+    journalisee comme celle de la fiche : ``medical.record.viewed_by_president``
+    si le lecteur est le President (hors son propre dossier), sinon
+    ``medical.injury.viewed`` (Medecin ou joueur concerne). Seule la
+    reference a la blessure est journalisee, jamais son contenu."""
+
+    is_president_reading_other = (
+        has_any_role(actor, {MembershipRole.Role.PRESIDENT}, club=injury.club)
+        and getattr(actor, "id", None) != injury.membership.user_id
+    )
+    action_type = "medical.record.viewed_by_president" if is_president_reading_other else "medical.injury.viewed"
+    log_action(actor=actor, club=injury.club, action_type=action_type, obj=injury)
 
 
 def log_fitness_list_viewed(*, club, actor) -> None:
@@ -290,13 +323,13 @@ def log_fitness_list_viewed(*, club, actor) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Consentement au traitement des donnees de sante (CDC 4.12, 7.5)
+# Consentement au traitement des données de santé (CDC 4.12, 7.5)
 # ---------------------------------------------------------------------------
 
 
 def give_processing_consent(*, membership: Membership, actor, now=None) -> HealthRecord:
     if getattr(actor, "id", None) != membership.user_id:
-        raise MedicalPermissionError("Seul le joueur concerne peut donner ce consentement.")
+        raise MedicalPermissionError("Seul le joueur concerné peut donner ce consentement.")
     now = now or timezone.now()
     record = get_or_create_health_record(membership)
     if record.consent_given_at is None:
@@ -308,16 +341,16 @@ def give_processing_consent(*, membership: Membership, actor, now=None) -> Healt
 
 def update_self_declaration(*, membership: Membership, actor, text: str, consent_given: bool = False, now=None) -> HealthRecord:
     """« Mettre a jour ma declaration » (medical.md §4.10) : si le
-    consentement au traitement manque, ``consent_given`` doit etre vrai
+    consentement au traitement manque, ``consent_given`` doit être vrai
     (case a cocher obligatoire cote interface) pour enregistrer."""
 
     if getattr(actor, "id", None) != membership.user_id:
-        raise MedicalPermissionError("Seul le joueur concerne peut mettre a jour sa declaration.")
+        raise MedicalPermissionError("Seul le joueur concerné peut mettre à jour sa déclaration.")
     now = now or timezone.now()
     record = get_or_create_health_record(membership)
     if record.consent_given_at is None:
         if not consent_given:
-            raise ConsentMissingError("Cochez la case pour enregistrer votre declaration.")
+            raise ConsentMissingError("Cochez la case pour enregistrer votre déclaration.")
         record.consent_given_at = now
         log_action(actor=actor, club=membership.club, action_type="medical.processing_consent.given", obj=record)
 
@@ -354,12 +387,12 @@ def update_health_record(*, membership: Membership, actor, data: dict[str, Any])
     cote interface -- reverifie ici, defense en profondeur)."""
 
     if not has_any_role(actor, {MembershipRole.Role.DOCTOR}, club=membership.club):
-        raise MedicalPermissionError("Reserve au Medecin / referent sante (CDC 2.4, 4.12).")
+        raise MedicalPermissionError("Réservé au Médecin / référent santé.")
     record = get_or_create_health_record(membership)
     if record.consent_given_at is None:
         raise ConsentMissingError(
-            "Vous pouvez fixer l'aptitude et suivre les blessures declarees, mais pas completer la fiche "
-            "tant que le joueur n'a pas donne son consentement au traitement de ses donnees de sante."
+            "Vous pouvez fixer l'aptitude et suivre les blessures déclarées, mais pas compléter la fiche "
+            "tant que le joueur n'a pas donné son consentement au traitement de ses données de santé."
         )
 
     changed_fields: list[str] = []
@@ -394,7 +427,7 @@ def update_fitness(
     now=None,
 ) -> HealthRecord:
     if not has_any_role(actor, {MembershipRole.Role.DOCTOR}, club=membership.club):
-        raise MedicalPermissionError("Reserve au Medecin / referent sante (CDC 2.4, 4.12).")
+        raise MedicalPermissionError("Réservé au Médecin / référent santé.")
     if status not in HealthRecord.FitnessStatus.values:
         raise MedicalValidationError("Choisissez une aptitude valide.")
 
@@ -409,13 +442,13 @@ def update_fitness(
         HealthRecord.FitnessStatus.FIT_WITH_RESTRICTION,
     ):
         raise MedicalValidationError(
-            "Ce joueur a une blessure en cours. Declarez son retour depuis la blessure pour le rendre apte."
+            "Ce joueur a une blessure en cours. Déclarez son retour depuis la blessure pour le rendre apte."
         )
 
     if status != HealthRecord.FitnessStatus.UNFIT:
         return_date = None
     elif return_date is not None and return_date < timezone.localdate():
-        raise MedicalValidationError("La date de retour ne peut pas etre dans le passe.")
+        raise MedicalValidationError("La date de retour ne peut pas être dans le passé.")
 
     record.fitness_status = status
     record.fitness_return_date = return_date
@@ -439,7 +472,7 @@ def update_fitness(
 
 def grant_president_access(*, membership: Membership, actor, now=None) -> HealthRecord:
     if getattr(actor, "id", None) != membership.user_id:
-        raise MedicalPermissionError("Seul le joueur concerne peut accorder cet acces.")
+        raise MedicalPermissionError("Seul le joueur concerné peut accorder cet accès.")
     now = now or timezone.now()
     record = get_or_create_health_record(membership)
     record.president_access_granted_at = now
@@ -450,7 +483,7 @@ def grant_president_access(*, membership: Membership, actor, now=None) -> Health
 
 def revoke_president_access(*, membership: Membership, actor, now=None) -> HealthRecord:
     if getattr(actor, "id", None) != membership.user_id:
-        raise MedicalPermissionError("Seul le joueur concerne peut revoquer cet acces.")
+        raise MedicalPermissionError("Seul le joueur concerné peut révoquer cet accès.")
     now = now or timezone.now()
     record = get_or_create_health_record(membership)
     record.president_access_revoked_at = now
@@ -464,7 +497,7 @@ def revoke_president_access(*, membership: Membership, actor, now=None) -> Healt
 # ---------------------------------------------------------------------------
 
 INJURY_REPORTER_ROLES = frozenset(
-    {MembershipRole.Role.COACH, MembershipRole.Role.CAPTAIN, MembershipRole.Role.DOCTOR}
+    {*COACHING_STAFF_ROLES, MembershipRole.Role.CAPTAIN, MembershipRole.Role.DOCTOR}
 )
 
 
@@ -484,9 +517,9 @@ def report_injury(
     DECLARATION (point ouvert 3, position retenue -- schema §6.2)."""
 
     if not has_any_role(actor, INJURY_REPORTER_ROLES, club=membership.club):
-        raise MedicalPermissionError("Reserve au Coach, au Capitaine et au Medecin (CDC 2.4, 4.12).")
+        raise MedicalPermissionError("Réservé au Coach (ou son assistant), au Capitaine et au Médecin.")
     if not (circumstances or "").strip():
-        raise MedicalValidationError("Decrivez brievement les circonstances.")
+        raise MedicalValidationError("Décrivez brièvement les circonstances.")
 
     now = now or timezone.now()
     injury = Injury(
@@ -546,7 +579,7 @@ def _notify_injury_reported(*, injury: Injury, membership: Membership) -> None:
     coach_memberships = Membership.all_objects.filter(
         club_id=membership.club_id,
         status=Membership.Status.ACTIVE,
-        roles__role=MembershipRole.Role.COACH,
+        roles__role__in=COACHING_STAFF_ROLES,
         roles__revoked_at__isnull=True,
     ).distinct()
 
@@ -558,7 +591,7 @@ def _notify_injury_reported(*, injury: Injury, membership: Membership) -> None:
         create_notification(
             recipient=doctor_membership.user,
             event_type=Notification.EventType.INJURY_DECLARED,
-            message=f"Blessure declaree : {player_name} ({event_label}). A completer.",
+            message=f"Blessure déclarée : {player_name} ({event_label}). À compléter.",
             club=membership.club,
             target=injury,
         )
@@ -568,7 +601,7 @@ def _notify_injury_reported(*, injury: Injury, membership: Membership) -> None:
         create_notification(
             recipient=coach_membership.user,
             event_type=Notification.EventType.INJURY_DECLARED,
-            message=f"{player_name} est inapte : blessure declaree le {format_date_fr(timezone.localdate())}.",
+            message=f"{player_name} est inapte : blessure déclarée le {format_date_fr(timezone.localdate())}.",
             club=membership.club,
             target=injury,
         )
@@ -577,7 +610,7 @@ def _notify_injury_reported(*, injury: Injury, membership: Membership) -> None:
 def _get_injury_or_error(*, injury_id, club) -> Injury:
     injury = Injury.all_objects.filter(club_id=club.id, pk=injury_id).first()
     if injury is None:
-        raise MedicalValidationError("Cet element n'existe plus.")
+        raise MedicalValidationError("Cet élément n'existe plus.")
     return injury
 
 
@@ -598,15 +631,15 @@ def complete_injury_report(
     manque (point ouvert 4)."""
 
     if not has_any_role(actor, {MembershipRole.Role.DOCTOR}, club=injury.club):
-        raise MedicalPermissionError("Reserve au Medecin / referent sante (CDC 2.4, 4.12).")
+        raise MedicalPermissionError("Réservé au Médecin / référent santé.")
     record = get_or_create_health_record(injury.membership)
     if record.consent_given_at is None:
         raise ConsentMissingError(
-            "Vous pouvez fixer l'aptitude et suivre les blessures declarees, mais pas completer la fiche "
-            "tant que le joueur n'a pas donne son consentement au traitement de ses donnees de sante."
+            "Vous pouvez fixer l'aptitude et suivre les blessures déclarées, mais pas compléter la fiche "
+            "tant que le joueur n'a pas donné son consentement au traitement de ses données de santé."
         )
     if return_date is not None and injury.reported_at is not None and return_date < injury.reported_at.date():
-        raise MedicalValidationError("La date de retour ne peut pas etre avant la blessure.")
+        raise MedicalValidationError("La date de retour ne peut pas être avant la blessure.")
 
     now = now or timezone.now()
     injury.location_on_body = location_on_body
@@ -640,22 +673,22 @@ def add_injury_followup(*, injury: Injury, actor, entry_date: date, note: str, n
     7)."""
 
     if not has_any_role(actor, {MembershipRole.Role.DOCTOR}, club=injury.club):
-        raise MedicalPermissionError("Reserve au Medecin / referent sante (CDC 2.4, 4.12).")
+        raise MedicalPermissionError("Réservé au Médecin / référent santé.")
     record = get_or_create_health_record(injury.membership)
     if record.consent_given_at is None:
         raise ConsentMissingError(
-            "Vous pouvez fixer l'aptitude et suivre les blessures declarees, mais pas ajouter de suivi "
-            "tant que le joueur n'a pas donne son consentement au traitement de ses donnees de sante."
+            "Vous pouvez fixer l'aptitude et suivre les blessures déclarées, mais pas ajouter de suivi "
+            "tant que le joueur n'a pas donné son consentement au traitement de ses données de santé."
         )
     if not (note or "").strip():
         raise MedicalValidationError("Ce champ est obligatoire.")
     today = timezone.localdate()
     if entry_date > today:
-        raise MedicalValidationError("La date ne peut pas etre dans le futur.")
+        raise MedicalValidationError("La date ne peut pas être dans le futur.")
     if injury.reported_at is not None and entry_date < injury.reported_at.date():
-        raise MedicalValidationError("La date ne peut pas etre avant la blessure.")
+        raise MedicalValidationError("La date ne peut pas être avant la blessure.")
     if new_return_date is not None and new_return_date < today:
-        raise MedicalValidationError("La date de retour ne peut pas etre dans le passe.")
+        raise MedicalValidationError("La date de retour ne peut pas être dans le passé.")
 
     now = now or timezone.now()
     followup = InjuryFollowUp(
@@ -679,14 +712,14 @@ def declare_injury_return(*, injury: Injury, actor, return_date: date, now=None)
     blessure en cours."""
 
     if not has_any_role(actor, {MembershipRole.Role.DOCTOR}, club=injury.club):
-        raise MedicalPermissionError("Reserve au Medecin / referent sante (CDC 2.4, 4.12).")
+        raise MedicalPermissionError("Réservé au Médecin / référent santé.")
     if injury.status == Injury.Status.RESOLVED:
-        raise MedicalValidationError("Cette blessure est deja cloturee.")
+        raise MedicalValidationError("Cette blessure est déjà clôturée.")
     today = timezone.localdate()
     if return_date > today:
-        raise MedicalValidationError("La date du retour ne peut pas etre dans le futur.")
+        raise MedicalValidationError("La date du retour ne peut pas être dans le futur.")
     if injury.reported_at is not None and return_date < injury.reported_at.date():
-        raise MedicalValidationError("La date du retour ne peut pas etre avant la blessure.")
+        raise MedicalValidationError("La date du retour ne peut pas être avant la blessure.")
 
     now = now or timezone.now()
     injury.status = Injury.Status.RESOLVED
@@ -767,10 +800,12 @@ def list_unfit_and_restricted(club):
 
 def attach_document(*, actor, file, original_filename: str = "", injury: Optional[Injury] = None, health_record: Optional[HealthRecord] = None) -> MedicalDocument:
     if bool(injury) == bool(health_record):
-        raise MedicalValidationError("Un document doit etre rattache a une blessure ou a une fiche, jamais les deux.")
+        raise MedicalValidationError("Un document doit être rattaché à une blessure ou à une fiche, jamais les deux.")
     club = injury.club if injury is not None else health_record.club
     if not has_any_role(actor, {MembershipRole.Role.DOCTOR}, club=club):
-        raise MedicalPermissionError("Reserve au Medecin / referent sante (CDC 2.4, 6.7).")
+        raise MedicalPermissionError("Réservé au Médecin / référent santé.")
+    # Nom de stockage aleatoire a extension reelle (jamais celle du client).
+    rename_upload_to_real_type(file)
     document = MedicalDocument(
         club_id=club.id,
         injury=injury,
@@ -780,9 +815,49 @@ def attach_document(*, actor, file, original_filename: str = "", injury: Optiona
         uploaded_by=actor,
     )
     document.save()
+
+    # CLAUDE.md regle n6 (toute creation ecrit une entree de journal) ;
+    # regle n11 / CDC 5.2 « Medical » : jamais le contenu (ni le nom de
+    # fichier, qui peut lui-meme reveler un element clinique -- ex.
+    # « entorse_genou.pdf »). Seule la reference (type/id, deja portee par
+    # `obj`) et le parent (blessure ou fiche) sont journalises -- jamais le
+    # fichier lui-meme ni son nom original.
+    log_action(
+        actor=actor,
+        club=club,
+        action_type="medical.document.attached",
+        obj=document,
+        after={
+            "injury_id": injury.pk if injury is not None else None,
+            "health_record_id": health_record.pk if health_record is not None else None,
+        },
+    )
     return document
 
 
 def can_access_document(*, viewer, document: MedicalDocument) -> bool:
     membership = document.injury.membership if document.injury_id else document.health_record.membership
     return has_full_record_access(viewer=viewer, membership=membership)
+
+
+def log_document_viewed(*, actor, document: MedicalDocument) -> None:
+    """Consultation journalisee d'un telechargement de document medical
+    (CLAUDE.md regle n11 ; CDC 5.2 « Medical », 7.5 ; CDC 4.12 : « chaque
+    consultation [du dossier par le President] est journalisee » --
+    applique ici, par coherence, a toute consultation d'un document
+    medical, quel que soit le role du lecteur, pas seulement le President,
+    meme logique de tracabilite que le reste du module (``medical.record.viewed``,
+    ``medical.record.viewed_by_president``). Jamais le contenu du document
+    ni un diagnostic : seule la reference au document (type/id, portee par
+    `obj`) est journalisee."""
+
+    club = document.injury.club if document.injury_id else document.health_record.club
+    owner_user_id = (
+        document.injury.membership.user_id if document.injury_id else document.health_record.membership.user_id
+    )
+    is_president_reading_other = (
+        has_any_role(actor, {MembershipRole.Role.PRESIDENT}, club=club)
+        and getattr(actor, "id", None) != owner_user_id
+    )
+    action_type = "medical.record.viewed_by_president" if is_president_reading_other else "medical.document.viewed"
+    log_action(actor=actor, club=club, action_type=action_type, obj=document)

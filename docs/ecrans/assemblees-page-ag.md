@@ -1,6 +1,6 @@
 # Écran — Assemblées générales
 
-Sources : CDC 3.2 (assistant pas à pas pour la création d'une AG), 3.5 (nom et logo du club sur les PDF), 4.15, 4.5.2 (dérogations signalées à la prochaine AG), 4.17 (convocation), 5.2 (journal : « AG »), 7.2 (signature du PV par PIN), 9.2 (critère du Lot 4 : « un PV d'AG est signé et généré en PDF »), 9.3 étape 8, 10.1 annexe D, matrice 2.4, 10.2 n° 18, 24 et 28. Composants : `Modal` variante assistant et à onglets, `PinPrompt`, `ConfirmDialog`, `Banner`, `docs/lot0/design-system.md`.
+Sources : CDC 3.2 (assistant pas à pas pour la création d'une AG), 3.5 (nom et logo du club sur les PDF), 4.15, 4.5.2 (dérogations signalées à la prochaine AG), 4.17 (convocation), 5.2 (journal : « AG »), 7.2 (actions sensibles : confirmation explicite, sans code PIN), 9.2 (critère du Lot 4 : « un PV d'AG est signé et généré en PDF »), 9.3 étape 8, 10.1 annexe D, matrice 2.4, 10.2 n° 18, 24 et 28. Composants : `Modal` variante assistant et à onglets, `ConfirmDialog` (variante action sensible), `Banner`, `docs/lot0/design-system.md`.
 
 > **Révision du 29/09/2026 (tâche 4.1 du Lot 4)** : compléments sans changement de structure — PDF et accès au fichier (§4.6), journal et notifications (§4.7), filtre des présences, comportement si le quorum n'est pas atteint, contrôle du total des votes rendu non bloquant, date d'appréciation de la vacance du VP alignée sur `schema-donnees.md` §9.5, plusieurs titulaires du poste de VP (10.2 n° 24), hors connexion et lecture seule, textes ajoutés (§8). Les ajouts sont signalés « (révision 29/09) ».
 
@@ -16,15 +16,30 @@ Route `/club/assemblees`. Entrée « Club › Assemblées générales ».
 | --- | --- |
 | Consulter la page, les AG, les décisions, le PV signé | Tous les joueurs (L) |
 | Convoquer (assistant), pointer les présences, saisir les votes, rédiger le PV | Président, Vice-président |
-| Signer le PV (PIN) | Président et Vice-président, chacun pour sa signature ; Président seul si le poste de VP est vacant (Q10) |
+| Signer le PV (confirmation) | Président et Vice-président, chacun pour sa signature ; Président seul si le poste de VP est vacant (Q10) |
 | Définir le seuil de quorum du club | Président, Vice-président (matrice 2.4, « Assemblées générales » : É) |
 | Télécharger le PV signé (PDF) (révision 29/09) | Tous les joueurs du club (L), par une vue authentifiée de l'API qui vérifie le club (§4.6) |
+
+(révision 11/10) **Secrétaire** — décision client du 11/10/2026 : « le Secrétaire prépare l'AG ». Rôle absent du CDC (2.4 ligne « Assemblées générales », 4.15 « Président ou VP ») : à inscrire par le circuit 9.4. « Préparer » n'est pas défini ; l'écran applique, à titre provisoire, la lecture **la plus étroite** (avant la tenue de l'AG) et liste le reste comme proposition :
+
+| Bouton ou élément | Secrétaire — provisoire | Proposé, à confirmer |
+| --- | --- | --- |
+| « Convoquer une AG » (en-tête, état vide « À venir ») → assistant §4.1, ordre du jour compris | **Oui** | — |
+| Onglet « Ordre du jour » | Lecture | — |
+| Onglet « Présences » : boutons « Présent », « Retirer la présence » | Non (lecture) | Oui (tenue de la feuille de présence le jour de l'AG) |
+| Onglet « Décisions » : « Saisir le vote » | Non (lecture) | Oui (le secrétaire de séance consigne les votes) |
+| Onglet « Procès-verbal » : « Rédiger le PV » / « Modifier le PV », « Insérer les décisions » | Non (lecture) | Oui, avant la première signature (rédaction usuelle du secrétaire de séance ; signatures inchangées) |
+| « Signer le PV » (confirmation) | **Non** | Non : réservé au Président et au VP (4.15, 7.2) |
+| Menu « … » « Seuil de quorum » | **Non** | Non : paramètre de gouvernance du club |
+| « Télécharger le PV (PDF) » | Oui (comme tous les joueurs) | — |
+
+Quand le Secrétaire convoque, l'auteur de la convocation dans le journal est le Secrétaire ; la notification aux joueurs est inchangée (§4.7). La « modification ou annulation d'une AG après convocation » reste un point ouvert général (§7) et ne lui est pas ouverte d'office.
 
 Les droits sont renvoyés par l'API avec chaque AG (`can_edit`, `can_sign`, etc.) ; l'interface n'affiche un bouton que si le droit correspondant est présent, elle ne déduit jamais un droit du libellé d'un rôle. Un joueur qui cumule Président et un autre rôle signe **une seule fois**, au titre de Président. Superuser : pas d'accès à cette page hors session de support (Ghost Mode) ; toute action qu'il y fait s'affiche « Action effectuée par le Système Vesta » (5.4).
 
 ## 3. Structure de la page
 
-**En-tête** : titre « Assemblées générales » ; contexte « {nom du club} · Saison {saison} ». Action principale (Président, VP) : « Convoquer une AG ». Menu « … » (Président, VP) : « Seuil de quorum » → modale §4.5.
+**En-tête** : titre « Assemblées générales » ; contexte « {nom du club} · Saison {saison} ». Action principale (Président, VP, Secrétaire — révision 11/10) : « Convoquer une AG ». Menu « … » (Président, VP) : « Seuil de quorum » → modale §4.5.
 
 1. **À venir** — cartes (4.15) : date longue et heure, type (« Ordinaire » / « Extraordinaire »), lieu, `StatusBadge` « Convoquée », nombre de points à l'ordre du jour. Clic → modale « Assemblée générale ».
 2. **Passées** — 5 dernières cartes (3.3), « Voir plus » : date, type, badge « PV à signer » ou « Clôturée », décisions clés (2 premières, une ligne chacune). Clic → même modale.
@@ -74,7 +89,7 @@ En-tête : « AG {ordinaire / extraordinaire} du {date} » ; sous-titre « {heur
 - Signatures : « Président : {nom} — signé le {date} » ou « en attente » ; idem « Vice-président ».
 - **Poste de Vice-président vacant** (décision Q10 de `docs/lot0/analyse.md`) : la ligne Vice-président affiche `StatusBadge` gris « Poste vacant » ; le Président signe seul et sa signature suffit à clôturer le PV. La vacance est actée dans le PV : mention insérée automatiquement par l'API dans le texte et le PDF. **Correction (révision 29/09)** : la version précédente écrivait « vacant à la date de l'assemblée », alors que `schema-donnees.md` §9.5 apprécie la vacance **au moment de la signature** (`vp_vacant_at_signature`). Le 10.2 n° 28 ne fixe pas la date. Texte aligné provisoirement sur le schéma : « Le poste de Vice-président étant vacant à la date de la signature, le procès-verbal est signé par le Président seul. » L'interface affiche la mention **renvoyée par l'API**, jamais un texte à elle. Point ouvert §7. Aide au-dessus du bouton « Signer le PV » : « Poste de Vice-président vacant : votre signature suffit à clôturer le procès-verbal. »
 - (révision 29/09) **Plusieurs Vice-présidents** (10.2 n° 24 : nombre de titulaires par rôle configurable par club) : la ligne affiche « Vice-président : {nom} — signé le {date} » dès qu'**un** VP a signé, sinon « en attente » suivi des noms des titulaires. Le nombre de signatures de VP exigé n'est pas tranché (point ouvert §7) : l'interface affiche l'état « PV complet » renvoyé par l'API et ne le calcule pas.
-- Actions : (Président, VP, avant toute signature) « Rédiger le PV » / « Modifier le PV » → modale §4.4 ; (Président ou VP, si sa signature manque) action principale « Signer le PV » → `PinPrompt` (« Signer le procès-verbal de l'AG du {date} ») ; succès : « PV signé. » Quand les deux signatures sont présentes (ou la seule signature du Président si le poste de VP est vacant) : action principale « Télécharger le PV (PDF) », badge « Clôturée ».
+- Actions : (Président, VP, avant toute signature) « Rédiger le PV » / « Modifier le PV » → modale §4.4 ; (Président ou VP, si sa signature manque) action principale « Signer le PV » → modale de confirmation (`ConfirmDialog`, variante action sensible) « Signer le procès-verbal de l'AG du {date} ? » — « Annuler » / « Signer » ; succès : « PV signé. » Quand les deux signatures sont présentes (ou la seule signature du Président si le poste de VP est vacant) : action principale « Télécharger le PV (PDF) », badge « Clôturée ».
 - Après la première signature : texte « Le PV ne peut plus être modifié après une signature. »
 
 ### 4.3 « Saisir le vote — {intitulé du point} » — taille `md`
@@ -106,7 +121,7 @@ Pied : « Annuler » / « Enregistrer ». Succès : « Décision enregistrée. �
 ### 4.6 PV en PDF (révision 29/09)
 
 - **Génération** : par l'API, dès que le PV est complet (deux signatures, ou Président seul si le poste de VP est vacant, 10.2 n° 28). L'interface ne génère aucun PDF.
-- **Contenu minimal** (gabarit détaillé : annexe D, tâche 4.9 du plan) : logo et nom du club venant des données du club (3.5, marque blanche, jamais en dur) ; « Procès-verbal de l'assemblée générale {ordinaire / extraordinaire} du {date longue} » ; heure et lieu ; présences et quorum (« {n} présents sur {total} joueurs actifs — quorum de {seuil} % {atteint / non atteint} ») ; ordre du jour ; pour chaque point, votes et décision retenue ; texte du PV ; mention de vacance le cas échéant ; bloc de signatures (« Signé par code PIN par {nom}, {fonction}, le {date heure} »). **Aucune mention de l'Éditeur** dans le PDF (CLAUDE.md règle 19) ; aucune donnée financière individuelle ni médicale.
+- **Contenu minimal** (gabarit détaillé : annexe D, tâche 4.9 du plan) : logo et nom du club venant des données du club (3.5, marque blanche, jamais en dur) ; « Procès-verbal de l'assemblée générale {ordinaire / extraordinaire} du {date longue} » ; heure et lieu ; présences et quorum (« {n} présents sur {total} joueurs actifs — quorum de {seuil} % {atteint / non atteint} ») ; ordre du jour ; pour chaque point, votes et décision retenue ; texte du PV ; mention de vacance le cas échéant ; bloc de signatures (« Signé électroniquement par {nom}, {fonction}, le {date heure} »). **Aucune mention de l'Éditeur** dans le PDF (CLAUDE.md règle 19) ; aucune donnée financière individuelle ni médicale.
 - **Accès au fichier** : lien « Télécharger le PV (PDF) » servi par une **vue authentifiée** de l'API (vérification du club et de l'adhésion active), jamais par une adresse publique ; le fichier est rangé avec les documents privés du club (6.7, CLAUDE.md règle 10, par prudence : le PV n'est pas cité au 6.7 mais c'est un document interne du club). Sur mobile, le PDF s'ouvre dans la visionneuse du téléphone (téléchargement standard).
 - **États** : « Génération… » (bouton `loading`) tant que l'API n'a pas renvoyé `generated_at` ; erreur « Le PDF n'a pas pu être généré. Réessayez. » (déjà en §5).
 
@@ -121,7 +136,7 @@ Aucun élément d'interface : rappel pour `backend-dev` et `test-engineer`.
 | Présence pointée ou retirée | Oui | Aucune |
 | Vote saisi ou modifié | Oui | Aucune |
 | PV rédigé ou modifié | Oui | Aucune |
-| Signature du PV (PIN) | Oui | Proposition : le second signataire attendu, in-app « Le PV de l'AG du {date} attend votre signature. » (absente du tableau 4.17, à valider) |
+| Signature du PV | Oui | Proposition : le second signataire attendu, in-app « Le PV de l'AG du {date} attend votre signature. » (absente du tableau 4.17, à valider) |
 | Seuil de quorum modifié | Oui (avant / après) | Aucune |
 
 Un clic sur une notification ouvre la page et la modale « Assemblée générale » de l'AG concernée (onglet « Procès-verbal » pour la demande de signature).
@@ -130,10 +145,10 @@ Un clic sur une notification ouvre la page et la modale « Assemblée générale
 
 | Zone | Chargement | Vide | Erreur |
 | --- | --- | --- | --- |
-| À venir | 1 carte squelette | « Aucune assemblée prévue. » + (Pdt, VP) « Convoquer une AG » | Modèle standard |
+| À venir | 1 carte squelette | « Aucune assemblée prévue. » + (Pdt, VP, Secrétaire) « Convoquer une AG » | Modèle standard |
 | Passées | 3 cartes squelettes | « Aucune assemblée tenue pour l'instant. » | Modèle standard |
 | Modale détail | Squelette dans le corps | Décisions : « Aucune décision saisie. » ; PV : « Le procès-verbal n'est pas encore rédigé. » | « Impossible de charger l'assemblée. » + « Réessayer » |
-| Signature | — | — | Erreurs PIN standard (design-system `PinPrompt`) |
+| Signature | — | — | Erreurs standard (modale de confirmation) |
 | Génération PDF | Bouton en état `loading` « Génération… » | — | « Le PDF n'a pas pu être généré. Réessayez. » |
 | Présences (révision 29/09) | 5 lignes squelettes | Vue « Non pointés » vide : « Tous les joueurs ont été pointés. » ; vue « Présents » vide : « Aucun présent pour l'instant. » ; recherche sans résultat : « Aucun joueur ne correspond à « {saisie} ». » | Échec d'un pointage : la ligne revient à son état, toast « La présence de {nom} n'a pas été enregistrée. Réessayez. » |
 | Hors connexion (révision 29/09) | — | — | Actions désactivées, bandeau `info` « Cette action nécessite une connexion. » ; la consultation reste possible si les données sont en cache |
@@ -145,7 +160,7 @@ Succès (révision 29/09, toasts) : « Assemblée convoquée. Les joueurs ont é
 
 - **360 px** : cartes pleine largeur, une par ligne. Modale de détail plein écran, onglets défilants. Onglet « Présences » : liste de 56 px avec bouton « Présent » à droite.
 - **≥ 1024 px** : cartes en grille de 3 colonnes ; modale `lg` centrée.
-- (révision 29/09) **360 px, détails** : l'assistant `xl` est plein écran, pied « Annuler » / « Suivant » collé en bas même clavier ouvert ; à l'étape 2, les boutons « Monter », « Descendre », « Retirer » sont des `IconButton` de 40 px alignés à droite de l'intitulé (zone 44 px), jamais sous forme de gros boutons pleine largeur. Onglet « Décisions » : un bloc par point, votes sur une ligne « Pour {n} · Contre {n} · Abstention {n} » (retour à la ligne autorisé), bouton `sm` « Saisir le vote » aligné à droite. Onglet « Procès-verbal » : texte à 16 px, une seule action principale dans le pied (« Signer le PV » ou « Télécharger le PV (PDF) »), « Modifier le PV » en bouton secondaire dans le corps. `PinPrompt` en panneau bas.
+- (révision 29/09) **360 px, détails** : l'assistant `xl` est plein écran, pied « Annuler » / « Suivant » collé en bas même clavier ouvert ; à l'étape 2, les boutons « Monter », « Descendre », « Retirer » sont des `IconButton` de 40 px alignés à droite de l'intitulé (zone 44 px), jamais sous forme de gros boutons pleine largeur. Onglet « Décisions » : un bloc par point, votes sur une ligne « Pour {n} · Contre {n} · Abstention {n} » (retour à la ligne autorisé), bouton `sm` « Saisir le vote » aligné à droite. Onglet « Procès-verbal » : texte à 16 px, une seule action principale dans le pied (« Signer le PV » ou « Télécharger le PV (PDF) »), « Modifier le PV » en bouton secondaire dans le corps. Modale de confirmation en panneau bas.
 - (révision 29/09) Vérifications obligatoires à 360 px : intitulé de point de 160 caractères sans débordement ; lieu long ; AG sans VP (badge « Poste vacant ») ; bandeau quorum sur 2 lignes sans troncature ; thèmes Classic, Clair, Sombre.
 
 ## 7. Décisions par défaut et points ouverts
@@ -163,6 +178,8 @@ Succès (révision 29/09, toasts) : « Assemblée convoquée. Les joueurs ont é
 - (révision 29/09) **Point ouvert — date d'appréciation de la vacance du VP** (10.2 n° 28) : date de l'AG ou date de la signature ? Écart constaté entre la version précédente de cette spec (« à la date de l'assemblée ») et `schema-donnees.md` §9.5 (`vp_vacant_at_signature`). Position provisoire : celle du schéma (date de la signature), texte de la mention servi par l'API. Cas concret à soumettre au client : un VP nommé entre l'AG et la signature doit-il signer un PV d'une AG à laquelle il n'était pas en poste ?
 - (révision 29/09) **Point ouvert — plusieurs titulaires du poste de VP** (10.2 n° 24) : une seule signature de VP suffit-elle, ou faut-il celle de chaque titulaire ? Le CDC dit « le Président et le VP ». Position provisoire la plus prudente : c'est l'API qui déclare le PV complet ; `backend-dev` doit trancher avec le client avant d'implémenter (la plus restrictive serait « tous les VP en poste »).
 - (révision 29/09) **Proposition — notification de signature attendue** : absente du tableau 4.17 ; proposée en §4.7 pour que le second signataire soit prévenu. À valider (circuit 9.4 si refusée : la modale reste accessible depuis la page).
+- (révision 11/10) **Point ouvert — périmètre de « préparer l'AG » pour le Secrétaire** : position provisoire = convoquer (assistant complet) seulement ; pointage des présences, saisie des votes et rédaction du PV proposés (tableau §2). Signature du PV et seuil de quorum exclus dans tous les cas. À trancher par le client, puis à inscrire au CDC 2.4 et 4.15.
+- (révision 11/10) **Point ouvert — lien avec l'archive** : les PV d'AG signés ne sont pas copiés dans `club-archives.md` (voir son §8 point 11).
 - (révision 29/09) **Proposition — libellé « PV à rédiger »** : une AG passée sans PV rédigé affiche aujourd'hui « PV à signer », ce qui est inexact. Proposition : badge orange « PV à rédiger » (à ajouter au tableau 2.5 de `design-system.md`, ligne AG). À valider.
 
 ## 8. Textes ajoutés (révision 29/09)

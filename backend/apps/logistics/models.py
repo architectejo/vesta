@@ -72,12 +72,23 @@ class Article(TenantModel):
         CLEATS = "cleats", "Bottines"
         BALLS = "balls", "Ballons"
         MISC = "misc", "Matériel divers"
+        SHORTS = "shorts", "Culottes"
+        BIBS = "bibs", "Chasubles"
+        REFEREE = "referee", "Arbitrage"
+        ACCESSORIES = "accessories", "Accessoires"
+        FURNITURE = "furniture", "Mobilier"
+
+    # Ordre d'affichage du registre de l'intendance (spec §8).
+    REGISTER_ORDER = (
+        "jersey", "shorts", "socks", "cleats", "balls", "bibs", "referee", "accessories", "furniture", "misc",
+    )
 
     class Condition(models.TextChoices):
         NEW = "new", "Neuf"
         GOOD = "good", "Bon état"
         WORN = "worn", "Usé"
         DAMAGED = "damaged", "Abîmé"
+        UNKNOWN = "unknown", "Non renseigné"
 
     class Status(models.TextChoices):
         ACTIVE = "active", "Actif"
@@ -85,7 +96,7 @@ class Article(TenantModel):
 
     club = _club_fk("articles")
     name = models.CharField(max_length=120)
-    category = models.CharField(max_length=10, choices=Category.choices)
+    category = models.CharField(max_length=20, choices=Category.choices)
     unit = models.CharField(max_length=20, default="pièce")
     reference_condition = models.CharField(max_length=10, choices=Condition.choices, default=Condition.NEW)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE)
@@ -118,6 +129,72 @@ class Article(TenantModel):
             raise ValidationError("L'unité est obligatoire.")
 
 
+class Holder(TenantModel):
+    """Détenteur de matériel : un joueur du club ou un lieu (registre de
+    l'intendance §3). Le stock d'un détenteur est CALCULÉ à partir des
+    mouvements, jamais stocké."""
+
+    class Kind(models.TextChoices):
+        MEMBER = "member", "Joueur du club"
+        PLACE = "place", "Lieu"
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Actif"
+        ARCHIVED = "archived", "Archivé"
+
+    club = _club_fk("holders")
+    kind = models.CharField(max_length=10, choices=Kind.choices)
+    membership = models.ForeignKey(
+        "clubs.Membership", null=True, blank=True, on_delete=models.PROTECT, related_name="material_holders"
+    )
+    label = models.CharField(max_length=60, blank=True, default="")
+    holder_key = models.CharField(
+        max_length=100,
+        help_text="« m<id adhésion> » ou « p:<nom normalisé> » : unicité par club sans contrainte conditionnelle.",
+    )
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField()
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+
+    class Meta(TenantModel.Meta):
+        verbose_name = "Détenteur"
+        verbose_name_plural = "Détenteurs"
+        constraints = [
+            models.UniqueConstraint(fields=["club", "holder_key"], name="holder_unique_key_per_club"),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return self.display_name
+
+    @property
+    def display_name(self) -> str:
+        if self.kind == self.Kind.MEMBER and self.membership_id:
+            user = self.membership.user
+            return f"{user.first_name} {user.last_name}".strip()
+        return self.label
+
+    @property
+    def has_left_club(self) -> bool:
+        return (
+            self.kind == self.Kind.MEMBER
+            and self.membership_id is not None
+            and self.membership.status == "departed"
+        )
+
+    def clean(self):
+        if self.kind == self.Kind.MEMBER:
+            if not self.membership_id:
+                raise ValidationError("Un détenteur joueur doit porter une adhésion.")
+            if self.club_id and self.membership.club_id != self.club_id:
+                raise ValidationError("Le détenteur doit porter le même club que le joueur.")
+        else:
+            if not (self.label or "").strip():
+                raise ValidationError("Le nom du lieu est obligatoire.")
+            if self.membership_id:
+                raise ValidationError("Un lieu ne porte pas d'adhésion.")
+
+
 class StockMovement(TenantModel):
     """Mouvement de stock (CDC 4.13 ; schema §7.2). Jamais modifié ni supprimé."""
 
@@ -129,14 +206,46 @@ class StockMovement(TenantModel):
         OUT_LOAN = "out_loan", "Prêt pour un match"
         OUT_WEAR = "out_wear", "Usure"
         OUT_LOSS = "out_loss", "Perte"
+        IN_OPENING = "in_opening", "Reprise du registre"
+        IN_TRANSFER = "in_transfer", "Transfert reçu"
+        OUT_TRANSFER = "out_transfer", "Transfert"
+        OUT_DECOMMISSION = "out_decommission", "Déclassement"
 
-    IN_TYPES = (MovementType.IN_PURCHASE, MovementType.IN_DONATION, MovementType.IN_RETURN)
+    IN_TYPES = (
+        MovementType.IN_PURCHASE,
+        MovementType.IN_DONATION,
+        MovementType.IN_RETURN,
+        MovementType.IN_OPENING,
+        MovementType.IN_TRANSFER,
+    )
     OUT_TYPES = (
         MovementType.OUT_DISTRIBUTION,
         MovementType.OUT_LOAN,
         MovementType.OUT_WEAR,
         MovementType.OUT_LOSS,
+        MovementType.OUT_TRANSFER,
+        MovementType.OUT_DECOMMISSION,
     )
+    TRANSFER_TYPES = (MovementType.IN_TRANSFER, MovementType.OUT_TRANSFER)
+    # Types saisissables par POST movements/ (les autres passent par
+    # transfers/ et decommissions/).
+    MANUAL_TYPES = (
+        MovementType.IN_PURCHASE,
+        MovementType.IN_DONATION,
+        MovementType.IN_RETURN,
+        MovementType.IN_OPENING,
+        MovementType.OUT_DISTRIBUTION,
+        MovementType.OUT_LOAN,
+        MovementType.OUT_WEAR,
+        MovementType.OUT_LOSS,
+    )
+    # Entrées qui portent une provenance (registre de l'intendance §5).
+    PROVENANCE_TYPES = (MovementType.IN_PURCHASE, MovementType.IN_DONATION, MovementType.IN_OPENING)
+
+    class OriginKind(models.TextChoices):
+        DONATION = "donation", "Don"
+        CLUB_FUNDS = "club_funds", "Frais de l'équipe"
+        UNKNOWN = "unknown", "Inconnue"
     # Joueur concerné affiché seulement pour ces types (fiche §4.4).
     MEMBERSHIP_ALLOWED_TYPES = (
         MovementType.OUT_DISTRIBUTION,
@@ -170,6 +279,27 @@ class StockMovement(TenantModel):
         related_name="stock_movements",
         help_text="Sortie/retour d'équipements liés à un match (CDC 4.8, 4.13).",
     )
+    holder = models.ForeignKey(
+        Holder,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="movements",
+        help_text="Entrée : qui reçoit ; sortie : chez qui le matériel sort. Vide = « Non localisé ».",
+    )
+    origin_kind = models.CharField(max_length=12, choices=OriginKind.choices, blank=True, default="")
+    donor_membership = models.ForeignKey(
+        "clubs.Membership", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    donor_name = models.CharField(max_length=120, blank=True, default="")
+    acquisition_date = models.DateField(null=True, blank=True)
+    acquisition_date_unknown = models.BooleanField(default=False)
+    acquisition_date_note = models.CharField(max_length=60, blank=True, default="")
+    condition_at_entry = models.CharField(max_length=10, choices=Article.Condition.choices, blank=True, default="")
+    transfer_group = models.UUIDField(null=True, blank=True, db_index=True)
+    decommission = models.ForeignKey(
+        "logistics.Decommission", null=True, blank=True, on_delete=models.PROTECT, related_name="movements"
+    )
     recorded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
     created_at = models.DateTimeField()
 
@@ -184,6 +314,16 @@ class StockMovement(TenantModel):
             models.CheckConstraint(
                 condition=~Q(expense__isnull=False) | Q(movement_type="in_purchase"),
                 name="stockmovement_expense_only_purchase",
+            ),
+            models.CheckConstraint(
+                condition=Q(transfer_group__isnull=False, movement_type__in=["in_transfer", "out_transfer"])
+                | (Q(transfer_group__isnull=True) & ~Q(movement_type__in=["in_transfer", "out_transfer"])),
+                name="stockmovement_transfer_group_iff_transfer",
+            ),
+            models.CheckConstraint(
+                condition=Q(decommission__isnull=False, movement_type="out_decommission")
+                | (Q(decommission__isnull=True) & ~Q(movement_type="out_decommission")),
+                name="stockmovement_decommission_iff_out_decommission",
             ),
         ]
         indexes = [
@@ -213,6 +353,31 @@ class StockMovement(TenantModel):
             raise ValidationError("Seuls un « Prêt pour un match » ou un « Retour » peuvent être rattachés à un match.")
         if self.membership_id and self.movement_type not in self.MEMBERSHIP_ALLOWED_TYPES:
             raise ValidationError("Ce type de mouvement n'accepte pas de joueur concerné.")
+        if self.club_id and self.holder_id and self.holder.club_id != self.club_id:
+            raise ValidationError("Le mouvement doit porter le même club que le détenteur.")
+        if self.club_id and self.donor_membership_id and self.donor_membership.club_id != self.club_id:
+            raise ValidationError("Le mouvement doit porter le même club que le donateur.")
+        if self.club_id and self.decommission_id and self.decommission.club_id != self.club_id:
+            raise ValidationError("Le mouvement doit porter le même club que le déclassement.")
+        if (self.movement_type in self.TRANSFER_TYPES) != (self.transfer_group is not None):
+            raise ValidationError("Un groupe de transfert est requis pour un transfert, et uniquement pour lui.")
+        if (self.movement_type == self.MovementType.OUT_DECOMMISSION) != (self.decommission_id is not None):
+            raise ValidationError("Un déclassement est requis pour une sortie « Déclassement », et uniquement pour elle.")
+        has_provenance = bool(
+            self.origin_kind
+            or self.donor_membership_id
+            or self.donor_name
+            or self.acquisition_date
+            or self.acquisition_date_unknown
+            or self.acquisition_date_note
+            or self.condition_at_entry
+        )
+        if has_provenance and self.movement_type not in self.PROVENANCE_TYPES:
+            raise ValidationError(
+                "La provenance ne s'applique qu'aux entrées de stock (achat, dotation, reprise du registre)."
+            )
+        if self.acquisition_date and self.movement_date and self.acquisition_date > self.movement_date:
+            raise ValidationError("La date d'acquisition ne peut pas être postérieure à la date d'enregistrement.")
 
     def save(self, *args, **kwargs):
         if self.pk is not None:
@@ -225,6 +390,68 @@ class StockMovement(TenantModel):
         raise LogisticsImmutableError(
             "Un mouvement de stock n'est jamais supprimé (logistique.md §4.3, §12 point n° 5)."
         )
+
+
+class Decommission(TenantModel):
+    """Signalement de déclassement, en deux temps (registre de l'intendance §7).
+
+    Le signalement ne change pas le stock ; la sortie physique crée un
+    mouvement ``out_decommission``. Jamais supprimé."""
+
+    class Reason(models.TextChoices):
+        WORN = "worn", "Usé"
+        DAMAGED = "damaged", "Abîmé"
+        UNUSABLE = "unusable", "Hors d'usage"
+        OTHER = "other", "Autre"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "À déclasser"
+        DONE = "done", "Déclassé"
+        CANCELLED = "cancelled", "Annulé"
+
+    club = _club_fk("decommissions")
+    article = models.ForeignKey(Article, on_delete=models.PROTECT, related_name="decommissions")
+    holder = models.ForeignKey(Holder, null=True, blank=True, on_delete=models.PROTECT, related_name="decommissions")
+    quantity = models.PositiveIntegerField()
+    reason = models.CharField(max_length=10, choices=Reason.choices)
+    reason_note = models.CharField(max_length=500, blank=True, default="")
+    noted_on = models.DateField()
+    noted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    exit_date = models.DateField(null=True, blank=True)
+    exit_destination = models.CharField(max_length=120, blank=True, default="")
+    exit_movement = models.OneToOneField(
+        StockMovement, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    executed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    cancel_reason = models.CharField(max_length=500, blank=True, default="")
+    created_at = models.DateTimeField()
+
+    class Meta(TenantModel.Meta):
+        verbose_name = "Déclassement"
+        verbose_name_plural = "Déclassements"
+        constraints = [
+            models.CheckConstraint(condition=Q(quantity__gt=0), name="decommission_quantity_gt_0"),
+        ]
+        indexes = [models.Index(fields=["club", "article", "status"], name="decomm_article_status_idx")]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"Déclassement {self.quantity} / article {self.article_id}"
+
+    def clean(self):
+        if self.club_id and self.article_id and self.article.club_id != self.club_id:
+            raise ValidationError("Le déclassement doit porter le même club que l'article.")
+        if self.club_id and self.holder_id and self.holder.club_id != self.club_id:
+            raise ValidationError("Le déclassement doit porter le même club que le détenteur.")
+
+    def delete(self, *args, **kwargs):
+        raise LogisticsImmutableError("Un déclassement n'est jamais supprimé : il peut seulement être annulé.")
 
 
 class Inventory(TenantModel):

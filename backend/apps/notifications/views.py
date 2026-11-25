@@ -16,6 +16,7 @@ docstring).
 from __future__ import annotations
 
 from rest_framework import status
+from django.http import Http404
 from rest_framework.generics import ListAPIView, get_object_or_404
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
@@ -70,9 +71,14 @@ class NotificationMarkReadView(APIView):
     permission_classes = _GATE
 
     def post(self, request, notification_id: int):
-        notification = get_object_or_404(
-            Notification, pk=notification_id, recipient=request.user
-        )
+        try:
+            notification = get_object_or_404(
+                Notification, pk=notification_id, recipient=request.user
+            )
+        except Http404:
+            return Response(
+                {"detail": "Cette notification n'existe pas."}, status=status.HTTP_404_NOT_FOUND
+            )
         notification_services.mark_notification_read(notification=notification, user=request.user)
         return Response(NotificationSerializer(notification).data)
 

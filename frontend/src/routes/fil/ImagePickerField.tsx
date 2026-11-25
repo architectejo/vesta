@@ -1,5 +1,5 @@
 import { useId, useRef, useState } from "react";
-import { Button } from "../../design-system";
+import { Button, IconRemove } from "../../design-system";
 import { ImageValidationError, prepareImageForUpload, validateImageFile } from "./imagePrep";
 
 export interface ImagePickerFieldProps {
@@ -87,9 +87,9 @@ export function ImagePickerField({ images, onChange, max, maxLabel, addLabel = "
                   type="button"
                   aria-label={`Retirer l'image ${index + 1}`}
                   onClick={() => onChange(images.filter((_, i) => i !== index))}
-                  className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full bg-text text-surface"
+                  className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full bg-text text-surface before:absolute before:-inset-2.5 before:content-['']"
                 >
-                  ×
+                  <IconRemove aria-hidden="true" className="h-4 w-4" />
                 </button>
               </li>
             );

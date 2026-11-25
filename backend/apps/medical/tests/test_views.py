@@ -123,3 +123,97 @@ def test_unfit_page_forbidden_for_vice_president(ctx):
     url = reverse("medical:page-unfit")
     response = client.get(url)
     assert response.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Sans club actif : 403 « Aucun club actif. », jamais 500 (regle n8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name,args,method",
+    [
+        ("medical:health-record-detail", [1], "get"),
+        ("medical:fitness-update", [1], "patch"),
+        ("medical:my-self-declaration", [], "patch"),
+        ("medical:my-processing-consent", [], "post"),
+        ("medical:my-president-access", [], "get"),
+        ("medical:injury-list", [], "post"),
+        ("medical:injury-detail", [1], "get"),
+        ("medical:injury-complete", [1], "patch"),
+        ("medical:injury-followups", [1], "post"),
+        ("medical:injury-return", [1], "post"),
+        ("medical:injury-document-upload", [1], "post"),
+        ("medical:page-to-complete", [], "get"),
+        ("medical:page-recent-injuries", [], "get"),
+        ("medical:page-unfit", [], "get"),
+        ("medical:document-download", [1], "get"),
+    ],
+)
+def test_no_active_club_gives_403_not_500(name, args, method):
+    from apps.accounts.tests.factories import SuperuserFactory, UserFactory
+
+    for user in (UserFactory(), SuperuserFactory()):  # sans adhesion / Superuser hors Ghost Mode
+        client = client_for(user)
+        client.raise_request_exception = False
+        response = getattr(client, method)(reverse(name, args=args), {}, format="json")
+        assert response.status_code == 403, (name, response.status_code)
+        assert response.json()["detail"] == "Aucun club actif."
+
+
+def test_no_active_club_unauthenticated_stays_401():
+    from rest_framework.test import APIClient
+
+    assert APIClient().get(reverse("medical:page-unfit")).status_code == 401
+
+
+def _make_injury(ctx):
+    from apps.core.tenant import active_club
+
+    with active_club(ctx.club):
+        return services.report_injury(membership=ctx.player, actor=ctx.coach.user, circumstances="Chute.")
+
+
+def test_injury_detail_view_is_logged_for_doctor_and_player(ctx):
+    from apps.audit.models import AuditLog
+
+    injury = _make_injury(ctx)
+    url = reverse("medical:injury-detail", args=[injury.pk])
+    for who in (ctx.doctor, ctx.player):
+        assert client_for(who.user).get(url).status_code == 200
+    entries = AuditLog.objects.filter(action_type="medical.injury.viewed", object_id=str(injury.pk))
+    assert {e.actor_id for e in entries} == {ctx.doctor.user_id, ctx.player.user_id}
+    assert all(e.club_id == ctx.club.id and not e.before and not e.after for e in entries)
+
+
+def test_injury_detail_denied_is_not_logged(ctx):
+    from apps.audit.models import AuditLog
+
+    injury = _make_injury(ctx)
+    response = client_for(ctx.coach.user).get(reverse("medical:injury-detail", args=[injury.pk]))
+    assert response.status_code == 403
+    assert not AuditLog.objects.filter(action_type="medical.injury.viewed").exists()
+    assert not AuditLog.objects.filter(action_type="medical.record.viewed_by_president").exists()
+
+
+def test_injury_detail_other_club_is_404_and_not_logged(ctx, other_ctx):
+    from apps.audit.models import AuditLog
+
+    injury = _make_injury(other_ctx)
+    response = client_for(ctx.doctor.user).get(reverse("medical:injury-detail", args=[injury.pk]))
+    assert response.status_code == 404
+    assert not AuditLog.objects.filter(action_type="medical.injury.viewed").exists()
+
+
+def test_injury_detail_president_with_consent_logged_as_president(ctx):
+    from apps.audit.models import AuditLog
+    from apps.core.tenant import active_club
+
+    injury = _make_injury(ctx)
+    with active_club(ctx.club):
+        services.grant_president_access(membership=ctx.player, actor=ctx.player.user)
+    response = client_for(ctx.president.user).get(reverse("medical:injury-detail", args=[injury.pk]))
+    assert response.status_code == 200
+    assert AuditLog.objects.filter(
+        action_type="medical.record.viewed_by_president", actor=ctx.president.user, object_id=str(injury.pk)
+    ).exists()

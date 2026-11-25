@@ -1,4 +1,7 @@
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { IconLock } from "../icons";
+import { hexToRgb, pickReadableOnColor, rgbToHex } from "../tokens/color-contrast";
 import {
   pitchDragBus,
   usePitchDragState,
@@ -24,6 +27,10 @@ export interface PitchPinData {
   locked?: boolean;
   /** Mis en avant (« Vous », joueur connecté). */
   highlighted?: boolean;
+  /** URL absolue de la photo (servie par l'API) ; absente = initiales. */
+  photoUrl?: string | null;
+  /** Nom complet, pour les initiales (repli : `label`). */
+  fullName?: string;
 }
 
 export interface PitchSlotData {
@@ -216,6 +223,109 @@ interface PitchPinProps {
   onTap?: (pin: PitchPinData) => void;
 }
 
+/** Initiales (2 lettres max) tirées du nom complet ; « ? » si vide. */
+export function pinInitials(name: string): string {
+  const parts = name
+    .replace(/\./g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return "?";
+  const first = parts[0]?.[0] ?? "";
+  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
+  return (first + last).toUpperCase() || "?";
+}
+
+function readableOn(bgHex: string | undefined): string {
+  const rgb = bgHex ? hexToRgb(bgHex) : null;
+  if (!rgb) return "#ffffff";
+  return rgbToHex(pickReadableOnColor(rgb));
+}
+
+/** Cercle de 40 x 40 px du pion : photo (ou initiales en repli), bordure à
+ * la couleur du maillot, numéro dans une pastille (sport-vestiaire.md §9.2).
+ * La taille est fixe : le chargement de l'image ne déplace rien. */
+function PinDisc({ pin }: { pin: PitchPinData }) {
+  const photoUrl = pin.photoUrl || null;
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const [slow, setSlow] = useState(false);
+  const showPhoto = photoUrl !== null && failedUrl !== photoUrl;
+  const loaded = showPhoto && loadedUrl === photoUrl;
+
+  useEffect(() => {
+    setSlow(false);
+    if (!showPhoto || loaded) return undefined;
+    const timer = window.setTimeout(() => setSlow(true), 1500);
+    return () => window.clearTimeout(timer);
+  }, [photoUrl, showPhoto, loaded]);
+
+  const jersey = pin.jerseyColor;
+  const accent = pin.highlighted ? "var(--color-primary)" : jersey;
+  const fill = pin.locked ? undefined : (jersey ?? undefined);
+  const textColor = pin.locked ? undefined : readableOn(jersey);
+  const showInitials = !showPhoto || slow;
+  const hasNumber = pin.number != null && pin.number !== undefined;
+
+  return (
+    <span className="relative block h-10 w-10 shrink-0">
+      <span
+        className={[
+          "relative block h-10 w-10 overflow-hidden rounded-full border-[3px] shadow-elevated",
+          pin.locked ? "border-dashed border-white/60 bg-black/30" : "",
+          !pin.locked && !accent ? "border-white/80" : "",
+        ].join(" ")}
+        style={{
+          ...(pin.locked ? {} : { borderColor: accent, backgroundColor: fill, boxShadow: "0 0 0 1px #fff" }),
+          WebkitTouchCallout: "none",
+        }}
+      >
+        {showInitials ? (
+          <span
+            data-testid="pin-initials"
+            className="flex h-full w-full items-center justify-center text-[13px] font-semibold leading-none"
+            style={{ color: pin.locked ? "rgba(255,255,255,0.8)" : textColor }}
+          >
+            {pinInitials(pin.fullName ?? pin.label)}
+          </span>
+        ) : null}
+        {showPhoto ? (
+          <img
+            src={photoUrl ?? undefined}
+            alt=""
+            draggable={false}
+            loading="lazy"
+            decoding="async"
+            onLoad={() => setLoadedUrl(photoUrl)}
+            onError={() => setFailedUrl(photoUrl)}
+            className={[
+              "pointer-events-none absolute inset-0 h-full w-full select-none object-cover [-webkit-user-drag:none]",
+              pin.locked ? "opacity-60 grayscale" : "",
+              loaded ? "" : "opacity-0",
+            ].join(" ")}
+            style={{ objectPosition: "50% 25%" }}
+          />
+        ) : null}
+      </span>
+      {pin.locked ? (
+        <span
+          className="absolute -bottom-0.5 -right-3 flex h-[18px] w-[18px] items-center justify-center rounded-full text-white"
+          style={{ backgroundColor: "var(--color-status-neutral-dot, #6b7280)" }}
+        >
+          <IconLock aria-hidden="true" className="h-3 w-3" />
+        </span>
+      ) : hasNumber ? (
+        <span
+          className="absolute -bottom-0.5 -right-3 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[11px] font-bold leading-none tabular-nums"
+          style={{ backgroundColor: fill ?? "var(--color-primary)", color: fill ? textColor : "#fff" }}
+        >
+          {pin.number}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 /** Pion exporté séparément : réutilisé hors terrain (banc, « Non
  * répartis ») avec la même mécanique de glisser/toucher. */
 export function PitchPin({ pin, vertical, draggable, dragKind, interactive = true, standalone = false, onTap }: PitchPinProps) {
@@ -235,28 +345,18 @@ export function PitchPin({ pin, vertical, draggable, dragKind, interactive = tru
         draggable && !pin.locked ? "cursor-grab touch-none" : "cursor-pointer",
       ].join(" ")}
       style={style}
+      title={pin.fullName ?? pin.label}
     >
+      <PinDisc pin={pin} />
+      {/* 2 lignes au plus : au-delà de 18 caractères, 11 px (≈ 12 caractères
+          par ligne) ; le nom complet reste dans l'infobulle (`title`). */}
       <span
+        data-testid="pin-label"
         className={[
-          "flex h-10 w-10 items-center justify-center rounded-full border-2 text-xs font-semibold shadow-elevated",
-          pin.locked
-            ? "border-dashed border-white/60 bg-black/30 text-white/70"
-            : pin.highlighted
-              ? "border-white bg-primary text-on-primary"
-              : "border-white/80 text-white",
+          "line-clamp-2 max-w-[72px] break-words rounded bg-black/50 px-1 text-center leading-tight text-white [overflow-wrap:anywhere]",
+          pin.label.length > 18 ? "text-[11px]" : "text-[12px]",
         ].join(" ")}
-        style={!pin.locked && !pin.highlighted && pin.jerseyColor ? { backgroundColor: pin.jerseyColor } : undefined}
       >
-        {pin.locked ? (
-          <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2}>
-            <rect x="5" y="11" width="14" height="9" rx="1.5" />
-            <path d="M8 11V8a4 4 0 0 1 8 0v3" strokeLinecap="round" />
-          </svg>
-        ) : (
-          (pin.number ?? "")
-        )}
-      </span>
-      <span className="max-w-[64px] truncate rounded bg-black/50 px-1 text-[11px] leading-tight text-white">
         {pin.label}
       </span>
     </button>

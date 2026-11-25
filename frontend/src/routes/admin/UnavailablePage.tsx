@@ -1,13 +1,11 @@
 import { EmptyState } from "../../design-system";
 
 /**
- * Pages « Journal d'activité » et « Paramètres » (superuser-espace.md
- * §3.4, §3.5) : aucun endpoint de lecture n'existe côté API
- * (`backend/apps/audit/urls.py` est vide malgré un modèle `AuditLog`
- * fonctionnel ; aucun endpoint de paramètres plateforme n'existe non
- * plus). Plutôt que de construire ces écrans contre une API inventée,
- * cette page l'indique explicitement — trou backend signalé au compte
- * rendu, à combler par `backend-dev`.
+ * Page de repli pour une section sans point d'accès API. Le journal
+ * d'activité Superuser dispose désormais de son écran (`JournalPage`) ; cette
+ * page ne sert plus qu'aux sections sans endpoint (ex. « Paramètres » de la
+ * plateforme, superuser-espace.md §3.5). Plutôt que de construire un écran
+ * contre une API inventée, elle l'indique explicitement.
  */
 export function UnavailablePage({ title }: { title: string }) {
   return (

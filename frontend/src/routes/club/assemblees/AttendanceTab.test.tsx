@@ -32,6 +32,7 @@ function makeAssembly(overrides: Partial<Assembly> = {}): Assembly {
     quorum: { present: 8, total: 20, percentage: "40.00", threshold: "50", reached: false },
     minutes: null,
     can_manage: true,
+    can_convene: true,
     can_sign_president: false,
     can_sign_vice_president: false,
     ...overrides,

@@ -1,5 +1,6 @@
-"""Classes de permission DRF de l'app audit.
+"""Permissions de l'app audit : le journal n'est visible que par les
+Superusers (CDC 2.4, 5, 5.5)."""
 
-Vide au Lot 1 / tache 1.0 (scaffolding). Chaque endpoint declarera sa
-permission selon la matrice 2.4 du cahier des charges.
-"""
+from apps.core.permissions import IsSuperuser
+
+__all__ = ["IsSuperuser"]

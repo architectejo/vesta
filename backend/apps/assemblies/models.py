@@ -36,9 +36,12 @@ from __future__ import annotations
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from django.db.models.signals import pre_delete
+from django.dispatch import receiver
 
 from apps.core.models import TenantModel
 from apps.core.storage import private_storage
+from apps.core.validators import validate_image_or_pdf, validate_upload_size
 
 
 class Assembly(TenantModel):
@@ -208,3 +211,78 @@ class Minutes(TenantModel):
         if self.vp_vacant_at_signature:
             return True
         return self.vp_signed_by_id is not None
+
+
+def _archived_document_upload_to(instance: "ArchivedDocument", filename: str) -> str:
+    return f"assemblies/archive/{instance.club_id}/{filename}"
+
+
+class ArchivedDocumentDeletionError(Exception):
+    """Un document archive n'est jamais supprime en dur (CDC 4.15.1)."""
+
+
+class ArchivedDocument(TenantModel):
+    """Document officiel archive par le Secretaire (CDC 4.15.1, 10.3 n 169+).
+
+    Fichier en stockage PRIVE, servi uniquement par une vue authentifiee
+    (CLAUDE.md regle n10). Jamais supprime en dur : retrait ou remplacement
+    traces (``status``, ``withdrawn_*``, ``replaces``).
+    """
+
+    class Category(models.TextChoices):
+        MEETING_MINUTES = "pv_reunion", "PV de réunion"
+        CONVOCATION = "convocation", "Lettre de convocation"
+        OTHER = "autre", "Autre document officiel"
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "En vigueur"
+        WITHDRAWN = "withdrawn", "Retiré"
+
+    category = models.CharField(max_length=15, choices=Category.choices)
+    title = models.CharField(max_length=160)
+    document_date = models.DateField()
+    file = models.FileField(
+        upload_to=_archived_document_upload_to,
+        storage=private_storage,
+        validators=[validate_upload_size, validate_image_or_pdf],
+        help_text="PDF ou image (JPEG, PNG, WebP), 10 Mo max. Servi uniquement par apps.assemblies.views.ArchivedDocumentFileView.",
+    )
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE)
+    replaces = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="replaced_by"
+    )
+    withdrawn_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    withdrawn_at = models.DateTimeField(null=True, blank=True)
+    withdrawn_reason = models.TextField(blank=True)
+
+    class Meta(TenantModel.Meta):
+        verbose_name = "Document archive"
+        verbose_name_plural = "Documents archives"
+        ordering = ["-document_date", "-id"]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"{self.category} {self.title} (club {self.club_id})"
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        if self.replaces_id and self.club_id and self.replaces.club_id != self.club_id:
+            raise ValidationError("Le document remplacé doit appartenir au même club.")
+
+    def delete(self, *args, **kwargs):
+        raise ArchivedDocumentDeletionError(_ARCHIVE_DELETION_MESSAGE)
+
+
+_ARCHIVE_DELETION_MESSAGE = "Un document archivé n'est jamais supprimé : retirez-le ou remplacez-le."
+
+
+@receiver(pre_delete, sender=ArchivedDocument, dispatch_uid="assemblies.archived_document.never_deleted")
+def _forbid_archived_document_deletion(sender, instance, **kwargs):
+    """Couvre aussi la suppression en masse (``queryset.delete()``) et la
+    cascade (suppression d'un club), qui n'appellent pas ``Model.delete``."""
+
+    raise ArchivedDocumentDeletionError(_ARCHIVE_DELETION_MESSAGE)

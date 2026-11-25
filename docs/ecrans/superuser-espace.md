@@ -146,4 +146,3 @@ Usage principal sur ordinateur, mais tout fonctionne à 360 px :
 - **Reporté après le Lot 5, voir `docs/backlog-post-mvp.md` (entrée 10)** : indicateur et carte « Demandes de réinitialisation ». Retirés des indicateurs du MVP ; la réinitialisation reste possible depuis la modale « Utilisateur » (§4.5).
 - **Proposition** : « Clubs » et « Licences » (2.5 et 4.18) fusionnés en un seul tableau.
 - **Anomalies** : indicateur calculé en direct (aucune entité stockée, aucune action de clôture) ; l'indicateur « Anomalies en cours » remplace le libellé « Anomalies ouvertes » relevé par `cdc-reviewer` comme ajout de confort (circuit 9.4).
-- **Point ouvert** : les actions Superuser (réinitialisation, résiliation) ne sont pas soumises au code PIN par le 7.2 (qui vise les actions de club). À confirmer avec `security-auditor`.

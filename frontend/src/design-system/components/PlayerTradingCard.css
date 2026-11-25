@@ -32,7 +32,7 @@
   overflow: hidden;
   transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
   filter: drop-shadow(0 10px 18px rgb(0 0 0 / 0.28)) drop-shadow(0 2px 4px rgb(0 0 0 / 0.2));
-  transition: transform 300ms ease-out;
+  transition: transform var(--duration-slow) var(--ease-out);
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -153,7 +153,7 @@
   );
   pointer-events: none;
   opacity: 0;
-  transition: opacity 200ms ease-out;
+  transition: opacity var(--duration-base) var(--ease-out);
 }
 
 @media (hover: hover) and (pointer: fine) {

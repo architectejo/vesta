@@ -7,10 +7,14 @@ import { AdminLayout } from "./routes/admin/AdminLayout";
 import { ClubsLicencesPage } from "./routes/admin/ClubsLicencesPage";
 import { DashboardPage } from "./routes/admin/DashboardPage";
 import { UnavailablePage } from "./routes/admin/UnavailablePage";
+import { JournalPage } from "./routes/admin/JournalPage";
 import { UsersPage } from "./routes/admin/UsersPage";
 import { AssembleesPage } from "./routes/club/assemblees/AssembleesPage";
+import { ArchivesPage } from "./routes/club/archives/ArchivesPage";
 import { ChatPage } from "./routes/club/chat/ChatPage";
+import { BoardDashboardPage } from "./routes/club/tableau-de-bord/BoardDashboardPage";
 import { ComiteBureauPage } from "./routes/club/ComiteBureauPage";
+import { PlayerCardsPage } from "./routes/club/cartes/PlayerCardsPage";
 import { CommuniquesPage } from "./routes/club/communiques/CommuniquesPage";
 import { ConnexionPage } from "./routes/connexion/ConnexionPage";
 import { FilPage } from "./routes/fil/FilPage";
@@ -20,10 +24,11 @@ import { MedicalPage } from "./routes/medical/MedicalPage";
 import { MercatoPage } from "./routes/mercato/MercatoPage";
 import { ProfilPage } from "./routes/profil/ProfilPage";
 import { MatchPage } from "./routes/sport/MatchPage";
-import { PlansListPage } from "./routes/sport/PlansListPage";
 import { SeancePage } from "./routes/sport/SeancePage";
 import { TableauNoirPage } from "./routes/sport/TableauNoirPage";
+import { PlansRedirect } from "./routes/sport/PlansRedirect";
 import { VestiairePage } from "./routes/sport/VestiairePage";
+import { EntrainementsPage } from "./routes/sport/EntrainementsPage";
 import { AssistanceSocialePage } from "./routes/treasury/AssistanceSocialePage";
 import { DepensesPage } from "./routes/treasury/DepensesPage";
 import { GrilleCotisationsPage } from "./routes/treasury/GrilleCotisationsPage";
@@ -40,8 +45,9 @@ function NotFoundPlaceholder() {
 
 /**
  * Racine des routes (tâche 1.9). `/dev/design-system` est une route de
- * développement interne (CLAUDE.md, tâche 1.0) : à retirer ou protéger
- * avant la mise en production.
+ * développement interne (CLAUDE.md, tâche 1.0), protégée par
+ * `ProtectedRoute requireSuperuser` (06/10/2026) pour ne jamais être
+ * accessible publiquement en production.
  */
 export function App() {
   return (
@@ -60,11 +66,31 @@ export function App() {
         }
       />
       <Route
+        path="/tableau-de-bord"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <BoardDashboardPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/profil"
         element={
           <ProtectedRoute>
             <AppLayout>
               <ProfilPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/club/joueurs"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <PlayerCardsPage />
             </AppLayout>
           </ProtectedRoute>
         }
@@ -105,6 +131,16 @@ export function App() {
           <ProtectedRoute>
             <AppLayout>
               <CommuniquesPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/club/archives"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <ArchivesPage />
             </AppLayout>
           </ProtectedRoute>
         }
@@ -201,6 +237,16 @@ export function App() {
         }
       />
       <Route
+        path="/entrainements"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <EntrainementsPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/seances/:id"
         element={
           <ProtectedRoute>
@@ -220,16 +266,7 @@ export function App() {
           </ProtectedRoute>
         }
       />
-      <Route
-        path="/plans"
-        element={
-          <ProtectedRoute>
-            <AppLayout>
-              <PlansListPage />
-            </AppLayout>
-          </ProtectedRoute>
-        }
-      />
+      <Route path="/plans" element={<PlansRedirect />} />
       <Route
         path="/plans/:id/tableau"
         element={
@@ -276,7 +313,7 @@ export function App() {
         element={
           <ProtectedRoute requireSuperuser>
             <AdminLayout>
-              <UnavailablePage title="Journal d'activité" />
+              <JournalPage />
             </AdminLayout>
           </ProtectedRoute>
         }
@@ -292,7 +329,14 @@ export function App() {
         }
       />
 
-      <Route path="/dev/design-system" element={<DesignSystemDemoPage />} />
+      <Route
+        path="/dev/design-system"
+        element={
+          <ProtectedRoute requireSuperuser>
+            <DesignSystemDemoPage />
+          </ProtectedRoute>
+        }
+      />
       <Route path="*" element={<NotFoundPlaceholder />} />
     </Routes>
   );

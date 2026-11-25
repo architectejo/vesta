@@ -36,8 +36,9 @@ from __future__ import annotations
 
 import json
 
-from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+
+from ._guards import refuse_outside_development
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.models import User
@@ -61,11 +62,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        if not settings.DEBUG:
-            raise CommandError(
-                "issue_e2e_session est reserve au developpement : refuse car settings.DEBUG=False "
-                "(CLAUDE.md : jamais de contournement d'authentification en production)."
-            )
+        refuse_outside_development("issue_e2e_session")
 
         email = options["email"]
         try:

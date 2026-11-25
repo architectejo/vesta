@@ -13,6 +13,8 @@ interface ToastEntry {
   message: string;
   actionLabel?: string;
   onAction?: () => void;
+  /** Démontage différé pendant l'animation de sortie (§2.2). */
+  closing: boolean;
 }
 
 interface ToastOptions {
@@ -28,6 +30,8 @@ interface ToastContextValue {
 const ToastContext = createContext<ToastContextValue | null>(null);
 
 const DEFAULT_DURATION_MS = 4000;
+/** Durée de l'animation de sortie du toast (§2.1 `--duration-fast`). */
+const EXIT_DURATION_MS = 150;
 
 /**
  * Message bref après une action réussie (docs/lot0/design-system.md §3.1) :
@@ -41,10 +45,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     const id = nextId.current++;
     setToasts((current) => [
       ...current,
-      { id, message, actionLabel: options.actionLabel, onAction: options.onAction },
+      { id, message, actionLabel: options.actionLabel, onAction: options.onAction, closing: false },
     ]);
     window.setTimeout(() => {
-      setToasts((current) => current.filter((toast) => toast.id !== id));
+      // Démarre l'animation de sortie plutôt que de démonter aussitôt (§2.2).
+      setToasts((current) => current.map((toast) => (toast.id === id ? { ...toast, closing: true } : toast)));
+      window.setTimeout(() => {
+        setToasts((current) => current.filter((toast) => toast.id !== id));
+      }, EXIT_DURATION_MS);
     }, options.durationMs ?? DEFAULT_DURATION_MS);
   }, []);
 
@@ -60,7 +68,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className="pointer-events-auto flex max-w-sm items-center gap-3 rounded-md bg-text px-4 py-2 text-sm text-surface shadow-elevated"
+            data-state={toast.closing ? "closing" : "open"}
+            className="vesta-anim-toast pointer-events-auto flex max-w-sm items-center gap-3 rounded-md bg-text px-4 py-2 text-sm text-surface shadow-elevated"
           >
             <span>{toast.message}</span>
             {toast.actionLabel && toast.onAction ? (

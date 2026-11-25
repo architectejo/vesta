@@ -6,6 +6,7 @@ import { ApiError } from "../../api/client";
 import { reportInjury, type InjuryReportInput } from "../../api/medical";
 import {
   Banner,
+  IconLock,
   Modal,
   NumberField,
   PlayerSearch,
@@ -187,10 +188,7 @@ export function InjuryReportModal({ open, onClose, context, offline, onReported 
     >
       <div className="space-y-4">
         <div className="flex items-start gap-2 rounded-md bg-surface-muted p-3 text-sm text-text">
-          <svg aria-hidden="true" viewBox="0 0 24 24" className="mt-0.5 h-4 w-4 shrink-0 text-text-muted" fill="none" stroke="currentColor" strokeWidth={2}>
-            <rect x="5" y="10" width="14" height="10" rx="2" />
-            <path d="M8 10V7a4 4 0 0 1 8 0v3" strokeLinecap="round" />
-          </svg>
+          <IconLock aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-text-muted" />
           <p>
             Le Médecin sera prévenu et complétera la fiche. Après l'envoi, seuls le Médecin et le joueur pourront
             relire ces informations. Le staff verra seulement l'aptitude et la date de retour.

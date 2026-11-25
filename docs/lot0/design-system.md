@@ -227,7 +227,7 @@ Pour chaque composant : rôle, anatomie, comportement mobile et ordinateur, éta
 - **Tabs** : onglets horizontaux, 40 px, défilement horizontal si trop nombreux, onglet actif souligné en `--color-primary`. Utilisés dans les modales de détail et, sur la page Séance, comme bascule de vues.
 - **Toast** : message bref après une action réussie (« Paiement enregistré. »), 4 secondes, `aria-live="polite"`. Mobile : en bas, au-dessus de la zone sûre ; ordinateur : en haut à droite. Peut porter une action « Annuler » quand l'action est réversible (déplacement A/B). Jamais utilisé pour une erreur de champ.
 - **ConfirmDialog** : modale `sm` (panneau bas sur mobile) pour toute suppression ou action irréversible (3.4). Titre sous forme de question (« Révoquer Jean K. du rôle de Trésorier ? »), une phrase de conséquence, boutons « Annuler » (focus par défaut) et verbe explicite en `danger` (« Révoquer »). Jamais « OK » ni « Oui ».
-- **PinPrompt** (7.2) : modale `sm` / panneau bas. Titre « Confirmer avec votre code PIN ». Rappel de l'action en une ligne (« Valider le paiement de {montant} pour {nom} »). Champ de 4 à 6 chiffres masqués (`inputmode="numeric"`, `autocomplete="off"`), validation automatique au 6e chiffre ou par « Confirmer ». Lien « Code PIN oublié ? » (ouvre la modale de redéfinition par mot de passe, onglet « Code PIN » du profil). Si le joueur n'a pas encore de PIN (première action sensible), la modale devient « Définissez votre code PIN » avec « Nouveau code » et « Confirmez le code ». Messages : « Code PIN incorrect. Il vous reste {n} essai(s). » ; « Trop de codes erronés. Les actions sensibles sont bloquées jusqu'à {heure}. » ; « Le code PIN doit contenir 4 à 6 chiffres. » ; « Les deux codes ne correspondent pas. »
+- **Modale de confirmation d'une action sensible** (7.2) : variante de `ConfirmDialog` ; elle remplace `PinPrompt`, supprimé le 11/10/2026 (10.3 n° 177). Modale `sm` / panneau bas. Titre en question qui rappelle l'objet (« Valider le paiement de {montant} pour {nom} ? »), une phrase de conséquence, boutons « Annuler » (focus par défaut) et verbe explicite (« Valider », « Signer », « Libérer »). Variante `danger` pour une annulation ou une dérogation. Aucun champ de saisie, aucun code, aucun verrouillage.
 - **KpiTile** : libellé (13 px, muted), valeur (20 px mobile, 24 px ordinateur, tabular-nums), variation ou précision facultative (13 px). Grille 2 × 2 sur mobile, 4 colonnes ≥ 1024 px.
 - **ListSection** : liste des N derniers éléments d'une carte (3.3) : lignes de 48 à 56 px entièrement cliquables (ouvrent une modale de détail), bouton « Voir plus » qui ajoute les N suivants en place (le bouton passe en « Chargement… »), disparaît quand tout est affiché. N par défaut : 5 (séances, matchs, incidents), 20 (paiements), 10 (notifications).
 - **Banner** : bandeau pleine largeur sous l'en-tête de page. Variantes : `danger` (alerte rouge : dépense non justifiée, rupture de chaîne), `warning` (licence en période de grâce), `info` (hors connexion), `readonly` (licence expirée : « La licence du club a expiré : le club est en lecture seule. Vos données restent consultables et exportables. »), `support` (session Superuser, voir espace Superuser).
@@ -242,7 +242,7 @@ Pour chaque composant : rôle, anatomie, comportement mobile et ordinateur, éta
 
 | Taille | Largeur ordinateur | Mobile (< 640 px) | Usage |
 | --- | --- | --- | --- |
-| `sm` | 400 px | Panneau bas (hauteur selon contenu, 90 % max.) | Confirmation, PIN, choix court |
+| `sm` | 400 px | Panneau bas (hauteur selon contenu, 90 % max.) | Confirmation, choix court |
 | `md` | 560 px | Plein écran | Formulaire standard (défaut) |
 | `lg` | 800 px | Plein écran | Détail avec onglets, composition, grille d'un joueur |
 | `xl` | 960 px | Plein écran | Assistant pas à pas, Caisse Terrain Express, évaluation rapide |
@@ -266,10 +266,10 @@ Sur ordinateur : centrée, hauteur maximale 90 vh, voile `--color-overlay`.
 1. Validation locale au clic sur le bouton principal (pas à chaque frappe) ; ensuite, revalidation du champ en erreur à chaque modification.
 2. Erreurs sous le champ concerné, en français clair (3.2). Le corps défile jusqu'au premier champ en erreur et lui donne le focus.
 3. Erreurs de l'API : chaque erreur de champ renvoyée est placée sous le bon champ ; une erreur générale va dans le bandeau d'erreur du corps. Aucun code ni message technique n'est affiché.
-4. Action sensible : le bouton principal ouvre `PinPrompt` au-dessus (niveau 2). Le PIN validé, la requête part.
+4. Action sensible : le bouton principal ouvre la modale de confirmation au-dessus (niveau 2). Une fois confirmée, la requête part.
 5. Succès : fermeture de la modale, `Toast` bref, mise à jour de la page sans rechargement (invalidation ciblée des requêtes), focus rendu à l'élément qui avait ouvert la modale.
 
-**Empilement** : deux niveaux au plus (détail → formulaire, formulaire → PIN ou confirmation). Un formulaire ouvert depuis une modale de détail ramène à ce détail, mis à jour, après enregistrement. Au-delà de deux niveaux, le contenu du niveau 2 est remplacé (bouton « Retour » dans l'en-tête).
+**Empilement** : deux niveaux au plus (détail → formulaire, formulaire → confirmation). Un formulaire ouvert depuis une modale de détail ramène à ce détail, mis à jour, après enregistrement. Au-delà de deux niveaux, le contenu du niveau 2 est remplacé (bouton « Retour » dans l'en-tête).
 
 **Variante assistant** (`Wizard`, 3.2 exception) : taille `xl`. Sous le titre, indicateur « Étape {n} sur {total} — {nom de l'étape} » et barre de progression fine. Pied : « Annuler » à gauche ; « Précédent » (secondaire, masqué à l'étape 1) et « Suivant » / verbe final à droite. Validation étape par étape ; la confirmation d'abandon s'applique à tout l'assistant.
 
@@ -396,7 +396,7 @@ Variantes du même composant (même comportement, autre source) : `ClubSearch` (
 | --- | --- |
 | — | Accueil (tous), Vestiaire du jour (tous), Fil d'actualité (tous), Mon profil (tous) |
 | Club | Comité et bureau (tous), Assemblées générales (tous), Communiqués (tous), Chat (tous) |
-| Sport | Espace coach (Coach, Capitaine, Président, VP, DS), Séances (tous), Matchs (tous), Plan tactique (tous, lecture seule sauf Coach), Discipline (tous) |
+| Sport | Espace coach (Coach, Capitaine, Président, VP, DS), Séances (tous), Matchs (tous), Vestiaire du jour (tous ; onglet « Plans » : lecture seule sauf Coach et Assistant), Discipline (tous) |
 | Trésorerie | Tableau de bord (Pdt, VP, Trés, Adj), Grille des cotisations (Pdt, VP, Trés, Adj), Dépenses (Pdt, VP, Trés, Adj) |
 | Club (suite) | Médical (Médecin, Coach, Pdt), Matériel (Intendant, Pdt, VP, Trés, Coach), Mercato (tous : section personnelle ; marché selon 2.4) |
 
@@ -586,3 +586,54 @@ Sans couleurs de club (page `/connexion`, club sans logo ni couleurs), Classic r
 **Option prudente proposée, à valider :** retenir (a). Le défaut de la plateforme reste neutre (valeurs Clair). Les couleurs du club pilote sont saisies comme **donnée** : le Président les enregistre dans la modale « Identité du club » (action journalisée), aidé par l'extraction corrigée (7.2). À vérifier au passage : la valeur `primary_color` / `secondary_color` actuellement enregistrée pour le club pilote, qui est sans doute le gris mauve issu de l'ancien algorithme. Si le client tient à une identité visuelle propre à Vesta sur les pages sans club, il faut définir une palette « Vesta » dédiée, distincte de celle de tout club.
 
 Remarque connexe : `backend/apps/clubs/services.py` l. 1534 prend `(0.12, 0.16, 0.32)` (≈ `#1F2952`, un marine) comme couleur par défaut du bandeau PDF quand le club n'a pas de couleur. Ce n'est pas la palette d'un club, mais le défaut de la plateforme n'est alors pas neutre. Il faudra l'aligner sur la décision prise en 7.3.
+
+---
+
+## 8. Graphiques (tableau de bord du bureau, `docs/ecrans/club-tableau-de-bord-bureau.md` §6)
+
+SVG écrit à la main, **aucune dépendance** (décision Q6 non tranchée : option proposée par la spec). Code : `frontend/src/design-system/charts/`, exporté par `design-system/index.ts`. Montants, unités, libellés et périodes sont fournis par l'appelant (donnees de l'API) ; aucun composant ne calcule de règle métier.
+
+### 8.1 Tokens
+
+`--color-series-1` à `-4` (`tokens.css`), distincts des couleurs de statut et jamais issus du club (marque blanche). Contraste >= 3:1 sur `--color-surface` et `--color-surface-muted`, contrôlé par `charts/series-tokens.test.ts`.
+
+| Token | Clair / Classic | Sombre | Tracé (lignes) | Motif (surfaces) |
+| --- | --- | --- | --- | --- |
+| `--color-series-1` | `#1D4ED8` | `#60A5FA` | plein | plein |
+| `--color-series-2` | `#0F766E` | `#2DD4BF` | tirets | hachures |
+| `--color-series-3` | `#BE185D` | `#F472B6` | pointillés | points |
+| `--color-series-4` | `#854D0E` | `#FACC15` | tirets-points | quadrillage |
+
+Grille et axes : `--color-border` ; libellés : `--color-text-muted` ; valeurs écrites : `--color-text`. Texte des graphiques 12 px.
+
+### 8.2 Règles communes
+
+- `<figure aria-label={title}>` + `<figcaption class="sr-only">` (résumé généré, surchargeable par `summary`) ; `role="img"` sur le SVG, ou `role="group"` quand il porte des boutons ; « Voir les données » ouvre un `<table>` (`<details>`).
+- Propriétés communes (`ChartCommonProps`) : `title`, `summary?`, `state?` (`ready` | `loading` | `error`), `emptyMessage?`, `errorMessage?`, `onRetry?`, `height?` (160 dans une carte, 220 dans une modale), `className?`.
+- Chargement : `Loader` + `Skeleton variant="chart"` (nouveau) ; vide : `EmptyState` ; erreur : `EmptyState variant="error"` + « Réessayer ».
+- Interaction : `onSelect` rend chaque colonne, ligne, segment ou axe cliquable (`role="button"`, Entrée/Espace, focus visible). Sans `onSelect`, aucun rôle interactif : dans une `ChartCard`, c'est la carte entière qui est cliquable (bouton étiré, un seul arrêt clavier). Un graphique interactif dans une carte passe `interactiveContent` sur la `ChartCard`.
+- Cibles tactiles : colonnes de 36 px minimum quand `onSelect` est fourni (le graphique défile alors dans son cadre) ; lignes horizontales >= 44 px ; boutons de légende 36 px.
+- Jamais la couleur seule : tracé + forme de marqueur (courbes, radar), motif (barres, segments), légende textuelle, valeurs écrites. Pas de camembert, pas de dégradé ; entrée de 200 ms (`.vesta-chart-enter`), coupée par `prefers-reduced-motion`.
+- Échelles rondes (`niceScale`, pas 1/2/5 x 10^n), valeurs nulles, un seul point, `null` = trou ou absence de barre, grandes valeurs (axes compacts « 12 k »). Étiquettes d'axe jamais pivotées ni tronquées : espacées (courbe), coupées sur deux lignes (barres, radar) ou largeur de colonne adaptée avec défilement dans le cadre (pas de défilement de la page).
+
+### 8.3 Composants
+
+| Composant | Propriétés principales |
+| --- | --- |
+| `ChartCard` | `title`, `value?`, `caption?`, `periodLabel?`, `onOpen?`, `openLabel?`, `state?` (`ready` \| `loading` \| `error` \| `empty`), `emptyMessage?`, `errorMessage?`, `onRetry?`, `interactiveContent?`, `children` |
+| `KpiTile` | `label`, `value`, `hint?`, `family?` + `statusLabel?` (pastille avec texte), `onClick?` |
+| `LineChart` | `labels`, `series[{name, values: (number\|null)[]}]` (2 au plus), `yMin?`, `yMax?`, `unit?`, `reference?{value,label}`, `formatValue?`, `onSelect?(index)` |
+| `BarChart` | `categories`, `series[{name, values}]` (4 au plus), `orientation?` (`vertical` \| `horizontal`), `stacked?`, `unit?`, `reference?` (vertical), `formatValue?`, `onSelect?(categoryIndex)` |
+| `StackedBar` | `segments[{label, value, family?: StatusFamily}]`, `onSelect?(index, segment)` |
+| `FormStrip` | `results[{outcome: win\|draw\|loss, opponent?, score?, date?}]` (5 affichés), `title?`, `state?`, `onSelect?(index, result)` |
+| `RadarChart` | `axes[{label, max?}]` (3 à 8), `series[{name, values}]` (4 au plus), `maxValue?` (100), `unit?`, `onSelect?(axisIndex)` |
+| `PeriodPicker` | `value: {mode:"month", month:"AAAA-MM"} \| {mode:"season", seasonId}`, `onChange`, `seasons?[{id,label}]` (récente d'abord), `minMonth?`, `maxMonth?` (mois en cours par défaut), `now?` |
+
+`SegmentedControl` reçoit la propriété `hideLabel` (libellé `sr-only`) pour les barres compactes.
+
+### 8.4 Écarts avec la spec §6 (à valider)
+
+- `LineChart` / `BarChart` prennent `labels` + `series[{name, values}]` plutôt que `points[{x,label,value}]` : même contenu, adapté à deux séries et aux trous.
+- `BarChart` : `onSelect` désigne la catégorie (groupe de barres), pas une barre isolée.
+- `StackedBar` est en HTML (barre flex + légende en boutons de 36 px) et non en SVG : plus fiable pour des cibles tactiles et des libellés non tronqués.
+- La spec cite `docs/design-system.md` ; le document de référence du dépôt est `docs/lot0/design-system.md` (ce fichier).

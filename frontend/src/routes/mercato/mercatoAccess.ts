@@ -5,7 +5,7 @@ import type { ProfileRole } from "../sport/sportAccess";
  * jamais autorité : un rôle autorisé ici mais refusé côté API affichera le
  * message renvoyé par l'API (CLAUDE.md règle n° 5). */
 
-const MARKET_READER_ROLES = ["president", "vice_president", "sports_director", "treasurer", "coach"] as const;
+const MARKET_READER_ROLES = ["president", "vice_president", "sports_director", "treasurer", "coach", "assistant_coach"] as const;
 const OFFER_AND_MESSAGING_ROLES = ["president", "sports_director"] as const;
 
 function hasAnyRole(roles: ProfileRole[] | undefined, required: readonly string[]): boolean {

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getMyProfile } from "../../api/clubs";
+import { useDeepLink } from "../../hooks/useDeepLink";
 import {
   getSocialAssistanceRequests,
   getTreasuryCapabilities,
@@ -209,6 +210,9 @@ export function AssistanceSocialePage() {
   const [treatedLimit, setTreatedLimit] = useState(PAGE_STEP);
   const [expandedView, setExpandedView] = useState(false);
   const [detailRequestId, setDetailRequestId] = useState<number | null>(null);
+
+  // Lien depuis une notification de demande d'assistance (`?demande=<id>`).
+  useDeepLink("demande", setDetailRequestId);
 
   const profileQuery = useQuery({ queryKey: ["profile", "me"], queryFn: getMyProfile, staleTime: 60_000 });
   const capabilitiesQuery = useQuery({ queryKey: CAPABILITIES_QUERY_KEY, queryFn: getTreasuryCapabilities });

@@ -122,7 +122,7 @@ class TransferOffer(models.Model):
 
 
 class MercatoThread(models.Model):
-    """Fil de messagerie entre deux clubs (CDC 4.14 ; schema §8.2).
+    """Fil de messagerie entre deux clubs.
 
     Lecture/écriture restreintes au Président et au DS de ``club_a`` ou
     ``club_b`` (voir docstring du module -- position provisoire, la plus

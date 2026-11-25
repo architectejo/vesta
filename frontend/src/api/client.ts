@@ -139,6 +139,15 @@ async function rawRequest<T>(
     throw new ApiError(response.status, data);
   }
 
+  // L'API ne répond jamais autre chose que du JSON. Un 200 qui n'en est pas
+  // (typiquement la page index.html renvoyée par le repli du .htaccess quand
+  // l'adresse de l'API est mal configurée) ne doit pas passer pour un succès.
+  if (typeof data === "string") {
+    throw new ApiError(502, {
+      detail: "Le serveur a répondu de façon inattendue. Réessayez, ou contactez le support si cela continue.",
+    });
+  }
+
   return data as T;
 }
 

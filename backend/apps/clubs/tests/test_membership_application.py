@@ -14,17 +14,15 @@ import datetime
 from types import SimpleNamespace
 
 import pytest
-from django.contrib.auth.hashers import make_password
 from django.utils import timezone
 
-from apps.accounts.services import InvalidPinError, PinNotSetError
 from apps.accounts.tests.factories import UserFactory
 from apps.audit.models import AuditLog
 from apps.clubs import services as clubs_services
 from apps.clubs.models import Membership, MembershipApplication, MembershipRole
 from apps.clubs.tests.factories import ClubSettingsFactory, MembershipFactory
 from apps.treasury import services as treasury_services
-from apps.treasury.tests.conftest import PIN, WRONG_PIN, make_member, past_day
+from apps.treasury.tests.conftest import make_member, past_day
 from apps.treasury.tests.factories import MembershipFeeTypeFactory
 
 pytestmark = pytest.mark.django_db
@@ -60,11 +58,15 @@ _SPONSOR_NOT_PROVIDED = object()
 def add_player(
     ctx,
     *,
-    email="recrue@example.com",
+    email=None,
     sponsor=_SPONSOR_NOT_PROVIDED,
     position=Membership.Position.MIDFIELDER,
     **extra,
 ):
+    # Un compte déjà membre d'un autre club n'est plus enrôlable (D-A1) :
+    # adresse distincte par club pour les tests multi-clubs.
+    if email is None:
+        email = f"recrue-{ctx.club.id}@example.com"
     return clubs_services.add_player_with_sponsor(
         club=ctx.club,
         email=email,
@@ -77,14 +79,13 @@ def add_player(
     )
 
 
-def pay(ctx, application, *, amount="5", method="cash", validated_by=None, pin=PIN, **extra):
+def pay(ctx, application, *, amount="5", method="cash", validated_by=None, **extra):
     return clubs_services.record_membership_fee_payment_for_application(
         application=application,
         amount=amount,
         method=method,
         paid_on=past_day(),
         validated_by=(validated_by or ctx.treasurer).user,
-        pin=pin,
         **extra,
     )
 
@@ -149,6 +150,28 @@ class TestPaiementFicheEtNotification:
         finally:
             application.application_pdf_file.close()
         assert content.startswith(b"%PDF")
+
+    def test_fiche_utilise_l_en_tete_commun_et_des_libelles_accentues(self, ctx):
+        _membership, application = add_player(ctx)
+
+        application = pay(ctx, application)
+
+        application.application_pdf_file.open("rb")
+        try:
+            text = application.application_pdf_file.read().decode("latin-1")
+        finally:
+            application.application_pdf_file.close()
+        # En-tête commun (nom du club, type de document, référence) et libellés accentués.
+        assert ctx.club.name in text
+        # ReportLab écrit les caractères accentués en échappement octal : é = \351.
+        assert "Fiche d'adh\\351sion" in text
+        assert "Montant pay\\351" in text
+        assert "R\\351f. A-" in text
+        # Aucune référence technique ni mention de l'éditeur ou de la plateforme.
+        assert "CDC" not in text
+        assert "IMARA" not in text
+        assert "Vesta" not in text
+        assert "VESTA" not in text
 
     def test_paiement_partiel_ne_genere_pas_la_fiche(self, ctx):
         _membership, application = add_player(ctx)
@@ -218,12 +241,14 @@ class TestPaiementFicheEtNotification:
         assert application.membership_fee_payment_id is None
         assert application.generated_at is None
 
-    def test_pin_incorrect_ne_modifie_pas_le_dossier(self, ctx):
+    def test_reussit_sans_pin_auteur_dans_le_journal(self, ctx):
         _membership, application = add_player(ctx)
-        with pytest.raises(InvalidPinError):
-            pay(ctx, application, pin=WRONG_PIN)
-        application.refresh_from_db()
-        assert application.membership_fee_payment_id is None
+        application = pay(ctx, application)
+        assert application.membership_fee_payment_id is not None
+        log = AuditLog.objects.get(
+            action_type="clubs.membership_application.fee_payment_recorded", object_id=str(application.pk)
+        )
+        assert log.actor_id == ctx.treasurer.user_id
 
 
 class TestSignatureDuParrain:
@@ -235,7 +260,7 @@ class TestSignatureDuParrain:
         application = self._prepared_application(ctx)
 
         application = clubs_services.sign_sponsor_application(
-            application=application, sponsor_user=ctx.sponsor.user, pin=PIN
+            application=application, sponsor_user=ctx.sponsor.user
         )
 
         assert application.sponsor_decision == MembershipApplication.SponsorDecision.SIGNED
@@ -246,7 +271,7 @@ class TestSignatureDuParrain:
     def test_signature_fait_passer_inscrit_si_deja_paye(self, ctx):
         application = self._prepared_application(ctx)
 
-        clubs_services.sign_sponsor_application(application=application, sponsor_user=ctx.sponsor.user, pin=PIN)
+        clubs_services.sign_sponsor_application(application=application, sponsor_user=ctx.sponsor.user)
 
         application.membership.refresh_from_db()
         assert application.membership.status == Membership.Status.ACTIVE
@@ -254,7 +279,7 @@ class TestSignatureDuParrain:
     def test_journalise_la_signature(self, ctx):
         application = self._prepared_application(ctx)
         application = clubs_services.sign_sponsor_application(
-            application=application, sponsor_user=ctx.sponsor.user, pin=PIN
+            application=application, sponsor_user=ctx.sponsor.user
         )
         log = AuditLog.objects.get(
             action_type="clubs.membership_application.sponsor_signed", object_id=str(application.pk)
@@ -266,24 +291,34 @@ class TestSignatureDuParrain:
         application = self._prepared_application(ctx)
         with pytest.raises(PermissionError):
             clubs_services.sign_sponsor_application(
-                application=application, sponsor_user=ctx.president.user, pin=PIN
+                application=application, sponsor_user=ctx.president.user
             )
 
     def test_signature_avant_generation_de_la_fiche_refusee(self, ctx):
         _membership, application = add_player(ctx)
         with pytest.raises(clubs_services.MembershipApplicationError):
             clubs_services.sign_sponsor_application(
-                application=application, sponsor_user=ctx.sponsor.user, pin=PIN
+                application=application, sponsor_user=ctx.sponsor.user
             )
+
+    def test_second_envoi_avec_objet_perime_rejete_et_une_seule_signature_journalisee(self, ctx):
+        application = self._prepared_application(ctx)
+        stale_copy = MembershipApplication.all_objects.get(pk=application.pk)
+        clubs_services.sign_sponsor_application(application=application, sponsor_user=ctx.sponsor.user)
+
+        with pytest.raises(clubs_services.MembershipApplicationError, match="déjà signé"):
+            clubs_services.sign_sponsor_application(application=stale_copy, sponsor_user=ctx.sponsor.user)
+
+        assert AuditLog.objects.filter(action_type="clubs.membership_application.sponsor_signed").count() == 1
 
     def test_double_signature_refusee(self, ctx):
         application = self._prepared_application(ctx)
         application = clubs_services.sign_sponsor_application(
-            application=application, sponsor_user=ctx.sponsor.user, pin=PIN
+            application=application, sponsor_user=ctx.sponsor.user
         )
         with pytest.raises(clubs_services.MembershipApplicationError):
             clubs_services.sign_sponsor_application(
-                application=application, sponsor_user=ctx.sponsor.user, pin=PIN
+                application=application, sponsor_user=ctx.sponsor.user
             )
 
     def test_signature_apres_son_propre_refus_est_refusee(self, ctx):
@@ -295,7 +330,7 @@ class TestSignatureDuParrain:
         :func:`sign_sponsor_application` ne verifie QUE
         ``sponsor_decision == SIGNED`` (deja signe) pour bloquer une
         signature -- pas ``== REFUSED`` : le meme parrain, ayant refuse,
-        peut aujourd'hui signer quand meme avec son PIN et faire passer le
+        peut aujourd'hui signer quand meme et faire passer le
         joueur « Inscrit » de son seul chef, en contournant entierement le
         President. Ce test DOIT lever une erreur metier ; il echoue
         actuellement (DID NOT RAISE), ce qui confirme le bug -- ne pas
@@ -310,32 +345,34 @@ class TestSignatureDuParrain:
 
         with pytest.raises(clubs_services.MembershipApplicationError):
             clubs_services.sign_sponsor_application(
-                application=application, sponsor_user=ctx.sponsor.user, pin=PIN
+                application=application, sponsor_user=ctx.sponsor.user
             )
         application.refresh_from_db()
         assert application.sponsor_decision == MembershipApplication.SponsorDecision.REFUSED
         application.membership.refresh_from_db()
         assert application.membership.status != Membership.Status.ACTIVE
 
-    def test_pin_incorrect_ne_modifie_pas_le_dossier(self, ctx):
+    def test_reussit_sans_pin_auteur_dans_le_journal(self, ctx):
         application = self._prepared_application(ctx)
-        with pytest.raises(InvalidPinError):
-            clubs_services.sign_sponsor_application(
-                application=application, sponsor_user=ctx.sponsor.user, pin=WRONG_PIN
-            )
-        application.refresh_from_db()
-        assert application.sponsor_decision == MembershipApplication.SponsorDecision.PENDING
+        application = clubs_services.sign_sponsor_application(
+            application=application, sponsor_user=ctx.sponsor.user
+        )
+        assert application.sponsor_decision == MembershipApplication.SponsorDecision.SIGNED
+        log = AuditLog.objects.get(
+            action_type="clubs.membership_application.sponsor_signed", object_id=str(application.pk)
+        )
+        assert log.actor_id == ctx.sponsor.user_id
 
-    def test_pin_non_defini(self, ctx):
+    def test_parrain_sans_pin_defini_peut_signer(self, ctx):
         _membership, application = add_player(ctx)
-        no_pin_sponsor = make_member(ctx.club, pin=None)
+        no_pin_sponsor = make_member(ctx.club)
         application.membership.sponsor = no_pin_sponsor
         application.membership.save()
         application = pay(ctx, application)
-        with pytest.raises(PinNotSetError):
-            clubs_services.sign_sponsor_application(
-                application=application, sponsor_user=no_pin_sponsor.user, pin="0000"
-            )
+        application = clubs_services.sign_sponsor_application(
+            application=application, sponsor_user=no_pin_sponsor.user
+        )
+        assert application.sponsor_decision == MembershipApplication.SponsorDecision.SIGNED
 
 
 class TestOrdrePaiementEtSignatureIndifferent:
@@ -357,7 +394,7 @@ class TestOrdrePaiementEtSignatureIndifferent:
         assert application.generated_at is not None
 
         application = clubs_services.sign_sponsor_application(
-            application=application, sponsor_user=ctx.sponsor.user, pin=PIN
+            application=application, sponsor_user=ctx.sponsor.user
         )
         application.membership.refresh_from_db()
         assert application.membership.status == Membership.Status.ACTIVE
@@ -374,7 +411,7 @@ class TestOrdrePaiementEtSignatureIndifferent:
         assert application.membership.status == Membership.Status.PENDING
 
         application = clubs_services.sign_sponsor_application(
-            application=application, sponsor_user=ctx.sponsor.user, pin=PIN
+            application=application, sponsor_user=ctx.sponsor.user
         )
         application.membership.refresh_from_db()
         assert application.membership.status == Membership.Status.ACTIVE
@@ -439,7 +476,7 @@ class TestRefusDuParrain:
     def test_refus_dun_dossier_deja_signe_refuse(self, ctx):
         application = self._prepared_application(ctx)
         application = clubs_services.sign_sponsor_application(
-            application=application, sponsor_user=ctx.sponsor.user, pin=PIN
+            application=application, sponsor_user=ctx.sponsor.user
         )
         with pytest.raises(clubs_services.MembershipApplicationError):
             clubs_services.refuse_sponsor_application(
@@ -520,7 +557,7 @@ class TestReassignationDuParrain:
         )
 
         application = clubs_services.sign_sponsor_application(
-            application=application, sponsor_user=new_sponsor.user, pin=PIN
+            application=application, sponsor_user=new_sponsor.user
         )
         application.membership.refresh_from_db()
         assert application.membership.status == Membership.Status.ACTIVE
@@ -588,7 +625,6 @@ class TestAnnulationDeLAdhesion:
             president_user=ctx.president.user,
             reason="Aucun autre parrain disponible",
             disposition=MembershipApplication.FeeDisposition.REFUNDED,
-            pin=PIN,
         )
 
         membership.refresh_from_db()
@@ -609,7 +645,6 @@ class TestAnnulationDeLAdhesion:
             president_user=ctx.president.user,
             reason="Motif",
             disposition=MembershipApplication.FeeDisposition.KEPT,
-            pin=PIN,
         )
 
         membership.refresh_from_db()
@@ -628,13 +663,42 @@ class TestAnnulationDeLAdhesion:
             president_user=ctx.president.user,
             reason="Motif",
             disposition=MembershipApplication.FeeDisposition.KEPT,
-            pin=PIN,
         )
 
         AuditLog.objects.get(
             action_type="clubs.membership_application.cancelled", object_id=str(application.pk)
         )
         AuditLog.objects.get(action_type="membership.departed", object_id=str(membership.pk))
+
+    def test_second_appel_refuse_et_ne_reecrit_rien(self, ctx):
+        """Une annulation rejouee (meme avec un objet `application` perime et
+        une autre disposition du paiement) est refusee : un seul depart, une
+        seule annulation journalises, aucun remboursement supplementaire."""
+
+        application = self._refused_application(ctx)
+        stale_copy = MembershipApplication.all_objects.get(pk=application.pk)
+        membership = application.membership
+
+        clubs_services.cancel_membership_application(
+            application=application,
+            president_user=ctx.president.user,
+            reason="Premier motif",
+            disposition=MembershipApplication.FeeDisposition.KEPT,
+        )
+        with pytest.raises(clubs_services.MembershipApplicationError, match="déjà été annulée"):
+            clubs_services.cancel_membership_application(
+                application=stale_copy,
+                president_user=ctx.president.user,
+                reason="Second motif",
+                disposition=MembershipApplication.FeeDisposition.REFUNDED,
+            )
+
+        stored = MembershipApplication.all_objects.get(pk=application.pk)
+        assert stored.cancelled_reason == "Premier motif"
+        assert stored.membership_fee_disposition == MembershipApplication.FeeDisposition.KEPT
+        assert treasury_services.has_paid_membership_fee(membership) is True
+        assert AuditLog.objects.filter(action_type="clubs.membership_application.cancelled").count() == 1
+        assert AuditLog.objects.filter(action_type="membership.departed", object_id=str(membership.pk)).count() == 1
 
     def test_reservee_au_president(self, ctx):
         application = self._refused_application(ctx)
@@ -644,7 +708,6 @@ class TestAnnulationDeLAdhesion:
                 president_user=ctx.treasurer.user,
                 reason="Motif",
                 disposition=MembershipApplication.FeeDisposition.KEPT,
-                pin=PIN,
             )
 
     def test_uniquement_apres_un_refus(self, ctx):
@@ -656,7 +719,6 @@ class TestAnnulationDeLAdhesion:
                 president_user=ctx.president.user,
                 reason="Motif",
                 disposition=MembershipApplication.FeeDisposition.KEPT,
-                pin=PIN,
             )
 
     def test_motif_obligatoire(self, ctx):
@@ -667,7 +729,6 @@ class TestAnnulationDeLAdhesion:
                 president_user=ctx.president.user,
                 reason="   ",
                 disposition=MembershipApplication.FeeDisposition.KEPT,
-                pin=PIN,
             )
 
     def test_disposition_invalide_refusee(self, ctx):
@@ -678,7 +739,6 @@ class TestAnnulationDeLAdhesion:
                 president_user=ctx.president.user,
                 reason="Motif",
                 disposition="autre_chose",
-                pin=PIN,
             )
 
     def test_remboursement_sans_paiement_refuse(self, ctx):
@@ -700,23 +760,27 @@ class TestAnnulationDeLAdhesion:
                 president_user=ctx.president.user,
                 reason="Motif",
                 disposition=MembershipApplication.FeeDisposition.REFUNDED,
-                pin=PIN,
             )
 
-    def test_pin_incorrect_ne_modifie_rien(self, ctx):
+    @pytest.mark.parametrize(
+        "disposition",
+        [MembershipApplication.FeeDisposition.KEPT, MembershipApplication.FeeDisposition.REFUNDED],
+    )
+    def test_reussit_sans_pin_auteur_dans_le_journal(self, ctx, disposition):
         application = self._refused_application(ctx)
-        with pytest.raises(InvalidPinError):
-            clubs_services.cancel_membership_application(
-                application=application,
-                president_user=ctx.president.user,
-                reason="Motif",
-                disposition=MembershipApplication.FeeDisposition.KEPT,
-                pin=WRONG_PIN,
-            )
-        application.refresh_from_db()
-        assert application.cancelled_by_id is None
+        application = clubs_services.cancel_membership_application(
+            application=application,
+            president_user=ctx.president.user,
+            reason="Motif",
+            disposition=disposition,
+        )
+        assert application.cancelled_by_id == ctx.president.user_id
         application.membership.refresh_from_db()
-        assert application.membership.status != Membership.Status.DEPARTED
+        assert application.membership.status == Membership.Status.DEPARTED
+        log = AuditLog.objects.get(
+            action_type="clubs.membership_application.cancelled", object_id=str(application.pk)
+        )
+        assert log.actor_id == ctx.president.user_id
 
     def test_annulation_refusee_si_l_adhesion_est_deja_inscrite(self, ctx):
         """Complement demande en revue independante (tache 1.4bt) : une
@@ -733,7 +797,7 @@ class TestAnnulationDeLAdhesion:
         _membership, application = add_player(ctx)
         application = pay(ctx, application)
         application = clubs_services.sign_sponsor_application(
-            application=application, sponsor_user=ctx.sponsor.user, pin=PIN
+            application=application, sponsor_user=ctx.sponsor.user
         )
         application.membership.refresh_from_db()
         assert application.membership.status == Membership.Status.ACTIVE
@@ -751,7 +815,6 @@ class TestAnnulationDeLAdhesion:
                 president_user=ctx.president.user,
                 reason="Motif",
                 disposition=MembershipApplication.FeeDisposition.KEPT,
-                pin=PIN,
             )
         application.membership.refresh_from_db()
         assert application.membership.status == Membership.Status.ACTIVE
@@ -766,7 +829,7 @@ class TestIdempotenceActivation:
         application = pay(ctx, application, amount="3")
         application = pay(ctx, application, amount="2")
         application = clubs_services.sign_sponsor_application(
-            application=application, sponsor_user=ctx.sponsor.user, pin=PIN
+            application=application, sponsor_user=ctx.sponsor.user
         )
         application.membership.refresh_from_db()
         assert application.membership.status == Membership.Status.ACTIVE
@@ -791,7 +854,7 @@ class TestIdempotenceActivation:
         _membership, application = add_player(ctx)
         application = pay(ctx, application)
         application = clubs_services.sign_sponsor_application(
-            application=application, sponsor_user=ctx.sponsor.user, pin=PIN
+            application=application, sponsor_user=ctx.sponsor.user
         )
         application.membership.refresh_from_db()
         assert application.membership.status == Membership.Status.ACTIVE
@@ -879,7 +942,7 @@ class TestRappelsEtAlertesDeParrainage:
         _membership, application = add_player(ctx)
         application = pay(ctx, application)
         application = clubs_services.sign_sponsor_application(
-            application=application, sponsor_user=ctx.sponsor.user, pin=PIN
+            application=application, sponsor_user=ctx.sponsor.user
         )
         now = application.sponsor_notified_at + datetime.timedelta(days=10)
 
@@ -966,7 +1029,7 @@ class TestGenerationDuPdfAvecCaracteresSpeciaux:
         MembershipFeeTypeFactory(club=accented_club, created_by=president.user)
 
         sponsor_user = UserFactory(
-            first_name="Émilie", last_name="N'Doyé-Müller", pin_hash=make_password(PIN)
+            first_name="Émilie", last_name="N'Doyé-Müller"
         )
         sponsor = MembershipFactory(club=accented_club, user=sponsor_user, status=Membership.Status.ACTIVE)
 
@@ -986,7 +1049,6 @@ class TestGenerationDuPdfAvecCaracteresSpeciaux:
             method="cash",
             paid_on=past_day(),
             validated_by=treasurer.user,
-            pin=PIN,
         )
 
         assert application.generated_at is not None
@@ -998,8 +1060,85 @@ class TestGenerationDuPdfAvecCaracteresSpeciaux:
         assert content.startswith(b"%PDF")
 
         application = clubs_services.sign_sponsor_application(
-            application=application, sponsor_user=sponsor_user, pin=PIN
+            application=application, sponsor_user=sponsor_user
         )
         assert application.sponsor_decision == MembershipApplication.SponsorDecision.SIGNED
         membership.refresh_from_db()
         assert membership.status == Membership.Status.ACTIVE
+
+
+class TestRejeuApresEchecDeLaSuite:
+    """Reaudit 12/10/2026 : un echec apres la validation du paiement ne doit
+    pas laisser le dossier bloque ; un rejeu (meme client_uuid) le complete."""
+
+    def test_echec_du_pdf_puis_rejeu_complete_le_dossier(self, ctx, monkeypatch):
+        import uuid
+
+        from apps.notifications.models import Notification
+        from apps.treasury.models import Payment
+
+        _membership, application = add_player(ctx)
+        key = uuid.uuid4()
+        real_generate = clubs_services.generate_membership_application_pdf
+
+        def boom(**kwargs):
+            raise RuntimeError("panne PDF")
+
+        monkeypatch.setattr(clubs_services, "generate_membership_application_pdf", boom)
+        first = pay(ctx, application, client_uuid=key)
+        assert first.generated_at is None
+        assert first.membership_fee_payment_id is not None
+
+        monkeypatch.setattr(clubs_services, "generate_membership_application_pdf", real_generate)
+        replay = pay(ctx, first, client_uuid=key)
+
+        assert replay.generated_at is not None
+        assert replay.sponsor_notified_at is not None
+        assert Payment.all_objects.filter(club=ctx.club, membership=application.membership).count() == 1
+        assert (
+            AuditLog.objects.filter(
+                action_type="clubs.membership_application.fee_payment_recorded",
+                object_id=str(application.pk),
+            ).count()
+            == 1
+        )
+        assert Notification.objects.filter(recipient=ctx.sponsor.user).count() == 1
+
+        # Troisieme rejeu : plus rien a rattraper, aucun doublon.
+        pay(ctx, replay, client_uuid=key)
+        assert Notification.objects.filter(recipient=ctx.sponsor.user).count() == 1
+
+
+class TestVerrousEtReverification:
+    def test_refus_avec_objet_perime_apres_signature_est_rejete(self, ctx):
+        _membership, application = add_player(ctx)
+        application = pay(ctx, application)
+        stale = MembershipApplication.all_objects.get(pk=application.pk)
+        clubs_services.sign_sponsor_application(application=application, sponsor_user=ctx.sponsor.user)
+
+        with pytest.raises(clubs_services.MembershipApplicationError):
+            clubs_services.refuse_sponsor_application(
+                application=stale, sponsor_user=ctx.sponsor.user, reason="Motif"
+            )
+        fresh = MembershipApplication.all_objects.get(pk=application.pk)
+        assert fresh.sponsor_decision == MembershipApplication.SponsorDecision.SIGNED
+        assert not AuditLog.objects.filter(action_type="clubs.membership_application.sponsor_refused").exists()
+
+    def test_activation_avec_adhesion_perimee_n_ecrit_qu_un_journal(self, ctx):
+        _membership, application = add_player(ctx)
+        application = pay(ctx, application)
+        stale_application = MembershipApplication.all_objects.select_related("membership").get(pk=application.pk)
+        clubs_services.sign_sponsor_application(application=application, sponsor_user=ctx.sponsor.user)
+        assert stale_application.membership.status == Membership.Status.PENDING  # objet perime
+        stale_application.sponsor_decision = MembershipApplication.SponsorDecision.SIGNED
+
+        before = AuditLog.objects.filter(
+            action_type="membership.updated", object_id=str(application.membership_id)
+        ).count()
+        result = clubs_services._maybe_activate_membership(application=stale_application, actor=ctx.treasurer.user)
+        after = AuditLog.objects.filter(
+            action_type="membership.updated", object_id=str(application.membership_id)
+        ).count()
+
+        assert result.status == Membership.Status.ACTIVE
+        assert after == before

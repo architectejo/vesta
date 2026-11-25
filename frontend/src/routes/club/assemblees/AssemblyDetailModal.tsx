@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { downloadMinutesPdf, getAssembly, signMinutes, type Assembly } from "../../../api/assemblies";
-import { Banner, Button, EmptyState, Modal, PinPrompt, StatusBadge, Tabs } from "../../../design-system";
+import { Banner, Button, ConfirmDialog, EmptyState, Modal, StatusBadge, Tabs } from "../../../design-system";
 import { AttachmentLink } from "../../treasury/AttachmentLink";
-import { formatPinError } from "../../treasury/pinErrors";
+import { ApiError } from "../../../api/client";
 import { assemblyCardStatus, assemblyTypeLabel, formatDateLong, formatTimeShort } from "./assembliesFormat";
 import { AttendanceTab } from "./AttendanceTab";
 import { DecisionModal } from "./DecisionModal";
@@ -188,17 +188,20 @@ export function AssemblyDetailModal({
     void queryClient.invalidateQueries({ queryKey: ["assemblies"] });
   }
 
-  async function handleSign(pin: string): Promise<void> {
+  async function handleSign(): Promise<void> {
+    if (signing) return;
     setSignError(undefined);
     setSigning(true);
     try {
-      const minutes = await signMinutes(assemblyId, pin);
+      const minutes = await signMinutes(assemblyId);
       invalidate();
       setSignOpen(false);
       // Toast succès géré au niveau page pour rester simple ici.
       void minutes;
     } catch (err) {
-      setSignError(formatPinError(err));
+      setSignError(
+        err instanceof ApiError ? err.detail : "Une erreur est survenue de notre côté. Réessayez dans un instant.",
+      );
     } finally {
       setSigning(false);
     }
@@ -268,14 +271,17 @@ export function AssemblyDetailModal({
       ) : null}
 
       {assembly ? (
-        <PinPrompt
+        <ConfirmDialog
           open={signOpen}
-          title="Confirmer avec votre code PIN"
-          description={`Signer le procès-verbal de l'AG du ${formatDateLong(assembly.scheduled_date)}`}
-          isSubmitting={signing}
+          danger={false}
+          title={`Signer le procès-verbal de l'AG du ${formatDateLong(assembly.scheduled_date)} ?`}
+          description="Votre signature sera enregistrée avec votre nom dans le journal d'activité."
+          confirmLabel="Signer le PV"
+          loadingLabel="Signature…"
+          loading={signing}
           error={signError}
-          onSubmit={(pin) => void handleSign(pin)}
-          onClose={() => setSignOpen(false)}
+          onConfirm={() => void handleSign()}
+          onCancel={() => setSignOpen(false)}
         />
       ) : null}
     </Modal>

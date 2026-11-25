@@ -1,8 +1,9 @@
-"""Caisse Terrain Express — services (tâche 2.4 ; CDC 4.4.5, 6.6, 7.2 ;
+"""Caisse Terrain Express — services (tâche 2.4 ; CDC 4.4.5, 6.6 ;
 10.2 n° 22 ; schema-treasury.md §5.4, invariant I15).
 
-Session ouverte en ligne (PIN vérifié une fois par le serveur, jamais
-stocké ni journalisé), valable jusqu'à minuit dans le fuseau du club ;
+Session ouverte en ligne par le Trésorier ou l'adjoint (plus de PIN depuis
+la décision client du 11/10/2026, CLAUDE.md règle 7 : l'auteur est
+journalisé), valable jusqu'à minuit dans le fuseau du club ;
 encaissements sans PIN, y compris saisis hors connexion et synchronisés
 après minuit ; refus d'un encaissement saisi après minuit ; idempotence ;
 étanchéité ; recherche sans N+1 et statut recalculé à la lecture.
@@ -19,7 +20,6 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
-from apps.accounts.services import InvalidPinError, PinLockedError, PinNotSetError
 from apps.audit.models import AuditLog
 from apps.clubs.models import Membership, MembershipRole
 from apps.treasury import services
@@ -33,7 +33,7 @@ from apps.treasury.tests.cash_helpers import (
     open_session,
     put_in_debt,
 )
-from apps.treasury.tests.conftest import PIN, WRONG_PIN, make_member
+from apps.treasury.tests.conftest import PIN, assert_logged_by, make_member
 
 pytestmark = pytest.mark.django_db
 
@@ -60,42 +60,36 @@ class TestOpening:
     def test_tresorier_ou_adjoint_ouvre_une_session(self, ctx, role):
         member = getattr(ctx, role)
         now = timezone.now()
-        session, created = services.open_cash_session(club=ctx.club, user=member.user, pin=PIN, now=now)
+        session, created = services.open_cash_session(club=ctx.club, user=member.user, now=now)
         assert created is True
         assert session.opened_by_id == member.pk
-        assert session.pin_verified_at == now and session.opened_at == now
+        assert session.opened_at == now
         assert session.status == CashSession.Status.OPEN
         assert isinstance(session.public_id, uuid.UUID)
         assert services.get_current_cash_session(club=ctx.club, user=member.user, now=now) == session
 
     @pytest.mark.parametrize("role", ["president", "vice_president", "player"])
-    def test_autres_roles_refuses_avant_le_pin(self, ctx, role):
+    def test_autres_roles_refuses(self, ctx, role):
         # CDC 4.4.5 et matrice 2.4 : « par le Trésorier ou l'adjoint » ; le
         # Président n'est qu'en lecture sur l'enregistrement des paiements.
         member = getattr(ctx, role)
         with pytest.raises(services.TreasuryPermissionError):
-            services.open_cash_session(club=ctx.club, user=member.user, pin=WRONG_PIN)
-        member.user.refresh_from_db()
-        assert member.user.pin_failed_attempts == 0
+            services.open_cash_session(club=ctx.club, user=member.user)
         assert CashSession.all_objects.count() == 0
 
-    def test_pin_faux_aucune_session(self, ctx):
-        with pytest.raises(InvalidPinError):
-            services.open_cash_session(club=ctx.club, user=ctx.treasurer.user, pin=WRONG_PIN)
-        assert CashSession.all_objects.count() == 0
-        ctx.treasurer.user.refresh_from_db()
-        assert ctx.treasurer.user.pin_failed_attempts == 1
+    def test_ouverture_sans_pin_auteur_journalise(self, ctx):
+        """Décision client du 11/10/2026 : aucun PIN, l'auteur est journalisé."""
 
-    def test_pin_verrouille(self, ctx):
-        for _ in range(3):
-            with pytest.raises((InvalidPinError, PinLockedError)):
-                services.open_cash_session(club=ctx.club, user=ctx.treasurer.user, pin=WRONG_PIN)
-        with pytest.raises(PinLockedError):
-            services.open_cash_session(club=ctx.club, user=ctx.treasurer.user, pin=PIN)
-        assert CashSession.all_objects.count() == 0
+        session, created = services.open_cash_session(club=ctx.club, user=ctx.assistant_treasurer.user)
+        assert created is True
+        assert session.opened_by_id == ctx.assistant_treasurer.pk
+        assert_logged_by("treasury.cash_session.opened", ctx.assistant_treasurer.user, club=ctx.club)
+        ctx.assistant_treasurer.user.refresh_from_db()
 
-    def test_pin_absent(self, ctx):
-        treasurer = make_member(ctx.club, pin=None)
+    def test_tresorier_sans_pin_defini_ouvre_une_session(self, ctx):
+        """Un compte qui n'a jamais défini de PIN n'est plus bloqué."""
+
+        treasurer = make_member(ctx.club)
         MembershipRole.all_objects.filter(membership=ctx.treasurer).update(
             revoked_at=timezone.now(), revoked_by=ctx.president.user, revoked_reason="Remplacement"
         )
@@ -103,16 +97,14 @@ class TestOpening:
             club=ctx.club, membership=treasurer, role=MembershipRole.Role.TREASURER,
             appointed_by=ctx.president.user, appointed_at=timezone.now(),
         ).save()
-        with pytest.raises(PinNotSetError):
-            services.open_cash_session(club=ctx.club, user=treasurer.user, pin="")
-        assert CashSession.all_objects.count() == 0
+        session, created = services.open_cash_session(club=ctx.club, user=treasurer.user)
+        assert created is True and session.opened_by_id == treasurer.pk
 
-    def test_ecritures_gelees_refus_avant_le_pin(self, ctx):
+    def test_ecritures_gelees_refus(self, ctx):
         services.freeze_ledger(club=ctx.club, reason="Rupture simulée", actor=None)
         with pytest.raises(services.LedgerFrozenError):
-            services.open_cash_session(club=ctx.club, user=ctx.treasurer.user, pin=WRONG_PIN)
-        ctx.treasurer.user.refresh_from_db()
-        assert ctx.treasurer.user.pin_failed_attempts == 0
+            services.open_cash_session(club=ctx.club, user=ctx.treasurer.user)
+        assert CashSession.all_objects.count() == 0
 
     def test_journal_sans_pin(self, ctx):
         session = open_session(ctx)
@@ -125,13 +117,13 @@ class TestOpening:
 
     def test_aucun_champ_pin_sur_le_modele(self):
         names = {field.name for field in CashSession._meta.get_fields()}
-        assert not {name for name in names if "pin" in name} - {"pin_verified_at"}
+        assert not {name for name in names if "pin" in name}
 
     def test_reouverture_renvoie_la_session_valide(self, ctx):
         now = timezone.now()
         first = open_session(ctx, now=now)
         second, created = services.open_cash_session(
-            club=ctx.club, user=ctx.treasurer.user, pin=PIN, now=now + datetime.timedelta(minutes=5)
+            club=ctx.club, user=ctx.treasurer.user, now=now + datetime.timedelta(minutes=5)
         )
         assert created is False and second.pk == first.pk
         assert CashSession.all_objects.count() == 1
@@ -222,7 +214,8 @@ class TestCashPayment:
         assert payment.allocations.exists()
         assert services.verify_chain(ctx.club).ok
         ctx.treasurer.user.refresh_from_db()
-        assert ctx.treasurer.user.pin_failed_attempts == 0
+        # Auteur de l'encaissement journalisé (CLAUDE.md règles 6 et 7).
+        assert_logged_by("treasury.payment.validated", ctx.treasurer.user, club=ctx.club)
 
     def test_journal_avec_identifiant_de_session_sans_pin(self, ctx):
         monthly_type(ctx)

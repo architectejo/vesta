@@ -15,14 +15,15 @@ autre club renvoie 404, jamais 403 (pas de fuite d'existence).
 
 from __future__ import annotations
 
-from django.http import FileResponse
 from rest_framework import status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.clubs.models import Membership, MembershipRole
 from apps.core.permissions import HasAcceptedLatestTerms, HasCompletedPasswordSetup, HasUsableLicence
+from apps.core.private_files import private_file_response, safe_download_stem
 from apps.core.roles import has_any_role
 from apps.core.services import resolve_active_membership
 from apps.core.tenant import NoActiveClubError, get_active_club
@@ -34,11 +35,46 @@ from apps.medical.permissions import CanAccessMedicalPage, CanReportInjury, IsCl
 _GATE = [IsAuthenticated, HasCompletedPasswordSetup, HasAcceptedLatestTerms, HasUsableLicence]
 
 _MEMBER_NOT_FOUND = "Ce joueur n'existe pas dans ce club."
-_INJURY_NOT_FOUND = "Cet element n'existe plus."
+_INJURY_NOT_FOUND = "Cet élément n'existe plus."
 _DOCUMENT_NOT_FOUND = "Ce document n'existe pas."
 
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
+
+
+_NO_ACTIVE_CLUB = "Aucun club actif."
+
+
+def _active_club():
+    """Club actif de la requete, ou ``NoActiveClubError`` (jamais ``None``)."""
+
+    club = get_active_club()
+    if club is None:
+        raise NoActiveClubError(_NO_ACTIVE_CLUB)
+    return club
+
+
+class MedicalAPIView(APIView):
+    """Base des vues medicales : sans club actif, reponse 403 « Aucun club
+    actif. » (CLAUDE.md regle n8) au lieu d'une erreur serveur 500.
+
+    Le controle est fait avant les classes de permission par role (qui
+    refuseraient sinon avec un message de role trompeur) et, par
+    securite, ``handle_exception`` convertit aussi une ``NoActiveClubError``
+    levee plus loin (manager tenant-aware, ex. ``Membership.objects``).
+    Un utilisateur non authentifie garde son 401.
+    """
+
+    def check_permissions(self, request):
+        user = request.user
+        if getattr(user, "is_authenticated", False) and get_active_club() is None:
+            raise PermissionDenied(_NO_ACTIVE_CLUB)
+        super().check_permissions(request)
+
+    def handle_exception(self, exc):
+        if isinstance(exc, NoActiveClubError):
+            exc = PermissionDenied(_NO_ACTIVE_CLUB)
+        return super().handle_exception(exc)
 
 
 def _not_found(message):
@@ -86,7 +122,7 @@ def _injury_or_404(pk, club):
 # ---------------------------------------------------------------------------
 
 
-class HealthRecordDetailView(APIView):
+class HealthRecordDetailView(MedicalAPIView):
     """GET : Medecin (§4.2), joueur concerne (§4.10) ou President avec
     consentement actif (§4.6 « Consulter le dossier complet »).
     PATCH : « Modifier la fiche » (§4.5), reserve au Medecin."""
@@ -101,7 +137,7 @@ class HealthRecordDetailView(APIView):
             return services.view_health_record_as_player(membership=membership, actor=actor)
         if has_any_role(actor, {MembershipRole.Role.PRESIDENT}):
             return services.view_health_record_as_president(membership=membership, actor=actor)
-        raise services.MedicalPermissionError("Vous n'avez pas acces a cette fiche (CDC 2.4, 4.12).")
+        raise services.MedicalPermissionError("Vous n'avez pas accès à cette fiche.")
 
     def get(self, request, membership_id: int):
         membership, error = _membership_or_404(membership_id)
@@ -128,7 +164,7 @@ class HealthRecordDetailView(APIView):
         return Response(serializers_mod.serialize_health_record_full(record))
 
 
-class FitnessUpdateView(APIView):
+class FitnessUpdateView(MedicalAPIView):
     """« Modifier l'aptitude » (medical.md §4.4), reserve au Medecin."""
 
     permission_classes = _GATE + [IsClubDoctor]
@@ -157,7 +193,7 @@ class FitnessUpdateView(APIView):
 # ---------------------------------------------------------------------------
 
 
-class MySelfDeclarationView(APIView):
+class MySelfDeclarationView(MedicalAPIView):
     """« Mettre a jour ma declaration » (medical.md §4.10), reserve au joueur lui-meme."""
 
     permission_classes = _GATE
@@ -182,8 +218,8 @@ class MySelfDeclarationView(APIView):
         return Response(serializers_mod.serialize_health_record_full(record))
 
 
-class MyProcessingConsentView(APIView):
-    """Consentement au traitement des donnees de sante (CDC 4.12, 7.5),
+class MyProcessingConsentView(MedicalAPIView):
+    """Consentement au traitement des données de santé (CDC 4.12, 7.5),
     donne a la premiere connexion ou depuis « Ma fiche de sante »."""
 
     permission_classes = _GATE
@@ -197,7 +233,7 @@ class MyProcessingConsentView(APIView):
         return Response({"consent_given_at": record.consent_given_at})
 
 
-class MyPresidentAccessView(APIView):
+class MyPresidentAccessView(MedicalAPIView):
     """« Consentement medical » (medical.md §4.11) : etat, octroi, revocation."""
 
     permission_classes = _GATE
@@ -232,7 +268,7 @@ class MyPresidentAccessView(APIView):
 # ---------------------------------------------------------------------------
 
 
-class InjuryListCreateView(APIView):
+class InjuryListCreateView(MedicalAPIView):
     """POST : « Declarer une blessure » (§4.1), Coach/Capitaine/Medecin."""
 
     permission_classes = _GATE + [CanReportInjury]
@@ -252,7 +288,7 @@ class InjuryListCreateView(APIView):
 
             event = Event.objects.filter(pk=event_id).first()
             if event is None:
-                return _not_found("Cet evenement n'existe pas dans ce club.")
+                return _not_found("Cet événement n'existe pas dans ce club.")
 
         try:
             injury = services.report_injury(
@@ -268,14 +304,14 @@ class InjuryListCreateView(APIView):
         return Response(serializers_mod.serialize_injury_detail(injury), status=status.HTTP_201_CREATED)
 
 
-class InjuryDetailView(APIView):
+class InjuryDetailView(MedicalAPIView):
     """GET : Medecin, joueur concerne, President avec consentement actif
     pour ce joueur (medical.md §4.3)."""
 
     permission_classes = _GATE
 
     def get(self, request, pk: int):
-        club = get_active_club()
+        club = _active_club()
         injury, error = _injury_or_404(pk, club)
         if error:
             return error
@@ -291,26 +327,20 @@ class InjuryDetailView(APIView):
         )
         if not allowed:
             return Response(
-                {"detail": "Vous n'avez pas acces a cette blessure (CDC 2.4, 4.12)."},
+                {"detail": "Vous n'avez pas accès à cette blessure."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if has_any_role(actor, {MembershipRole.Role.PRESIDENT}) and actor.id != membership.user_id:
-            # schema §6 / medical.md §8 : « Ouverture du dossier complet (et
-            # de chaque blessure) par le President » -- journalisee comme le
-            # reste du dossier.
-            services.log_action(
-                actor=actor, club=club, action_type="medical.record.viewed_by_president", obj=injury
-            )
+        services.log_injury_viewed(actor=actor, injury=injury)
         return Response(serializers_mod.serialize_injury_detail(injury))
 
 
-class InjuryCompleteView(APIView):
+class InjuryCompleteView(MedicalAPIView):
     """« Completer la blessure »/« Modifier le bilan » (§4.7), Medecin."""
 
     permission_classes = _GATE + [IsClubDoctor]
 
     def patch(self, request, pk: int):
-        club = get_active_club()
+        club = _active_club()
         injury, error = _injury_or_404(pk, club)
         if error:
             return error
@@ -333,13 +363,13 @@ class InjuryCompleteView(APIView):
         return Response(serializers_mod.serialize_injury_detail(injury))
 
 
-class InjuryFollowUpListCreateView(APIView):
+class InjuryFollowUpListCreateView(MedicalAPIView):
     """« Ajouter un suivi » (§4.8), Medecin."""
 
     permission_classes = _GATE + [IsClubDoctor]
 
     def post(self, request, pk: int):
-        club = get_active_club()
+        club = _active_club()
         injury, error = _injury_or_404(pk, club)
         if error:
             return error
@@ -359,13 +389,13 @@ class InjuryFollowUpListCreateView(APIView):
         return Response(serializers_mod.serialize_followup(followup), status=status.HTTP_201_CREATED)
 
 
-class InjuryReturnView(APIView):
+class InjuryReturnView(MedicalAPIView):
     """« Declarer le retour » (§4.9), Medecin."""
 
     permission_classes = _GATE + [IsClubDoctor]
 
     def post(self, request, pk: int):
-        club = get_active_club()
+        club = _active_club()
         injury, error = _injury_or_404(pk, club)
         if error:
             return error
@@ -385,36 +415,36 @@ class InjuryReturnView(APIView):
 # ---------------------------------------------------------------------------
 
 
-class InjuriesToCompleteView(APIView):
+class InjuriesToCompleteView(MedicalAPIView):
     """§3.1, Medecin uniquement."""
 
     permission_classes = _GATE + [IsClubDoctor]
 
     def get(self, request):
-        club = get_active_club()
+        club = _active_club()
         items, next_offset = _paginate(request, services.list_injuries_to_complete(club))
         return Response({"results": [serializers_mod.serialize_injury_list_item(i) for i in items], "next_offset": next_offset})
 
 
-class RecentInjuriesView(APIView):
+class RecentInjuriesView(MedicalAPIView):
     """§3.4, Medecin uniquement."""
 
     permission_classes = _GATE + [IsClubDoctor]
 
     def get(self, request):
-        club = get_active_club()
+        club = _active_club()
         items = services.list_recent_injuries(club, limit=5)
         return Response({"results": [serializers_mod.serialize_injury_list_item(i) for i in items]})
 
 
-class UnfitAndRestrictedView(APIView):
+class UnfitAndRestrictedView(MedicalAPIView):
     """§3.2, Medecin/Coach/President. Journalise la consultation par le
     Coach/President (point ouvert 9)."""
 
     permission_classes = _GATE + [CanAccessMedicalPage]
 
     def get(self, request):
-        club = get_active_club()
+        club = _active_club()
         actor = request.user
         is_doctor = has_any_role(actor, {MembershipRole.Role.DOCTOR})
         if not is_doctor:
@@ -437,14 +467,14 @@ class UnfitAndRestrictedView(APIView):
 # ---------------------------------------------------------------------------
 
 
-class InjuryDocumentUploadView(APIView):
+class InjuryDocumentUploadView(MedicalAPIView):
     """Televersement d'une piece jointe sur une blessure, reserve au
     Medecin (CDC 6.7)."""
 
     permission_classes = _GATE + [IsClubDoctor]
 
     def post(self, request, pk: int):
-        club = get_active_club()
+        club = _active_club()
         injury, error = _injury_or_404(pk, club)
         if error:
             return error
@@ -460,25 +490,26 @@ class InjuryDocumentUploadView(APIView):
         return Response({"id": document.pk}, status=status.HTTP_201_CREATED)
 
 
-class MedicalDocumentDownloadView(APIView):
+class MedicalDocumentDownloadView(MedicalAPIView):
     """Telechargement authentifie (CDC 6.7, 7.6) : jamais servi depuis
     ``public_html`` -- verifie le club (404 hors club) et le role (403,
-    meme regle N2 que le dossier medical)."""
+    meme regle N2 que le dossier médical)."""
 
     permission_classes = _GATE
 
     def get(self, request, pk: int):
-        club = get_active_club()
+        club = _active_club()
         document = MedicalDocument.all_objects.filter(pk=pk, club_id=club.id).first()
         if document is None:
             return _not_found(_DOCUMENT_NOT_FOUND)
         if not services.can_access_document(viewer=request.user, document=document):
             return Response(
-                {"detail": "Vous n'avez pas acces a ce document (CDC 2.4, 6.7)."},
+                {"detail": "Vous n'avez pas accès à ce document."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        return FileResponse(
-            document.file.open("rb"),
-            as_attachment=True,
-            filename=document.original_filename or document.file.name,
+        services.log_document_viewed(actor=request.user, document=document)
+        # Type et extension deduits du contenu reel ; le nom saisi par le
+        # client n'est repris que comme radical assaini.
+        return private_file_response(
+            document.file, download_stem=safe_download_stem(document.original_filename, f"document-{document.pk}")
         )

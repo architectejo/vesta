@@ -190,7 +190,7 @@ describe("ImportContributionsModal", () => {
     expect(await screen.findByText("Jean Kabila")).toBeInTheDocument();
   });
 
-  it("demande le code PIN avant d'importer, puis affiche le résultat", async () => {
+  it("importe seulement après confirmation, sans champ PIN, puis affiche le résultat", async () => {
     vi.mocked(getGridContributionTypes).mockResolvedValue(TYPES_RESPONSE);
     vi.mocked(previewContributionImport).mockResolvedValue(buildReport());
     vi.mocked(createContributionImport).mockResolvedValue(
@@ -215,17 +215,18 @@ describe("ImportContributionsModal", () => {
     await screen.findByText("Étape 2 sur 3 · Aperçu");
 
     await user.click(screen.getByRole("button", { name: "Importer 1 ligne(s)" }));
-    const pinInput = await screen.findByLabelText("Votre code PIN");
+    await screen.findByRole("dialog", { name: /Importer 1 paiement\(s\)/ });
+    expect(screen.queryByLabelText(/PIN/i)).not.toBeInTheDocument();
     expect(createContributionImport).not.toHaveBeenCalled();
 
-    await user.type(pinInput, "1234");
     await user.click(screen.getByRole("button", { name: "Importer" }));
 
     await waitFor(() =>
       expect(createContributionImport).toHaveBeenCalledWith(
-        expect.objectContaining({ contribution_type_id: 1, year: 2026, pin: "1234" }),
+        expect.objectContaining({ contribution_type_id: 1, year: 2026 }),
       ),
     );
+    expect(vi.mocked(createContributionImport).mock.calls[0]?.[0]).not.toHaveProperty("pin");
     expect(await screen.findByText("Import terminé.")).toBeInTheDocument();
   });
 
@@ -256,8 +257,7 @@ describe("ImportContributionsModal", () => {
 
     await fillStep1(user);
     await user.click(screen.getByRole("button", { name: "Importer 1 ligne(s)" }));
-    await user.type(await screen.findByLabelText("Votre code PIN"), "1234");
-    await user.click(screen.getByRole("button", { name: "Importer" }));
+    await user.click(await screen.findByRole("button", { name: "Importer" }));
 
     const downloadButton = await screen.findByRole("button", { name: "Télécharger le rapport (CSV)" });
     await user.click(downloadButton);
@@ -266,21 +266,20 @@ describe("ImportContributionsModal", () => {
     expect(triggerBlobDownload).toHaveBeenCalledWith(expect.any(Blob), "rapport-import-cotisations-2026.csv");
   });
 
-  it("affiche le nombre d'essais restants sur un code PIN incorrect", async () => {
+  it("affiche l'erreur de l'API dans l'étape d'aperçu si l'import échoue", async () => {
     vi.mocked(getGridContributionTypes).mockResolvedValue(TYPES_RESPONSE);
     vi.mocked(previewContributionImport).mockResolvedValue(buildReport());
     const { ApiError } = await import("../../api/client");
     vi.mocked(createContributionImport).mockRejectedValue(
-      new ApiError(400, { detail: "Code PIN incorrect.", attempts_remaining: 2 }),
+      new ApiError(400, { detail: "Les écritures de cette période sont gelées." }),
     );
     const user = userEvent.setup();
     renderModal();
 
     await fillStep1(user);
     await user.click(screen.getByRole("button", { name: "Importer 1 ligne(s)" }));
-    await user.type(await screen.findByLabelText("Votre code PIN"), "0000");
-    await user.click(screen.getByRole("button", { name: "Importer" }));
+    await user.click(await screen.findByRole("button", { name: "Importer" }));
 
-    expect(await screen.findByText("Code PIN incorrect. Il vous reste 2 essais.")).toBeInTheDocument();
+    expect(await screen.findByText("Les écritures de cette période sont gelées.")).toBeInTheDocument();
   });
 });

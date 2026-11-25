@@ -13,7 +13,7 @@ from rest_framework import status
 
 from apps.sport import services
 from apps.sport.tests.conftest import client_for
-from apps.sport.tests.factories import SessionFactory
+from apps.sport.tests.factories import MatchFactory, SessionFactory
 
 pytestmark = pytest.mark.django_db
 
@@ -24,6 +24,74 @@ def test_no_event_today_returns_empty_locker_room(ctx):
     assert response.status_code == status.HTTP_200_OK
     assert response.data["session"] is None
     assert response.data["match"] is None
+    assert response.data["next_event"] is None
+
+
+def test_no_event_today_exposes_next_upcoming_session(ctx):
+    """sport-vestiaire.md §6 : « Prochain rendez-vous : {Séance · dimanche
+    4 octobre · 07:30} » si l'API en renvoie un -- régression du constat
+    initial de la tâche (l'API ne renvoyait jamais cette précision)."""
+
+    today = services.get_club_today(ctx.club)
+    session = SessionFactory(
+        club=ctx.club,
+        event__club=ctx.club,
+        event__season=ctx.season,
+        event__event_date=today + datetime.timedelta(days=4),
+        gathering_time=datetime.time(7, 30),
+    )
+
+    response = client_for(ctx.player.user).get(reverse("sport:locker-room"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["session"] is None
+    assert response.data["match"] is None
+    assert response.data["next_event"] == {
+        "type": "session",
+        "id": session.event_id,
+        "event_date": session.event.event_date,
+        "gathering_time": datetime.time(7, 30),
+        "location": session.location,
+    }
+
+
+def test_no_event_today_exposes_next_upcoming_match(ctx):
+    today = services.get_club_today(ctx.club)
+    match = MatchFactory(
+        club=ctx.club,
+        event__club=ctx.club,
+        event__season=ctx.season,
+        event__event_date=today + datetime.timedelta(days=2),
+        kickoff_time=datetime.time(15, 0),
+    )
+
+    response = client_for(ctx.player.user).get(reverse("sport:locker-room"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["next_event"]["type"] == "match"
+    assert response.data["next_event"]["id"] == match.event_id
+    assert response.data["next_event"]["kickoff_time"] == datetime.time(15, 0)
+
+
+def test_next_event_is_absent_when_an_event_happens_today(ctx):
+    """Le champ ne doit JAMAIS apparaître quand l'événement du jour n'est
+    pas vide (``session``/``match`` déjà renseignés) : ne pas alourdir ce
+    cas, demande explicite de la tâche."""
+
+    today = services.get_club_today(ctx.club)
+    SessionFactory(club=ctx.club, event__club=ctx.club, event__season=ctx.season, event__event_date=today)
+    MatchFactory(
+        club=ctx.club,
+        event__club=ctx.club,
+        event__season=ctx.season,
+        event__event_date=today + datetime.timedelta(days=3),
+    )
+
+    response = client_for(ctx.player.user).get(reverse("sport:locker-room"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["session"] is not None
+    assert response.data["next_event"] is None
 
 
 def test_locker_room_reflects_todays_session_and_own_situation(ctx):

@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from rest_framework.permissions import BasePermission
 
-from apps.clubs.models import MembershipRole
-from apps.core.roles import has_any_role
+from apps.clubs.models import COACHING_STAFF_ROLES, MembershipRole
+from apps.core.roles import HasClubRole, has_any_role, is_ghost_read_access
 from apps.core.services import resolve_active_membership
 from apps.core.tenant import NoActiveClubError
 
@@ -28,12 +28,14 @@ class IsActiveClubMember(BasePermission):
     « L » -- de Pdt a Joueur -- sur la nomination du bureau/Medecin, le
     Coach, le Capitaine et les parametres de titulaires par role)."""
 
-    message = "Une adhesion active dans un club est requise pour consulter cette ressource (CDC 2.4)."
+    message = "Une adhésion active dans un club est requise pour consulter cette ressource."
 
     def has_permission(self, request, view) -> bool:
         user = request.user
         if not getattr(user, "is_authenticated", False):
             return False
+        if is_ghost_read_access(request):
+            return True
         try:
             resolve_active_membership(user)
         except NoActiveClubError:
@@ -47,7 +49,7 @@ class IsClubPresident(BasePermission):
     designation des recruteurs et les parametres de titulaires par role ;
     CDC 2.3)."""
 
-    message = "Reserve au President du club (CDC 2.3, 2.4)."
+    message = "Réservé au Président du club."
 
     def has_permission(self, request, view) -> bool:
         user = request.user
@@ -64,7 +66,7 @@ class CanAddOrImportPlayers(BasePermission):
     designation (« joueur autorise a ajouter des joueurs », nomme par le
     President -- voir ``apps.clubs.services.appoint_president_nominated_role``)."""
 
-    message = "Reserve au President ou a un joueur autorise a ajouter des joueurs (CDC 2.4, 4.1)."
+    message = "Réservé au Président ou à un joueur autorisé à ajouter des joueurs."
 
     def has_permission(self, request, view) -> bool:
         user = request.user
@@ -83,7 +85,7 @@ class CanRecordMembershipFeePayment(BasePermission):
     tache 1.4b) contre une consigne initiale erronee qui incluait le
     President."""
 
-    message = "Reserve au Tresorier ou au Tresorier adjoint (CDC 2.4, 4.3, 4.4.4)."
+    message = "Réservé au Trésorier ou au Trésorier adjoint."
 
     def has_permission(self, request, view) -> bool:
         user = request.user
@@ -123,13 +125,40 @@ def can_access_membership_application_file(*, user, application) -> bool:
 
 
 class IsClubCoach(BasePermission):
-    """Reserve au Coach du club actif (matrice 2.4 : « É » sur le choix du
-    Capitaine ; CDC 2.3)."""
+    """Reserve au staff technique du club actif : le Coach ET l'Assistant du
+    Coach (memes droits, CDC 10.3 n179). Matrice 2.4 : « É » sur le choix du
+    Capitaine ; CDC 2.3."""
 
-    message = "Reserve au Coach du club (CDC 2.3, 2.4)."
+    message = "Réservé au Coach du club ou à son assistant."
+
+    def has_permission(self, request, view) -> bool:
+        user = request.user
+        if not getattr(user, "is_authenticated", False):
+            return False
+        return has_any_role(user, COACHING_STAFF_ROLES)
+
+
+class IsClubHeadCoach(BasePermission):
+    """Reserve au Coach lui-meme, jamais a son assistant : nommer ou retirer
+    l'Assistant du Coach (CDC 10.3 n179, decision b)."""
+
+    message = "Seul le Coach du club peut nommer ou retirer un assistant."
 
     def has_permission(self, request, view) -> bool:
         user = request.user
         if not getattr(user, "is_authenticated", False):
             return False
         return has_any_role(user, {MembershipRole.Role.COACH})
+
+
+class IsPresidentOrVicePresident(HasClubRole):
+    """Reserve au President et au Vice-president du club actif (matrice 2.4 :
+    lecture des paiements, de la grille, des depenses, du materiel, evaluations ;
+    sante : aptitude seulement). Roles cumulables (union, CDC 2.2) : un joueur
+    qui porte aussi un autre role garde l'acces ; un Vice-president revoque, ou
+    un poste vacant, n'ouvre rien (seuls les roles ACTIFS comptent). Le
+    Superuser en session de support (Ghost Mode) lit comme le President
+    (fiche tableau-de-bord-bureau §2) ; hors session, il n'a aucun acces."""
+
+    required_roles = frozenset({MembershipRole.Role.PRESIDENT, MembershipRole.Role.VICE_PRESIDENT})
+    message = "Cette page est réservée au Président et au Vice-président."

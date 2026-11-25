@@ -69,7 +69,7 @@ function renderPage(initialPath = "/plans/1/tableau") {
         <MemoryRouter initialEntries={[initialPath]}>
           <Routes>
             <Route path="/plans/:id/tableau" element={<TableauNoirPage />} />
-            <Route path="/plans" element={<p>Page des plans</p>} />
+            <Route path="/vestiaire" element={<p>Page des plans</p>} />
           </Routes>
         </MemoryRouter>
       </ToastProvider>
@@ -82,7 +82,7 @@ describe("TableauNoirPage", () => {
     vi.mocked(listClubPlayers).mockResolvedValue([]);
   });
 
-  it("redirige un non-Coach vers /plans", async () => {
+  it("redirige un non-Coach vers l'onglet Plans du Vestiaire", async () => {
     vi.mocked(getMyProfile).mockResolvedValue(makeProfile());
     vi.mocked(getTacticalPlan).mockResolvedValue(makePlan());
     renderPage();

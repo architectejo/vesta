@@ -44,13 +44,22 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.base import ContentFile
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-from apps.accounts.services import require_valid_pin
-from apps.assemblies.models import AgendaItem, Assembly, AssemblyAttendance, Decision, Minutes
+from apps.core.private_files import rename_upload_to_real_type
+from apps.assemblies.models import (
+    AgendaItem,
+    ArchivedDocument,
+    Assembly,
+    AssemblyAttendance,
+    Decision,
+    Minutes,
+)
 from apps.clubs.models import ClubSettings, Membership, MembershipRole
 from apps.core.roles import get_active_roles, has_any_role
 from apps.core.services import log_action
@@ -72,6 +81,11 @@ __all__ = [
     "sign_minutes",
     "update_quorum_threshold",
     "send_assembly_reminders",
+    "archive_document",
+    "replace_archived_document",
+    "withdraw_archived_document",
+    "record_archived_document_access",
+    "filter_archived_documents",
 ]
 
 
@@ -101,7 +115,7 @@ class AssemblyLockedError(AssemblyError):
 def _club_settings(club) -> ClubSettings:
     club_settings = ClubSettings.objects.filter(club_id=club.id).first()
     if club_settings is None:
-        raise AssemblyValidationError("Les parametres du club (fuseau horaire, quorum) ne sont pas configures.")
+        raise AssemblyValidationError("Les paramètres du club (fuseau horaire, quorum) ne sont pas configurés.")
     return club_settings
 
 
@@ -139,7 +153,7 @@ def convene_assembly(
     agenda_items: list[dict],
     now=None,
 ) -> Assembly:
-    """Convoque une AG (President, VP -- verifie par la vue). Exige au
+    """Convoque une AG (President, VP, Secretaire -- verifie par la vue). Exige au
     moins un point a l'ordre du jour et une date future (fuseau du club).
     Notifie tous les joueurs actifs (convocation, in-app + email -- CDC
     4.17) et journalise (assemblees-page-ag.md §4.7)."""
@@ -147,9 +161,9 @@ def convene_assembly(
     now = now or timezone.now()
 
     if scheduled_date <= _club_today(club, now=now):
-        raise AssemblyValidationError("La date doit etre dans le futur.")
+        raise AssemblyValidationError("La date doit être dans le futur.")
     if not agenda_items:
-        raise AssemblyValidationError("Ajoutez au moins un point a l'ordre du jour.")
+        raise AssemblyValidationError("Ajoutez au moins un point à l'ordre du jour.")
 
     assembly = Assembly(
         club=club,
@@ -165,7 +179,7 @@ def convene_assembly(
     for index, item in enumerate(agenda_items, start=1):
         title = (item.get("title") or "").strip()
         if not title:
-            raise AssemblyValidationError("Ajoutez au moins un point a l'ordre du jour.")
+            raise AssemblyValidationError("Ajoutez au moins un point à l'ordre du jour.")
         AgendaItem.all_objects.create(
             club=club,
             assembly=assembly,
@@ -199,8 +213,8 @@ def _notify_all_active_members_of_convocation(club, assembly: Assembly, *, now) 
 
     type_label = "ordinaire" if assembly.assembly_type == Assembly.AssemblyType.ORDINARY else "extraordinaire"
     message = (
-        f"Assemblee generale {type_label} le {assembly.scheduled_date.strftime('%d/%m/%Y')} "
-        f"a {assembly.scheduled_time.strftime('%H:%M')}, {assembly.location or 'lieu a confirmer'}."
+        f"Assemblée générale {type_label} le {assembly.scheduled_date.strftime('%d/%m/%Y')} "
+        f"à {assembly.scheduled_time.strftime('%H:%M')}, {assembly.location or 'lieu à confirmer'}."
     )
     memberships = Membership.all_objects.filter(club=club, status=Membership.Status.ACTIVE).select_related("user")
     for membership in memberships:
@@ -269,7 +283,7 @@ def get_quorum(assembly: Assembly) -> QuorumResult:
 def _ensure_assembly_day(assembly: Assembly, *, now) -> None:
     if _club_today(assembly.club, now=now) != assembly.scheduled_date:
         raise AssemblyLockedError(
-            "Les presences ne peuvent etre pointees que le jour de l'assemblee (CDC 4.15)."
+            "Les présences ne peuvent être pointées que le jour de l'assemblée."
         )
 
 
@@ -277,7 +291,7 @@ def mark_attendance(*, assembly: Assembly, actor, membership: Membership, now=No
     now = now or timezone.now()
     _ensure_assembly_day(assembly, now=now)
     if membership.club_id != assembly.club_id:
-        raise AssemblyValidationError("Ce joueur n'appartient pas a ce club.")
+        raise AssemblyValidationError("Ce joueur n'appartient pas à ce club.")
 
     attendance, _created = AssemblyAttendance.all_objects.get_or_create(
         club=assembly.club,
@@ -307,7 +321,7 @@ def remove_attendance(*, assembly: Assembly, actor, membership: Membership, now=
     try:
         attendance = AssemblyAttendance.all_objects.get(club=assembly.club, assembly=assembly, membership=membership)
     except AssemblyAttendance.DoesNotExist:
-        raise AssemblyValidationError("Ce joueur n'a pas ete pointe present.") from None
+        raise AssemblyValidationError("Ce joueur n'a pas été pointé présent.") from None
 
     log_action(
         actor=actor,
@@ -340,13 +354,13 @@ def record_decision(
 ) -> Decision:
     now = now or timezone.now()
     if agenda_item.assembly_id != assembly.id:
-        raise AssemblyValidationError("Ce point n'appartient pas a cette assemblee.")
+        raise AssemblyValidationError("Ce point n'appartient pas à cette assemblée.")
     outcome = (outcome or "").strip()
     if not outcome:
         raise AssemblyValidationError("Ce champ est obligatoire.")
     for label, value in (("Pour", votes_for), ("Contre", votes_against), ("Abstention", votes_abstain)):
         if value is None or value < 0:
-            raise AssemblyValidationError(f"« {label} » doit etre superieur ou egal a 0.")
+            raise AssemblyValidationError(f"« {label} » doit être supérieur ou égal à 0.")
 
     decision = Decision.all_objects.filter(club=assembly.club, agenda_item=agenda_item).first()
     before = None
@@ -405,30 +419,44 @@ def record_decision(
 
 
 def _get_or_init_minutes(assembly: Assembly) -> Minutes:
-    minutes = Minutes.all_objects.filter(club=assembly.club, assembly=assembly).first()
+    """Renvoie le PV de l'AG, verrouille en ecriture (``select_for_update``),
+    en le creant s'il n'existe pas encore (get_or_create verrouille : deux
+    appels concurrents convergent sur la meme ligne, cle primaire = AG).
+
+    A appeler DANS une transaction (``transaction.atomic``) : le verrou
+    n'est tenu que jusqu'a sa fin."""
+
+    queryset = Minutes.all_objects.select_for_update().filter(club=assembly.club, assembly=assembly)
+    minutes = queryset.first()
     if minutes is None:
-        minutes = Minutes(club=assembly.club, assembly=assembly, content="")
+        try:
+            with transaction.atomic():
+                Minutes(club=assembly.club, assembly=assembly, content="").save(force_insert=True)
+        except IntegrityError:
+            pass  # cree entre-temps par un appel concurrent
+        minutes = queryset.get()
     return minutes
 
 
 def draft_minutes(*, assembly: Assembly, actor, content: str, now=None) -> Minutes:
     now = now or timezone.now()
-    minutes = _get_or_init_minutes(assembly)
-    if minutes.president_signed_by_id is not None:
-        raise AssemblyLockedError("Le PV ne peut plus etre modifie apres une signature.")
+    with transaction.atomic():
+        minutes = _get_or_init_minutes(assembly)
+        if minutes.president_signed_by_id is not None:
+            raise AssemblyLockedError("Le PV ne peut plus être modifié après une signature.")
 
-    before = {"content": minutes.content} if minutes.pk else None
-    minutes.content = content or ""
-    minutes.save()
+        before = {"content": minutes.content}
+        minutes.content = content or ""
+        minutes.save()
 
-    log_action(
-        actor=actor,
-        club=assembly.club,
-        action_type="assemblies.minutes.drafted",
-        obj=minutes,
-        before=before,
-        after={"content": minutes.content},
-    )
+        log_action(
+            actor=actor,
+            club=assembly.club,
+            action_type="assemblies.minutes.drafted",
+            obj=minutes,
+            before=before,
+            after={"content": minutes.content},
+        )
     return minutes
 
 
@@ -438,8 +466,8 @@ def _active_vice_presidents(club):
     ).select_related("membership__user")
 
 
-def sign_minutes(*, assembly: Assembly, actor, pin: str, now=None) -> Minutes:
-    """Signature du PV par code PIN (CDC 7.2, 10.2 n° 28).
+def sign_minutes(*, assembly: Assembly, actor, now=None) -> Minutes:
+    """Signature du PV (sans code PIN ; décision client du 11/10/2026).
 
     Determine le role de signature a partir des roles REELS de l'acteur
     dans le club (jamais transmis par le client) : President en priorite
@@ -457,72 +485,74 @@ def sign_minutes(*, assembly: Assembly, actor, pin: str, now=None) -> Minutes:
     elif MembershipRole.Role.VICE_PRESIDENT in roles:
         signing_role = "vice_president"
     else:
-        raise AssemblyPermissionError("Reserve au President et au Vice-president (CDC 2.4, 4.15).")
+        raise AssemblyPermissionError("Réservé au Président et au Vice-président.")
 
-    minutes = _get_or_init_minutes(assembly)
-    if minutes.is_complete:
-        raise AssemblyLockedError("Le procès-verbal est deja complet.")
+    with transaction.atomic():
+        # PV verrouille (get_or_create verrouille) : `is_complete` et les
+        # `*_signed_by_id` sont lus APRES le verrou, donc deux signatures
+        # concurrentes se serialisent sans perdre celle de l'autre.
+        minutes = _get_or_init_minutes(assembly)
+        if minutes.is_complete:
+            raise AssemblyLockedError("Le procès-verbal est déjà complet.")
 
-    require_valid_pin(user=actor, pin=pin)
-
-    before = {
-        "president_signed": minutes.president_signed_by_id is not None,
-        "vp_signed": minutes.vp_signed_by_id is not None,
-        "vp_vacant_at_signature": minutes.vp_vacant_at_signature,
-        "vp_role_held_by_president": minutes.vp_role_held_by_president,
-    }
-
-    if signing_role == "president":
-        if minutes.president_signed_by_id is not None:
-            raise AssemblyValidationError("Le President a deja signe ce procès-verbal.")
-        minutes.president_signed_by = actor
-        minutes.president_signed_at = now
-    else:
-        if minutes.vp_signed_by_id is not None:
-            raise AssemblyValidationError("Le Vice-president a deja signe ce procès-verbal.")
-        minutes.vp_signed_by = actor
-        minutes.vp_signed_at = now
-        minutes.vp_vacant_at_signature = False
-
-    # Vacance du VP appreciee a CHAQUE evenement de signature tant que le
-    # PV n'est pas complet (schema §9.5 : `vp_vacant_at_signature`, pas la
-    # date de l'AG -- voir docstring du module). Si le seul titulaire actif
-    # du role Vice-president est la personne qui vient de signer au titre
-    # de President (cumul de roles), sa signature de President couvre deja
-    # les deux -- « signe une seule fois » (assemblees-page-ag.md §2) :
-    # on l'exclut du calcul de vacance pour ne pas attendre une seconde
-    # signature qu'elle ne pourra jamais donner. On distingue ce cas d'une
-    # vacance reelle via `vp_role_held_by_president` : le PV n'a pas le
-    # droit d'afficher « poste vacant » quand le poste est occupe (voir
-    # docs/annexes/modeles-documents.md §8 point 5, point ouvert non tranche
-    # par le client -- seul le cas objectivement faux est corrige ici).
-    if minutes.vp_signed_by_id is None:
-        active_vps = _active_vice_presidents(club)
-        president_holds_vp = (
-            minutes.president_signed_by_id is not None
-            and active_vps.filter(membership__user_id=minutes.president_signed_by_id).exists()
-        )
-        other_active_vps = active_vps
-        if minutes.president_signed_by_id is not None:
-            other_active_vps = other_active_vps.exclude(membership__user_id=minutes.president_signed_by_id)
-        minutes.vp_vacant_at_signature = not other_active_vps.exists()
-        minutes.vp_role_held_by_president = minutes.vp_vacant_at_signature and president_holds_vp
-
-    minutes.save()
-
-    log_action(
-        actor=actor,
-        club=club,
-        action_type="assemblies.minutes.signed",
-        obj=minutes,
-        before=before,
-        after={
+        before = {
             "president_signed": minutes.president_signed_by_id is not None,
             "vp_signed": minutes.vp_signed_by_id is not None,
             "vp_vacant_at_signature": minutes.vp_vacant_at_signature,
             "vp_role_held_by_president": minutes.vp_role_held_by_president,
-        },
-    )
+        }
+
+        if signing_role == "president":
+            if minutes.president_signed_by_id is not None:
+                raise AssemblyValidationError("Le Président a déjà signé ce procès-verbal.")
+            minutes.president_signed_by = actor
+            minutes.president_signed_at = now
+        else:
+            if minutes.vp_signed_by_id is not None:
+                raise AssemblyValidationError("Le Vice-président a déjà signé ce procès-verbal.")
+            minutes.vp_signed_by = actor
+            minutes.vp_signed_at = now
+            minutes.vp_vacant_at_signature = False
+
+        # Vacance du VP appreciee a CHAQUE evenement de signature tant que le
+        # PV n'est pas complet (schema §9.5 : `vp_vacant_at_signature`, pas la
+        # date de l'AG -- voir docstring du module). Si le seul titulaire actif
+        # du role Vice-president est la personne qui vient de signer au titre
+        # de President (cumul de roles), sa signature de President couvre deja
+        # les deux -- « signe une seule fois » (assemblees-page-ag.md §2) :
+        # on l'exclut du calcul de vacance pour ne pas attendre une seconde
+        # signature qu'elle ne pourra jamais donner. On distingue ce cas d'une
+        # vacance reelle via `vp_role_held_by_president` : le PV n'a pas le
+        # droit d'afficher « poste vacant » quand le poste est occupe (voir
+        # docs/annexes/modeles-documents.md §8 point 5, point ouvert non tranche
+        # par le client -- seul le cas objectivement faux est corrige ici).
+        if minutes.vp_signed_by_id is None:
+            active_vps = _active_vice_presidents(club)
+            president_holds_vp = (
+                minutes.president_signed_by_id is not None
+                and active_vps.filter(membership__user_id=minutes.president_signed_by_id).exists()
+            )
+            other_active_vps = active_vps
+            if minutes.president_signed_by_id is not None:
+                other_active_vps = other_active_vps.exclude(membership__user_id=minutes.president_signed_by_id)
+            minutes.vp_vacant_at_signature = not other_active_vps.exists()
+            minutes.vp_role_held_by_president = minutes.vp_vacant_at_signature and president_holds_vp
+
+        minutes.save()
+
+        log_action(
+            actor=actor,
+            club=club,
+            action_type="assemblies.minutes.signed",
+            obj=minutes,
+            before=before,
+            after={
+                "president_signed": minutes.president_signed_by_id is not None,
+                "vp_signed": minutes.vp_signed_by_id is not None,
+                "vp_vacant_at_signature": minutes.vp_vacant_at_signature,
+                "vp_role_held_by_president": minutes.vp_role_held_by_president,
+            },
+        )
 
     if minutes.is_complete:
         _generate_minutes_pdf(minutes)
@@ -796,7 +826,7 @@ def _build_minutes_pdf(minutes: Minutes) -> bytes:
         signed_local = minutes.president_signed_at.astimezone(tz)
         president_lines.append(
             (
-                f"Signé par code PIN par {president_name}, Président, le "
+                f"Signé électroniquement par {president_name}, Président, le "
                 f"{signed_local.strftime('%d/%m/%Y')} à {signed_local.strftime('%H:%M')}",
                 "Helvetica",
                 9,
@@ -812,7 +842,7 @@ def _build_minutes_pdf(minutes: Minutes) -> bytes:
         vp_lines = [
             (vp_name, "Helvetica-Bold", 10, DARK_TEXT_RGB),
             (
-                f"Signé par code PIN par {vp_name}, Vice-président, le "
+                f"Signé électroniquement par {vp_name}, Vice-président, le "
                 f"{signed_local.strftime('%d/%m/%Y')} à {signed_local.strftime('%H:%M')}",
                 "Helvetica",
                 9,
@@ -835,7 +865,7 @@ def _build_minutes_pdf(minutes: Minutes) -> bytes:
 
     y = box_top - box_height - 6 * mm
     write_lines(
-        "Signatures électroniques par code PIN personnel, enregistrées dans le journal d'activité du club.",
+        "Signatures électroniques, enregistrées dans le journal d'activité du club.",
         font="Helvetica-Oblique",
         size=9,
     )
@@ -919,8 +949,8 @@ def send_assembly_reminders(*, now=None) -> dict[str, int]:
             continue
 
         message = (
-            f"Rappel : assemblee generale demain a {assembly.scheduled_time.strftime('%H:%M')}, "
-            f"{assembly.location or 'lieu a confirmer'}."
+            f"Rappel : assemblée générale demain à {assembly.scheduled_time.strftime('%H:%M')}, "
+            f"{assembly.location or 'lieu à confirmer'}."
         )
         memberships = Membership.all_objects.filter(
             club=assembly.club, status=Membership.Status.ACTIVE
@@ -939,3 +969,179 @@ def send_assembly_reminders(*, now=None) -> dict[str, int]:
         sent += 1
 
     return {"reminders_sent": sent}
+
+
+# ---------------------------------------------------------------------------
+# Archive des documents officiels (CDC 4.15.1 ; 10.3 n 169 et suivants)
+# ---------------------------------------------------------------------------
+#
+# Les droits (ecriture : Secretaire, President, VP ; lecture : Bureau) sont
+# verifies par les classes de permission des vues. Jamais de suppression en
+# dur : retrait ou remplacement traces, journal a chaque depot, consultation,
+# telechargement, remplacement et retrait (regle n 6). Aucun contenu du
+# fichier n'est copie dans le journal (titre, categorie, date seulement).
+
+
+def _archive_snapshot(document: ArchivedDocument) -> dict:
+    return {
+        "category": document.category,
+        "title": document.title,
+        "document_date": str(document.document_date),
+        "status": document.status,
+    }
+
+
+def _create_archived_document(*, club, actor, category, title, document_date, file, replaces=None):
+    title = (title or "").strip()
+    if not title:
+        raise AssemblyValidationError("Le titre du document est obligatoire.")
+    if category not in ArchivedDocument.Category.values:
+        raise AssemblyValidationError("Cette catégorie de document n'existe pas.")
+    # Nom de stockage aleatoire a extension reelle (jamais celle du client).
+    rename_upload_to_real_type(file)
+    document = ArchivedDocument(
+        club=club,
+        category=category,
+        title=title,
+        document_date=document_date,
+        file=file,
+        uploaded_by=actor,
+        replaces=replaces,
+    )
+    try:
+        document.save()  # full_clean() : type reel et taille du fichier
+    except DjangoValidationError as exc:
+        raise AssemblyValidationError(" ".join(exc.messages)) from None
+    return document
+
+
+@transaction.atomic
+def archive_document(*, club, actor, category: str, title: str, document_date: date, file) -> ArchivedDocument:
+    """Depose un document dans l'archive du club, de facon atomique avec son
+    entree de journal : si le journal echoue, la ligne est annulee et le
+    fichier physique supprime."""
+
+    document = _create_archived_document(
+        club=club, actor=actor, category=category, title=title, document_date=document_date, file=file
+    )
+    try:
+        log_action(
+            actor=actor,
+            club=club,
+            action_type="assemblies.archived_document.created",
+            obj=document,
+            after=_archive_snapshot(document),
+        )
+    except Exception:
+        document.file.delete(save=False)
+        raise
+    return document
+
+
+@transaction.atomic
+def replace_archived_document(
+    *, document: ArchivedDocument, actor, category: str, title: str, document_date: date, file, now=None
+) -> ArchivedDocument:
+    """Remplace un document en vigueur : l'ancien est retire (motif
+    « Remplace ») et conserve ; le nouveau le reference (``replaces``)."""
+
+    now = now or timezone.now()
+    document = _lock_archived_document(document)  # statut relu apres le verrou
+    if document.status != ArchivedDocument.Status.ACTIVE:
+        raise AssemblyValidationError("Ce document est déjà retiré ou remplacé : il ne peut pas être remplacé.")
+    before = _archive_snapshot(document)
+    new_document = _create_archived_document(
+        club=document.club,
+        actor=actor,
+        category=category,
+        title=title,
+        document_date=document_date,
+        file=file,
+        replaces=document,
+    )
+    document.status = ArchivedDocument.Status.WITHDRAWN
+    document.withdrawn_by = actor
+    document.withdrawn_at = now
+    document.withdrawn_reason = "Remplacé par un nouveau document."
+    document.save()
+    log_action(
+        actor=actor,
+        club=document.club,
+        action_type="assemblies.archived_document.replaced",
+        obj=document,
+        before=before,
+        after={**_archive_snapshot(document), "replaced_by": new_document.pk},
+    )
+    log_action(
+        actor=actor,
+        club=document.club,
+        action_type="assemblies.archived_document.created",
+        obj=new_document,
+        after={**_archive_snapshot(new_document), "replaces": document.pk},
+    )
+    return new_document
+
+
+def _lock_archived_document(document: ArchivedDocument) -> ArchivedDocument:
+    """Verrouille la ligne du document (a appeler dans une transaction) et
+    la relit : deux retraits/remplacements simultanes se serialisent et le
+    second voit le statut deja modifie."""
+
+    return ArchivedDocument.all_objects.select_for_update().get(pk=document.pk, club_id=document.club_id)
+
+
+@transaction.atomic
+def withdraw_archived_document(*, document: ArchivedDocument, actor, reason: str, now=None) -> ArchivedDocument:
+    """Retire un document de l'archive (motif obligatoire, fichier conserve)."""
+
+    reason = (reason or "").strip()
+    if not reason:
+        raise AssemblyValidationError("Indiquez le motif du retrait.")
+    document = _lock_archived_document(document)  # statut relu apres le verrou
+    if document.status != ArchivedDocument.Status.ACTIVE:
+        raise AssemblyValidationError("Ce document est déjà retiré.")
+    before = _archive_snapshot(document)
+    document.status = ArchivedDocument.Status.WITHDRAWN
+    document.withdrawn_by = actor
+    document.withdrawn_at = now or timezone.now()
+    document.withdrawn_reason = reason
+    document.save()
+    log_action(
+        actor=actor,
+        club=document.club,
+        action_type="assemblies.archived_document.withdrawn",
+        obj=document,
+        before=before,
+        after={**_archive_snapshot(document), "reason": reason},
+    )
+    return document
+
+
+def record_archived_document_access(*, document: ArchivedDocument, actor, downloaded: bool) -> None:
+    """Journalise la consultation (detail) ou le telechargement (regle n 6)."""
+
+    log_action(
+        actor=actor,
+        club=document.club,
+        action_type=(
+            "assemblies.archived_document.downloaded" if downloaded else "assemblies.archived_document.viewed"
+        ),
+        obj=document,
+        after={"title": document.title, "category": document.category},
+    )
+
+
+def filter_archived_documents(queryset, *, category: str = "", year: str = "", include_withdrawn: bool = False):
+    """Filtres de la liste (categorie, annee du document, retires)."""
+
+    if category:
+        if category not in ArchivedDocument.Category.values:
+            raise AssemblyValidationError("Cette catégorie de document n'existe pas.")
+        queryset = queryset.filter(category=category)
+    if year:
+        if not year.isdigit() or len(year) != 4:
+            raise AssemblyValidationError("L'année doit comporter 4 chiffres.")
+        queryset = queryset.filter(document_date__year=int(year))
+    if not include_withdrawn:
+        queryset = queryset.filter(status=ArchivedDocument.Status.ACTIVE)
+    return queryset

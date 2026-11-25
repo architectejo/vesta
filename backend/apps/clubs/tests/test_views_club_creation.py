@@ -431,6 +431,8 @@ class TestPlayerCardView:
             "membership_status_label",
             "joined_on",
             "roles",
+            # Booléen « bloqué » du pointage groupé, sans motif (10.2 n° 16).
+            "is_unavailable",
         }
         assert set(response.data.keys()) == expected_keys
 

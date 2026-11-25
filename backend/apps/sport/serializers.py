@@ -21,6 +21,8 @@ from rest_framework import serializers
 
 from apps.audit.services import GHOST_ACTOR_DISPLAY_NAME
 from apps.clubs.models import Membership, MembershipRole
+from apps.core.roles import get_active_roles
+from apps.sport.permissions import MATCH_MANAGER_ROLES
 from apps.sport import services
 from apps.sport.models import (
     Attendance,
@@ -72,6 +74,7 @@ __all__ = [
     "serialize_tactical_plan_detail",
     "serialize_placement",
     "serialize_annotation",
+    "serialize_next_event",
     "serialize_locker_room",
 ]
 
@@ -131,7 +134,13 @@ def serialize_reason(membership, *, viewer, playability=None) -> dict:
     playability = playability if playability is not None else services.get_playability(membership)
     return {
         "eligible": playability.eligible,
-        "reason_code": playability.reason_code,
+        # Le code de motif suit la même règle que le texte : jamais exposé
+        # à qui ne voit que « Indisponible » (10.2 n° 16).
+        "reason_code": (
+            playability.reason_code
+            if services.reason_visible_to_viewer(playability, viewer=viewer, membership=membership)
+            else ("unavailable" if not playability.eligible else "")
+        ),
         "reason": services.describe_reason_for_viewer(playability, viewer=viewer, membership=membership),
     }
 
@@ -193,6 +202,64 @@ class AttendanceMarkSerializer(serializers.Serializer):
     arrived_at = serializers.DateTimeField(required=False)
     client_uuid = serializers.UUIDField(required=False, allow_null=True)
     client_recorded_at = serializers.DateTimeField(required=False, allow_null=True)
+
+
+class BulkAttendanceItemSerializer(serializers.Serializer):
+    membership_id = serializers.IntegerField()
+    client_uuid = serializers.UUIDField(required=False, allow_null=True)
+    client_recorded_at = serializers.DateTimeField(required=False, allow_null=True)
+    selection_rank = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+
+
+class BulkAttendanceSerializer(serializers.Serializer):
+    """Pointage groupé (sport-pointage-selection-multiple.md §7). Les
+    limites métier (taille du lot, rôle, heure) sont contrôlées par le
+    service, pour que la règle n'existe qu'à un endroit."""
+
+    action = serializers.ChoiceField(choices=["arrive", "excuse"])
+    arrived_at = serializers.DateTimeField(required=False, allow_null=True)
+    reason_code = serializers.ChoiceField(choices=["injured", "travel", "other"], required=False)
+    reason_detail = serializers.CharField(required=False, allow_blank=True, default="")
+    items = BulkAttendanceItemSerializer(many=True, allow_empty=True)
+
+    def validate(self, attrs):
+        if attrs["action"] == "excuse" and not attrs.get("reason_code"):
+            raise serializers.ValidationError({"reason_code": "Choisissez un motif."})
+        return attrs
+
+
+def serialize_bulk_attendance_result(result: dict, *, viewer, request=None) -> dict:
+    return {
+        "batch_id": result["batch_id"],
+        "results": [
+            {
+                "membership_id": r["membership_id"],
+                "outcome": r["outcome"],
+                "message": r["message"],
+                "attendance": serialize_attendance(r["attendance"], viewer=viewer, request=request)
+                if r["attendance"] is not None
+                else None,
+            }
+            for r in result["results"]
+        ],
+        "counts": result["counts"],
+    }
+
+
+def serialize_attendance_capabilities(event, *, viewer) -> dict:
+    """Droits de pointage groupé du lecteur (l'interface ne déduit jamais
+    un droit d'un rôle). Faux dès que l'événement est verrouillé."""
+
+    from apps.sport.permissions import ATTENDANCE_RECORDER_ROLES, ATTENDANCE_TIME_CORRECTOR_ROLES
+
+    unlocked = getattr(viewer, "is_superuser", False) or not services.is_event_locked(event)
+    roles = get_active_roles(viewer, club=event.club)
+    is_super = bool(getattr(viewer, "is_superuser", False))
+    return {
+        "can_bulk_mark": bool(unlocked and (is_super or roles & ATTENDANCE_RECORDER_ROLES)),
+        "can_bulk_excuse": bool(unlocked and (is_super or roles & ATTENDANCE_TIME_CORRECTOR_ROLES)),
+        "can_set_arrival_time": bool(unlocked and (is_super or roles & ATTENDANCE_TIME_CORRECTOR_ROLES)),
+    }
 
 
 class AttendanceCorrectionSerializer(serializers.Serializer):
@@ -336,6 +403,7 @@ def serialize_session_detail(session: Session, *, viewer, request=None) -> dict:
         "instructions": session.instructions,
         "late_arrival_counts_absent": club_settings.late_arrival_counts_absent,
         "counts": _attendance_counts(event, club=session.club),
+        "capabilities": serialize_attendance_capabilities(event, viewer=viewer),
         "attendances": [serialize_attendance(item, viewer=viewer, request=request) for item in attendances],
         "team_a": [
             serialize_team_assignment(item, request=request)
@@ -383,6 +451,9 @@ class MatchUpdateSerializer(serializers.Serializer):
     location = serializers.CharField(max_length=160, required=False, allow_blank=True, default="")
     opponent_club_id = serializers.IntegerField(required=False, allow_null=True)
     opponent_name = serializers.CharField(max_length=160, required=False, allow_blank=True, default="")
+    # Accepté uniquement pour être contrôlé (jamais son propre club) ; un défi
+    # ne se modifie pas depuis cette modale.
+    challenge_to_club_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class MatchCompositionCreateSerializer(serializers.Serializer):
@@ -476,6 +547,15 @@ def serialize_match_detail(match: Match, *, viewer, request=None) -> dict:
     # ``apps.sport.services.mark_match_arrival``), même forme que le
     # pointage d'une séance (``serialize_session_detail``).
     attendances = Attendance.objects.filter(event=event).select_related("membership__user", "marked_by")
+    # Brouillon de composition : visible seulement par le staff (CDC 4.8 ;
+    # sport-feuille-de-match.md §3 point 2). Position prudente : Coach
+    # (et son assistant) + Superuser ; les autres rôles attendent la publication.
+    can_see_composition = match.is_composition_published or bool(
+        getattr(viewer, "is_superuser", False)
+        or (get_active_roles(viewer, club=match.club) & MATCH_MANAGER_ROLES)
+    )
+    if not can_see_composition:
+        compositions = compositions.none()
     return {
         **serialize_event_common(event, viewer=viewer),
         "kickoff_time": match.kickoff_time,
@@ -484,8 +564,10 @@ def serialize_match_detail(match: Match, *, viewer, request=None) -> dict:
         "venue": match.venue,
         "location": match.location,
         "challenge_status": match.challenge_status,
+        "capabilities": serialize_attendance_capabilities(event, viewer=viewer),
         "is_composition_published": match.is_composition_published,
         "composition_published_at": match.composition_published_at,
+        "result_published": match.result_post_id is not None,
         "attendances": [serialize_attendance(item, viewer=viewer, request=request) for item in attendances],
         "attendance_counts": _attendance_counts(event, club=match.club),
         "starters": [
@@ -565,19 +647,22 @@ class EvaluationCreateSerializer(serializers.Serializer):
     comment_visible_to_player = serializers.BooleanField(required=False, default=False)
 
 
-def serialize_evaluation(evaluation, *, request=None) -> dict:
+def serialize_evaluation(evaluation, *, request=None, as_player: bool = False) -> dict:
+    """``as_player`` : le joueur évalué voit ses notes, mais le commentaire
+    seulement si l'évaluateur l'a rendu visible, et jamais l'identité de l'évaluateur (CDC 4.10)."""
+
     return {
         "id": evaluation.pk,
         "membership_id": evaluation.membership_id,
         "player": serialize_membership_brief(evaluation.membership, request=request),
-        "evaluator_id": evaluation.evaluator_id,
+        "evaluator_id": None if as_player else evaluation.evaluator_id,
         "overall_score": str(evaluation.overall_score),
         "technical_score": str(evaluation.technical_score) if evaluation.technical_score is not None else None,
         "physical_score": str(evaluation.physical_score) if evaluation.physical_score is not None else None,
         "tactical_score": str(evaluation.tactical_score) if evaluation.tactical_score is not None else None,
         "mental_score": str(evaluation.mental_score) if evaluation.mental_score is not None else None,
         "attitude_score": str(evaluation.attitude_score) if evaluation.attitude_score is not None else None,
-        "comment": evaluation.comment,
+        "comment": evaluation.comment if (not as_player or evaluation.comment_visible_to_player) else "",
         "comment_visible_to_player": evaluation.comment_visible_to_player,
         "created_at": evaluation.created_at,
     }
@@ -618,7 +703,7 @@ class PlacementCreateSerializer(serializers.Serializer):
 
 class PlacementUpdateSerializer(serializers.Serializer):
     jersey_number = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=99)
-    position = serializers.ChoiceField(choices=Membership.Position.choices, required=False, allow_blank=True, default="")
+    position = serializers.ChoiceField(choices=Membership.Position.choices, required=False, allow_blank=True)
 
 
 class AnnotationCreateSerializer(serializers.Serializer):
@@ -691,18 +776,62 @@ def serialize_tactical_plan_detail(plan: TacticalPlan, *, viewer, request=None) 
 # ---------------------------------------------------------------------------
 
 
-def serialize_locker_room(*, session=None, match=None, viewer, viewer_membership, request=None) -> dict:
+def serialize_next_event(candidate) -> dict:
+    """Précision « Prochain rendez-vous » de l'état vide du vestiaire
+    (sport-vestiaire.md §6 ; club-accueil.md §4 point 5), calculée par
+    :func:`apps.sport.services.get_next_upcoming_event`. Forme
+    volontairement minimale : type, date et heure (rassemblement pour une
+    séance, coup d'envoi pour un match), plus le lieu et l'adversaire
+    déjà publics sur le calendrier des séances/matchs -- jamais de
+    pointage, de composition ni de liste de joueurs ici (aucune
+    confidentialité supplémentaire exposée par rapport à ce que
+    l'évènement du jour révèle déjà normalement)."""
+
+    event = candidate.event
+    if isinstance(candidate, Session):
+        return {
+            "type": "session",
+            "id": event.pk,
+            "event_date": event.event_date,
+            "gathering_time": candidate.gathering_time,
+            "location": candidate.location,
+        }
+    return {
+        "type": "match",
+        "id": event.pk,
+        "event_date": event.event_date,
+        "kickoff_time": candidate.kickoff_time,
+        "opponent": _opponent_name(candidate),
+        "location": candidate.location,
+    }
+
+
+def serialize_locker_room(*, club, session=None, match=None, viewer, viewer_membership, request=None) -> dict:
     """Agrege l'evenement du jour (seance et/ou match), le pointage et la
     repartition A/B deja calcules par les services -- vue de consultation
     pure (aucune ecriture, sport-vestiaire.md §1). Ne recalcule aucune
     regle d'eligibilite : ne fait que reutiliser
-    ``services.get_playability``/``describe_reason_for_viewer``."""
+    ``services.get_playability``/``describe_reason_for_viewer``.
 
-    data: dict = {"session": None, "match": None}
+    ``club`` sert uniquement à calculer ``next_event`` quand l'évènement
+    du jour est vide (voir ci-dessous) -- jamais utilisé pour filtrer
+    ``session``/``match``, déjà résolus par l'appelant (CLAUDE.md règle
+    n° 9 : le club actif ne se redéduit jamais ici)."""
+
+    data: dict = {"session": None, "match": None, "next_event": None}
     if session is not None:
         data["session"] = serialize_session_detail(session, viewer=viewer, request=request)
     if match is not None:
         data["match"] = serialize_match_detail(match, viewer=viewer, request=request)
+
+    if session is None and match is None:
+        # Seul cas où l'on alourdit le payload (demande explicite de la
+        # tâche) : « aucun événement aujourd'hui » est la situation
+        # normale la plupart des jours pour un club qui ne s'entraîne pas
+        # tous les jours (sport-vestiaire.md §6).
+        next_candidate = services.get_next_upcoming_event(club)
+        if next_candidate is not None:
+            data["next_event"] = serialize_next_event(next_candidate)
 
     my_situation = None
     if viewer_membership is not None:

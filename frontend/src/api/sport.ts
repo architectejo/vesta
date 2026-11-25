@@ -43,6 +43,13 @@ export interface EventCommon {
 
 export type AttendanceStatus = "present" | "late_absent" | "absent" | "excused_absent";
 
+/** Droits de pointage groupé renvoyés par l'API (faux si l'événement est verrouillé). */
+export interface AttendanceCapabilities {
+  can_bulk_mark: boolean;
+  can_bulk_excuse: boolean;
+  can_set_arrival_time: boolean;
+}
+
 export interface Attendance {
   id: number;
   membership_id: number;
@@ -113,6 +120,7 @@ export interface SessionDetail extends EventCommon {
   team_a: TeamAssignmentItem[];
   team_b: TeamAssignmentItem[];
   unassigned: UnassignedGroups;
+  capabilities?: AttendanceCapabilities;
 }
 
 export interface SessionInput {
@@ -308,6 +316,191 @@ export function createEvaluation(eventId: number, input: EvaluationInput) {
 }
 
 // ---------------------------------------------------------------------------
+// Statistiques de séance (docs/ecrans/sport-statistiques-seance.md, parties A et B)
+// Contrats lus dans `backend/apps/sport/session_stats.py`. Décimales en
+// chaînes ; tout calcul et tout filtrage par rôle viennent de l'API.
+// ---------------------------------------------------------------------------
+
+export type StatsPeriod = "last10" | "season";
+
+export interface AttendanceStatsLate extends MembershipBrief {
+  arrived_at: string | null;
+}
+
+export interface AttendanceStatsExcused extends MembershipBrief {
+  reason: string;
+}
+
+export interface SessionAttendanceStats {
+  expected: number;
+  present: number;
+  late: number;
+  absent: number;
+  excused: number;
+  /** `null` : séance sans aucun pointage (jamais affiché « 0 % »). */
+  rate: number | null;
+  nobody_marked: boolean;
+  late_counts_as_absent: boolean;
+  late_label: string;
+  late_family: "danger" | "warning";
+  delta_vs_average: number | null;
+  late_list: AttendanceStatsLate[];
+  excused_list: AttendanceStatsExcused[];
+  absent_list: MembershipBrief[];
+}
+
+export interface RankedNote {
+  rank: number;
+  player: MembershipBrief;
+  note: string;
+}
+
+export interface NoteBucket {
+  label: string;
+  min: string;
+  max: string;
+  count: number;
+}
+
+export interface PlayerNoteComment {
+  text: string;
+  visible_to_player: boolean;
+}
+
+export interface PlayerNoteRow {
+  player: MembershipBrief;
+  overall: string;
+  technical: string | null;
+  physical: string | null;
+  tactical: string | null;
+  mental: string | null;
+  attitude: string | null;
+  evaluators_count: number;
+  comments: PlayerNoteComment[];
+}
+
+/** Bloc « Notes du Coach » : `null` pour les rôles qui n'y ont pas droit. */
+export interface SessionEvaluationStats {
+  average: string | null;
+  evaluated: number;
+  eligible: number;
+  remaining: number;
+  delta_vs_average: string | null;
+  ranking_available: boolean;
+  best: RankedNote[];
+  lowest: RankedNote[];
+  distribution: NoteBucket[];
+  players: PlayerNoteRow[];
+  not_evaluated: MembershipBrief[];
+  open_until: string;
+  locked: boolean;
+  hours_left: number | null;
+}
+
+export interface MyEvaluationStats {
+  overall: string;
+  criteria: {
+    technical: string | null;
+    physical: string | null;
+    tactical: string | null;
+    mental: string | null;
+    attitude: string | null;
+  };
+  comments: string[];
+}
+
+/** Résumé des tests de performance de la séance (partie C, carte « Mesures de la séance »). */
+export interface SessionMeasureSummary {
+  test_id: number;
+  name: string;
+  kind: string;
+  measured_count: number;
+  best: { player: { membership_id: number; name: string }; display?: string } | null;
+}
+
+export interface SessionStats {
+  session_id: number;
+  date: string;
+  generated_at: string;
+  attendance: SessionAttendanceStats;
+  evaluations: SessionEvaluationStats | null;
+  my_evaluation: MyEvaluationStats | null;
+  measures: SessionMeasureSummary[];
+  capabilities: { can_evaluate: boolean; can_measure: boolean };
+}
+
+export function getSessionStats(sessionId: number) {
+  return apiGet<SessionStats>(`/sport/sessions/${sessionId}/stats/`);
+}
+
+export interface SessionHistoryResult {
+  session_id: number;
+  date: string;
+  location: string;
+  expected: number;
+  present: number;
+  attendance_rate: number | null;
+  /** Staff seulement, sinon `null`. */
+  average_rating: string | null;
+  my_rating: string | null;
+  locked: boolean;
+}
+
+export interface SessionStatsHistory {
+  period: StatsPeriod;
+  season: { id: number; label: string } | null;
+  average_attendance_rate: number | null;
+  average_rating: string | null;
+  my_average_rating: string | null;
+  results: SessionHistoryResult[];
+}
+
+export function getSessionStatsHistory(period: StatsPeriod) {
+  return apiGet<SessionStatsHistory>(`/sport/sessions/stats/history/?period=${period}`);
+}
+
+export interface AttendanceRankingEntry {
+  player: MembershipBrief;
+  sessions: number;
+  attended: number;
+  present: number;
+  late: number;
+  excused: number;
+  absent: number;
+  rate: number | null;
+}
+
+export interface AttendanceRanking {
+  period: StatsPeriod;
+  sessions_count: number;
+  late_counts_as_absent: boolean;
+  results: AttendanceRankingEntry[];
+}
+
+/** Coach, Assistant, Président, VP, DS ; 403 pour les autres. */
+export function getAttendanceRanking(period: StatsPeriod) {
+  return apiGet<AttendanceRanking>(`/sport/attendance/ranking/?period=${period}`);
+}
+
+export interface MyAttendance {
+  period: StatsPeriod;
+  sessions_count: number;
+  sessions: number;
+  attended: number;
+  present: number;
+  late: number;
+  excused: number;
+  absent: number;
+  rate: number | null;
+  late_counts_as_absent: boolean;
+}
+
+/** 404 si le compte n'a pas de fiche joueur dans le club. */
+export function getMyAttendance(period: StatsPeriod) {
+  return apiGet<MyAttendance>(`/sport/attendance/me/?period=${period}`);
+}
+
+// ---------------------------------------------------------------------------
 // Matchs (CDC 4.8)
 // ---------------------------------------------------------------------------
 
@@ -367,6 +560,9 @@ export interface MatchDetail extends EventCommon {
   starters: CompositionEntry[];
   substitutes: CompositionEntry[];
   sheet: MatchSheet | null;
+  /** Vrai une fois le résultat publié sur le fil du club. */
+  result_published?: boolean;
+  capabilities?: AttendanceCapabilities;
 }
 
 export interface MatchInput {
@@ -435,6 +631,10 @@ export function removeFromComposition(matchId: number, membershipId: number) {
 
 export function publishComposition(matchId: number) {
   return apiPost<MatchDetail>(`/sport/matches/${matchId}/composition/publish/`);
+}
+
+export function publishMatchResult(matchId: number) {
+  return apiPost<MatchDetail>(`/sport/matches/${matchId}/publish-result/`);
 }
 
 export function setMatchScore(matchId: number, input: { score_home: number; score_away: number }) {
@@ -603,12 +803,84 @@ export interface MySituation {
   reason_code: string;
 }
 
+/**
+ * Prochain évènement à venir (séance ou match), renvoyé par `/sport/locker-room/`
+ * en plus de l'évènement du jour — ajouté par `backend-dev` pour que la page
+ * Vestiaire et la carte « Prochain rendez-vous » de l'accueil puissent
+ * afficher une précision quand rien n'a lieu exactement aujourd'hui
+ * (`sport-vestiaire.md` §6, `club-accueil.md` §4 point 5). `location` est
+ * une chaîne vide, jamais `null` ; `null` quand aucun évènement futur n'est
+ * programmé.
+ */
+export interface NextEventSession {
+  type: "session";
+  id: number;
+  event_date: string;
+  gathering_time: string;
+  location: string;
+}
+
+export interface NextEventMatch {
+  type: "match";
+  id: number;
+  event_date: string;
+  kickoff_time: string;
+  opponent: string;
+  location: string;
+}
+
+export type NextEvent = NextEventSession | NextEventMatch;
+
 export interface LockerRoom {
   session: SessionDetail | null;
   match: MatchDetail | null;
   my_situation: MySituation | null;
+  next_event: NextEvent | null;
 }
 
 export function getLockerRoom() {
   return apiGet<LockerRoom>("/sport/locker-room/");
+}
+
+// ---------------------------------------------------------------------------
+// Pointage groupé (docs/ecrans/sport-pointage-selection-multiple.md §7)
+// ---------------------------------------------------------------------------
+
+export type BulkAttendanceAction = "arrive" | "excuse";
+export type BulkExcuseReasonCode = "injured" | "travel" | "other";
+
+export interface BulkAttendanceItem {
+  membership_id: number;
+  client_uuid?: string;
+  client_recorded_at?: string;
+  selection_rank?: number;
+}
+
+export interface BulkAttendanceInput {
+  action: BulkAttendanceAction;
+  arrived_at?: string;
+  reason_code?: BulkExcuseReasonCode;
+  reason_detail?: string;
+  items: BulkAttendanceItem[];
+}
+
+export interface BulkAttendanceResult {
+  membership_id: number;
+  outcome: "created" | "skipped" | "refused";
+  message: string;
+  attendance: Attendance | null;
+}
+
+export interface BulkAttendanceResponse {
+  batch_id: string;
+  results: BulkAttendanceResult[];
+  counts: { created: number; skipped: number; refused: number };
+}
+
+/** Taille maximale d'un lot acceptée par l'API. */
+export const BULK_ATTENDANCE_MAX_ITEMS = 100;
+
+export function bulkMarkAttendance(kind: "session" | "match", eventId: number, input: BulkAttendanceInput) {
+  const base = kind === "session" ? "sessions" : "matches";
+  return apiPost<BulkAttendanceResponse>(`/sport/${base}/${eventId}/attendance/bulk/`, input);
 }

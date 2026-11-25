@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { PitchBoard, PitchPin } from "./PitchBoard";
+import { PitchBoard, PitchPin, pinInitials, pitchDragBus } from "./PitchBoard";
 
 describe("PitchBoard", () => {
   it("affiche un pion par joueur avec son numéro et son nom", () => {
@@ -115,6 +115,91 @@ describe("PitchBoard — marquages selon l'orientation", () => {
   });
 });
 
+describe("PitchPin — photo (sport-vestiaire.md §9)", () => {
+  const base = { id: "1", membershipId: 1, label: "Jean K.", fullName: "Jean Kabila", number: 7, x: 50, y: 50, jerseyColor: "#2563eb" };
+
+  it("affiche la photo (alt vide, non glissable, lazy) avec le numéro dans la pastille", () => {
+    const { container } = render(
+      <PitchPin vertical draggable dragKind="pin" pin={{ ...base, photoUrl: "https://api.test/media/jean.jpg" }} />,
+    );
+    const img = container.querySelector("img") as HTMLImageElement;
+    expect(img).not.toBeNull();
+    expect(img.getAttribute("src")).toBe("https://api.test/media/jean.jpg");
+    expect(img.getAttribute("alt")).toBe("");
+    expect(img.getAttribute("draggable")).toBe("false");
+    expect(img.getAttribute("loading")).toBe("lazy");
+    expect(img.className).toContain("pointer-events-none");
+    expect(screen.getByText("7")).toBeInTheDocument();
+  });
+
+  it("affiche les initiales sans photo", () => {
+    const { container } = render(<PitchPin vertical draggable dragKind="pin" pin={{ ...base, photoUrl: null }} />);
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByTestId("pin-initials")).toHaveTextContent("JK");
+  });
+
+  it("bascule sur les initiales quand l'image échoue", () => {
+    const { container } = render(
+      <PitchPin vertical draggable dragKind="pin" pin={{ ...base, photoUrl: "https://api.test/media/cassee.jpg" }} />,
+    );
+    fireEvent.error(container.querySelector("img") as HTMLImageElement);
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByTestId("pin-initials")).toHaveTextContent("JK");
+  });
+
+  it("garde un cercle de 40 px avec ou sans photo", () => {
+    const { container, rerender } = render(
+      <PitchPin vertical draggable dragKind="pin" pin={{ ...base, photoUrl: "https://api.test/a.jpg" }} />,
+    );
+    expect(container.querySelector(".h-10.w-10")).not.toBeNull();
+    rerender(<PitchPin vertical draggable dragKind="pin" pin={{ ...base, photoUrl: null }} />);
+    expect(container.querySelector(".h-10.w-10")).not.toBeNull();
+  });
+
+  it("affiche le libellé complet, sans troncature", () => {
+    render(<PitchPin vertical draggable dragKind="pin" pin={{ ...base, label: "Jean-Baptiste M." }} />);
+    const label = screen.getByText("Jean-Baptiste M.");
+    expect(label.className).not.toContain("truncate");
+    expect(label.className).toContain("text-[12px]");
+  });
+
+  it("le pion avec photo reste soulevable : pointeur déplacé puis relâché ne déclenche pas le toucher", () => {
+    const onTap = vi.fn();
+    (document as unknown as { elementFromPoint: () => null }).elementFromPoint = () => null; // absent de jsdom
+    render(
+      <PitchPin vertical draggable dragKind="pin" pin={{ ...base, photoUrl: "https://api.test/a.jpg" }} onTap={onTap} />,
+    );
+    const pin = screen.getByRole("button", { name: "Jean K." });
+    expect(pin.className).toContain("touch-none");
+    // jsdom n'a pas de PointerEvent : un MouseEvent nommé « pointer* » porte les coordonnées.
+    const fire = (type: string, x: number, y: number) =>
+      fireEvent(pin, new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+    fire("pointerdown", 10, 10);
+    fire("pointermove", 80, 90);
+    expect(pitchDragBus.getSnapshot().dragging?.label).toBe("Jean K.");
+    fire("pointerup", 80, 90);
+    expect(pitchDragBus.getSnapshot().dragging).toBeNull();
+    expect(onTap).not.toHaveBeenCalled();
+  });
+
+  it("fonctionne en mode standalone (banc) avec photo", () => {
+    const { container } = render(
+      <PitchPin vertical standalone draggable dragKind="pin" pin={{ ...base, photoUrl: "https://api.test/a.jpg" }} />,
+    );
+    expect(screen.getByRole("button", { name: "Jean K." }).className).not.toContain("absolute");
+    expect(container.querySelector("img")).not.toBeNull();
+  });
+});
+
+describe("pinInitials", () => {
+  it("prend la première lettre du prénom et du dernier mot, « ? » si vide", () => {
+    expect(pinInitials("Jean Kabila")).toBe("JK");
+    expect(pinInitials("Jean K.")).toBe("JK");
+    expect(pinInitials("Pelé")).toBe("P");
+    expect(pinInitials("")).toBe("?");
+  });
+});
+
 describe("PitchPin", () => {
   it("appelle onTap au relâchement sans glissement", () => {
     const onTap = vi.fn();
@@ -167,5 +252,23 @@ describe("PitchPin", () => {
     // bancs visuellement vides, un seul pion flottant « dans le vide »).
     expect(pin.className).not.toContain("absolute");
     expect(pin.style.left).toBe("");
+  });
+});
+
+describe("PitchPin - étiquette", () => {
+  it("limite l'étiquette à 2 lignes, réduit le corps du texte et garde le nom complet en infobulle", () => {
+    render(
+      <PitchPin
+        vertical
+        standalone
+        draggable={false}
+        dragKind="pin"
+        pin={{ id: "1", membershipId: 1, label: "Maximilien-Alexandre K.", fullName: "Maximilien-Alexandre Kabongo", x: 0, y: 0 }}
+      />,
+    );
+    const label = screen.getByTestId("pin-label");
+    expect(label.className).toContain("line-clamp-2");
+    expect(label.className).toContain("text-[11px]");
+    expect(screen.getByRole("button").getAttribute("title")).toBe("Maximilien-Alexandre Kabongo");
   });
 });

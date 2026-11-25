@@ -16,6 +16,7 @@ export type StatusKey =
   | "suspended" // Suspendu
   | "left" // Parti
   | "archived" // Archivé
+  | "withdrawn" // Retiré (document d'archive, club-archives.md §9)
   | "registered" // Inscrit (proposition)
   // Pointage (3.4)
   | "present"
@@ -115,6 +116,7 @@ export const STATUS_MAP: Record<StatusKey, { family: StatusFamily; label: string
   suspended: { family: "suspended", label: "Suspendu" },
   left: { family: "neutral", label: "Parti" },
   archived: { family: "neutral", label: "Archivé" },
+  withdrawn: { family: "neutral", label: "Retiré" },
   registered: { family: "success", label: "Inscrit" },
 
   present: { family: "success", label: "Présent" },
