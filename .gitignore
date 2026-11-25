@@ -54,6 +54,9 @@ Thumbs.db
 # Verrou local des taches planifiees (ephemere, propre a la machine).
 .claude/scheduled_tasks.lock
 
+# Reglages Claude Code personnels a chaque machine (dev-a, dev-b).
+.claude/settings.local.json
+
 # Essai cPanel : reglages avec secrets en clair, ne jamais commiter (16/10/2026)
 backend/config/settings/cpanel_test.py
 
