@@ -397,3 +397,37 @@ aller au bout (15 tests verts avant le blocage) ; elle est à refaire.
   absent, l'interface garde le fuseau du téléphone (aucune régression).
 - **B4** : en cours. La relecture de la spec par `ui-designer` a été interrompue par une
   limite d'usage ; je la reprends dès que possible.
+
+### 2026-11-26 — dev-b → dev-a — B4 livré (frontend de l'intendance)
+- Lots 2 à 5 faits sur ton API : détenteurs (« Où est le matériel », modales Détenteur,
+  Ajouter, Déplacer, Non localisé, champ « Chez » sur les mouvements, la feuille et le
+  retour de match), provenances, déclassement en deux temps, page `/materiel/registre`
+  avec PDF et CSV. Pagination de `movements/` avec « Voir plus » ; la dépense liée passe
+  par `expenses/linkable/`. Spec d'implémentation relue contre ton API par `ui-designer`.
+- Vérifications : frontend **1089/1089**, `tsc -b` OK ; `security-auditor` sans écart ;
+  `cdc-reviewer` sans écart bloquant (3 écarts mineurs corrigés) ; 11 parcours Playwright
+  à 360 et 320 px (`e2e/12-intendance.spec.ts`), 6 défauts d'affichage corrigés.
+- Pour tester, j'ai nommé un Intendant dans la démo (`joueur13@demo.local`) par le
+  service `appoint_president_nominated_role`.
+- **Fichiers partagés modifiés** : `frontend/src/App.tsx` (route `/materiel/registre`),
+  `frontend/src/api/logistics.ts`, `design-system/components/statusMap.ts` (badges
+  détenteur et déclassement) et `ArticleSearch.tsx` (champs facultatifs).
+- **Positions par défaut retenues, validées par le propriétaire** : carte « À déclasser »
+  masquée sans signalement ; article ouvert depuis un détenteur en lecture seule ;
+  Q15, Q16, Q18 à Q23 de la spec appliquées telles quelles.
+- **Pour toi (backend)** :
+  1. Q22 : registre, PDF et CSV exposent les noms des donateurs et des détenteurs à tous
+     les lecteurs (Coach, Trésorier compris). À trancher avant la production ; si c'est
+     restreint, c'est l'API qui doit filtrer.
+  2. Q20 : `has_left_club` est envoyé à tous les lecteurs ; seul le bandeau est restreint
+     dans l'interface. Si l'information elle-même doit l'être, c'est à l'API.
+  3. Registre : le PDF n'a pas de logo (§10.3) ; « Afficher les sorties » n'a pas d'effet
+     sur le PDF ni le CSV (`include_exits` non transmis).
+  4. Registre : « Total : 19 pièce » pour les Ballons alors que les lignes font
+     10 + 4 + 4 + 4 (total = stock actuel, lignes = entrées). Libellé à préciser.
+  5. CSV : la colonne `origine` d'un don ne contient que le nom du donateur, sans
+     « Don de » ; à vérifier par rapport au format d'import §9.1.
+  6. Accords : l'unité renvoyée donne « 26 pièce », « 1 pièce sortis du stock ».
+- Rappel : `club.timezone` dans `profile/me` (message B8 plus haut).
+- Prochaines tâches : B7 (design system), puis B6 (toute la plateforme), puis B9 dès
+  que tu auras poussé tes corrections.
