@@ -23,7 +23,7 @@ import { PlansLibrary } from "./PlansLibrary";
 import { PlayerCardModal } from "./PlayerCardModal";
 import { useTeamsPitchWidthStyle } from "./pitchSizing";
 import { getSportAccess } from "./sportAccess";
-import { formatNextEventLabel, formatTime } from "./sportTime";
+import { formatDateLong, formatNextEventLabel, formatTime } from "./sportTime";
 import { TeamsBoard } from "./TeamsBoard";
 import { useTeamFieldActions } from "./useTeamFieldActions";
 
@@ -404,7 +404,10 @@ function LockerRoomToday() {
   const teamFieldActions = useTeamFieldActions(query.data?.session?.id ?? 0, [["sport", "locker-room"]]);
 
   if (profileQuery.isLoading || query.isLoading) return <Loader loading variant="page" />;
-  if (query.isError) {
+  // Un rafraîchissement en échec (interrogation 30 s) garde la dernière
+  // version reçue (§6 : « Aucun toast toutes les 30 s ») ; seule une page
+  // qui n'a jamais rien reçu affiche l'état d'erreur.
+  if (query.isError && !query.data) {
     return <EmptyState variant="error" message="Impossible de charger le vestiaire." actionLabel="Réessayer" onAction={() => void query.refetch()} />;
   }
   const data = query.data;
@@ -442,6 +445,12 @@ function LockerRoomToday() {
   // `TEAM_ASSIGNER_ROLES` : Coach, Capitaine, Président) ; verrouillage de
   // la séance respecté à l'identique.
   const canAssignTeams = access.canAssignTeams && Boolean(activeSession) && !activeSession?.is_locked;
+  const eventDate = activeSession?.event_date ?? activeMatch?.event_date ?? null;
+  // §3 : contexte « {nom du club} · {dimanche 27 septembre} ».
+  const headerContext = [profileQuery.data?.club.name, eventDate ? formatDateLong(eventDate) : null].filter(Boolean).join(" · ");
+  // « Mis à jour à {heure} » = heure de la dernière réponse reçue, pas du rendu.
+  const updatedAt = new Date(query.dataUpdatedAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  const refreshFailed = query.isError;
 
   async function handleAssign(membershipId: number, team: "A" | "B"): Promise<void> {
     await teamFieldActions.handleAssign(activeSession, membershipId, team);
@@ -466,7 +475,7 @@ function LockerRoomToday() {
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <h1 className="text-xl font-semibold text-text">Vestiaire du jour</h1>
-            <p className="text-sm text-text-muted">{profileQuery.data?.club.name}</p>
+            <p className="text-sm text-text-muted">{headerContext}</p>
           </div>
           {canOpenAttendance && activeEventId ? (
             <Button
@@ -478,7 +487,16 @@ function LockerRoomToday() {
             </Button>
           ) : null}
         </div>
-        <p className="text-xs text-text-muted">Mis à jour à {new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</p>
+        {refreshFailed ? (
+          <p role="status" className="flex flex-wrap items-center gap-2 text-xs text-status-warning-fg">
+            Mise à jour impossible · {new Date(query.errorUpdatedAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
+            <button type="button" className="font-medium text-primary-text hover:underline" onClick={() => void query.refetch()}>
+              Réessayer
+            </button>
+          </p>
+        ) : (
+          <p className="text-xs text-text-muted">Mis à jour à {updatedAt}</p>
+        )}
       </header>
 
       {!navigator.onLine ? <Banner variant="info">Vous êtes hors connexion. Vestiaire affiché : dernière version reçue.</Banner> : null}

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import type { MyProfile } from "../../api/clubs";
@@ -98,6 +98,24 @@ describe("PlansLibrary", () => {
     renderPage();
     expect(await screen.findByText("Plan A")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Nouveau plan" })).toBeInTheDocument();
+  });
+
+  it("accorde le badge au masculin : un plan « Publié » (série 5, sport-vestiaire.md §10)", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile("coach"));
+    vi.mocked(listTacticalPlans).mockResolvedValue({
+      count: 2,
+      next_offset: null,
+      results: [planA, { ...planA, id: 2, name: "Plan B", is_published: false, published_at: null }],
+    });
+    vi.mocked(getTacticalPlan).mockResolvedValue(planADetail);
+    renderPage();
+    expect(await screen.findByText("Plan A")).toBeInTheDocument();
+    expect(screen.getByText("Publié")).toBeInTheDocument();
+    expect(screen.getByText("Brouillon")).toBeInTheDocument();
+    expect(screen.queryByText("Publiée")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Plan A"));
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("Publié")).toBeInTheDocument();
   });
 
   it.each(["coach", "assistant_coach"])("%s : boutons de création et de gestion visibles", async (role) => {

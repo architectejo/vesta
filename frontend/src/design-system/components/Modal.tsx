@@ -279,9 +279,20 @@ export function Modal({
   }
 
   function handlePanelKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (event.key !== "Escape") return;
     // Empêche Échap de fuiter vers d'autres modales éventuellement ouvertes
     // en dessous (empilement à deux niveaux au plus, 3.2).
-    if (event.key === "Escape") event.stopPropagation();
+    event.stopPropagation();
+    // Correctif série 5 : `stopPropagation` sur l'événement React arrête
+    // aussi l'événement natif à la racine de l'application ; l'écouteur posé
+    // sur `window` ne le reçoit donc jamais quand le focus est DANS la
+    // modale (cas normal, focus initial sur la croix). Échap doit être
+    // traité ici, avec l'état et le `onClose` du rendu courant.
+    if (showAbandonConfirm) {
+      setShowAbandonConfirm(false);
+      return;
+    }
+    requestClose();
   }
 
   const zIndexClass = level === 2 ? "z-[60]" : "z-[50]";

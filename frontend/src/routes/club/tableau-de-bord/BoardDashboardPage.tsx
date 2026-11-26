@@ -1,10 +1,11 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getBoardDashboard, type BoardPeriodQuery } from "../../../api/clubBoardDashboard";
+import { getBoardDashboard, isCardError, type BoardPeriodQuery } from "../../../api/clubBoardDashboard";
 import { ApiError } from "../../../api/client";
 import { getMyProfile } from "../../../api/clubs";
 import {
+  Banner,
   Button,
   EmptyState,
   Loader,
@@ -109,6 +110,11 @@ export function BoardDashboardPage() {
     retrying: query.isFetching,
   };
   const clubName = profileQuery.data?.club.name ?? "";
+  // Fiche §3 « Bandeaux » : une dépense non justifiée bloque les libérations
+  // (alerte rouge, CDC 4.5.2). Le texte vient de l'API, jamais recomposé ici.
+  const expenses = data.expenses_by_category;
+  const releaseBlockedReason =
+    expenses && !isCardError(expenses) && expenses.release_blocked ? expenses.release_blocked_reason : null;
   const context = [clubName, data.period.label, `Mis à jour à ${formatTime(query.dataUpdatedAt)}`]
     .filter(Boolean)
     .join(" · ");
@@ -128,6 +134,8 @@ export function BoardDashboardPage() {
       <div className="sticky top-0 z-10 -mx-3 bg-bg px-3 py-1 sm:-mx-4 sm:px-4 md:static md:mx-0 md:px-0">
         <PeriodPicker {...pickerProps} />
       </div>
+
+      {releaseBlockedReason ? <Banner variant="danger">{releaseBlockedReason}</Banner> : null}
 
       {query.isError ? (
         <p role="status" className="flex flex-wrap items-center gap-2 text-sm text-status-warning-fg">

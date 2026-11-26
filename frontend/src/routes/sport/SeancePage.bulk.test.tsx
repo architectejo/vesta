@@ -201,6 +201,52 @@ describe("SeancePage — pointage groupé", () => {
     expect(screen.getByText("0 sélectionné")).toBeInTheDocument();
   });
 
+  it("signale dans la confirmation les joueurs cochés NON pointés qui ne pourront pas être placés (série 5)", async () => {
+    // Défaut série 5 : le compte venait de la zone « Ne peuvent pas jouer »,
+    // qui ne contient que des joueurs DÉJÀ pointés, alors que la sélection ne
+    // contient que des non pointés : l'avertissement du §4.1 n'apparaissait
+    // jamais. L'effectif sert `is_unavailable` (booléen sans motif).
+    const user = userEvent.setup();
+    vi.mocked(listClubPlayers).mockResolvedValue([
+      { ...player(10, "Paul", "Ilunga"), is_unavailable: false },
+      { ...player(11, "Anne", "Kasa"), is_unavailable: true },
+      player(12, "Marc", "Zola"),
+    ]);
+    renderPage();
+    await openSelection(user);
+
+    // Badge gris « Indisponible » sur la ligne, jamais de motif (10.2 n° 16).
+    const anneRow = screen.getByRole("checkbox", { name: "Sélectionner Anne Kasa" }).closest("li")!;
+    expect(within(anneRow).getByText("Indisponible")).toBeInTheDocument();
+    const paulRow = screen.getByRole("checkbox", { name: "Sélectionner Paul Ilunga" }).closest("li")!;
+    expect(within(paulRow).queryByText("Indisponible")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox", { name: "Sélectionner Anne Kasa" }));
+    await user.click(screen.getByRole("checkbox", { name: "Sélectionner Paul Ilunga" }));
+    await user.click(screen.getByRole("button", { name: "Pointer l'arrivée (2)" }));
+    expect(await screen.findByText("1 de ces joueurs ne pourront pas être placés dans une équipe.")).toBeInTheDocument();
+  });
+
+  it("n'affiche pas l'avertissement quand aucun joueur coché n'est indisponible", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openSelection(user);
+    await user.click(screen.getByRole("checkbox", { name: "Sélectionner Paul Ilunga" }));
+    await user.click(screen.getByRole("button", { name: "Pointer l'arrivée (1)" }));
+    expect(await screen.findByText("Pointer 1 joueur ?")).toBeInTheDocument();
+    expect(screen.queryByText(/ne pourront pas être placés/)).not.toBeInTheDocument();
+  });
+
+  it("affiche le badge « Indisponible » hors mode sélection sur un joueur non pointé bloqué", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listClubPlayers).mockResolvedValue([player(10, "Paul", "Ilunga"), { ...player(11, "Anne", "Kasa"), is_unavailable: true }]);
+    renderPage();
+    await user.click(await screen.findByRole("tab", { name: "Pointage" }));
+    const name = await screen.findByText("Anne Kasa");
+    expect(within(name.closest("li")!).getByText("Indisponible")).toBeInTheDocument();
+    expect(within(screen.getByText("Paul Ilunga").closest("li")!).queryByText("Indisponible")).not.toBeInTheDocument();
+  });
+
   it("n'affiche « Absent excusé » et l'heure commune que si l'API les autorise (Capitaine)", async () => {
     const user = userEvent.setup();
     vi.mocked(getMyProfile).mockResolvedValue(makeProfile("captain"));

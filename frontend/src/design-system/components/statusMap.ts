@@ -58,6 +58,7 @@ export type StatusKey =
   // Composition (proposition)
   | "lineup_draft"
   | "lineup_published"
+  | "plan_published" // Publié (plan tactique, masculin : sport-vestiaire.md §10)
   // Défi entre clubs (proposition)
   | "challenge_pending"
   | "challenge_accepted"
@@ -157,6 +158,7 @@ export const STATUS_MAP: Record<StatusKey, { family: StatusFamily; label: string
 
   lineup_draft: { family: "warning", label: "Brouillon" },
   lineup_published: { family: "success", label: "Publiée" },
+  plan_published: { family: "success", label: "Publié" },
 
   challenge_pending: { family: "warning", label: "En attente" },
   challenge_accepted: { family: "success", label: "Accepté" },

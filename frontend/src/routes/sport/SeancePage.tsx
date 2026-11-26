@@ -81,6 +81,37 @@ function attendanceStatusKey(status: Attendance["status"]): StatusKey {
 // Vue « Pointage » (§3.1)
 // ---------------------------------------------------------------------------
 
+/**
+ * Petit badge des joueurs qui ne pourront pas être répartis (sport-seance.md
+ * §3.1 point 3). L'effectif ne sert qu'un booléen sans motif
+ * (`is_unavailable`, 10.2 n° 16) : « Indisponible » en gris, jamais le motif.
+ */
+function UnavailableBadge() {
+  return (
+    <span className="mt-0.5 block">
+      <StatusBadge status="medical_unavailable" />
+    </span>
+  );
+}
+
+/**
+ * Nombre de joueurs cochés qui ne pourront pas être placés
+ * (sport-pointage-selection-multiple.md §4.1). La sélection ne contient que
+ * des joueurs NON pointés : la zone « Ne peuvent pas jouer » (pointés
+ * seulement) ne suffit pas, on lit le booléen `is_unavailable` de l'effectif.
+ */
+function countUnavailable(
+  selected: number[],
+  roster: Pick<ClubPlayerListItem, "membership_id" | "is_unavailable">[],
+  unassigned?: Pick<UnassignedGroups, "cannot_play"> | null,
+): number {
+  return selected.filter(
+    (id) =>
+      roster.some((m) => m.membership_id === id && m.is_unavailable) ||
+      Boolean(unassigned?.cannot_play.some((p) => p.membership_id === id)),
+  ).length;
+}
+
 interface PointageRow {
   membership: ClubPlayerListItem;
   attendance: Attendance | null;
@@ -272,6 +303,7 @@ function PointageTab({
                           .filter(Boolean)
                           .join(" · ")}
                       </span>
+                      {row.membership.is_unavailable ? <UnavailableBadge /> : null}
                     </span>
                     {rank > 0 ? <span className="text-[13px] text-text-muted">{rank}</span> : null}
                   </label>
@@ -299,6 +331,7 @@ function PointageTab({
                       .filter(Boolean)
                       .join(" · ")}
                   </p>
+                  {row.membership.is_unavailable ? <UnavailableBadge /> : null}
                 </button>
                 {row.pending && !row.attendance ? (
                   <StatusBadge status="queued" />
@@ -345,7 +378,7 @@ function PointageTab({
         eventDate={session.event_date}
         lateCutoff={session.late_arrival_cutoff}
         lateCountsAbsent={session.late_arrival_counts_absent}
-        blockedCount={bulk.selected.filter((id) => session.unassigned?.cannot_play.some((p) => p.membership_id === id)).length}
+        blockedCount={countUnavailable(bulk.selected, roster, session.unassigned)}
         submitting={bulk.submitting}
         error={bulk.error}
         onCancel={() => setConfirmOpen(false)}

@@ -25,7 +25,7 @@ function PlanRow({ plan, onOpen }: { plan: TacticalPlanListItem; onOpen: () => v
           {plan.match_id ? `Match n° ${plan.match_id}` : "Aucun match rattaché"}
         </p>
       </div>
-      <StatusBadge status={plan.is_published ? "lineup_published" : "lineup_draft"} />
+      <StatusBadge status={plan.is_published ? "plan_published" : "lineup_draft"} />
     </button>
   );
 }

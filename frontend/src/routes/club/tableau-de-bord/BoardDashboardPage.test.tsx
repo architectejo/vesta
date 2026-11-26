@@ -357,6 +357,52 @@ describe("BoardDashboardPage", () => {
     expect(within(dialog).queryByRole("link")).not.toBeInTheDocument();
   });
 
+  it("affiche le bandeau rouge de la page quand une dépense non justifiée bloque les libérations (série 5, fiche §3)", async () => {
+    vi.mocked(getBoardDashboard).mockResolvedValue(dashboard());
+    renderPage();
+    await screen.findByRole("heading", { name: "Tableau de bord du club" });
+    expect(
+      screen.getByText("Une dépense n'est pas justifiée : aucune nouvelle dépense ne peut être libérée."),
+    ).toBeInTheDocument();
+  });
+
+  it("n'affiche pas ce bandeau quand les libérations ne sont pas bloquées ou que la carte est en erreur", async () => {
+    const base = dashboard();
+    vi.mocked(getBoardDashboard).mockResolvedValue(
+      dashboard({
+        expenses_by_category: {
+          ...(base.expenses_by_category as Exclude<BoardDashboard["expenses_by_category"], { error: string }>),
+          release_blocked: false,
+          release_blocked_reason: null,
+        },
+      }),
+    );
+    const { unmount } = renderPage();
+    await screen.findByRole("heading", { name: "Tableau de bord du club" });
+    expect(screen.queryByText(/aucune nouvelle dépense ne peut être libérée/)).not.toBeInTheDocument();
+    unmount();
+
+    vi.mocked(getBoardDashboard).mockResolvedValue(dashboard({ expenses_by_category: { error: "Impossible de charger les dépenses." } }));
+    renderPage();
+    await screen.findByRole("heading", { name: "Tableau de bord du club" });
+    expect(screen.queryByText(/aucune nouvelle dépense ne peut être libérée/)).not.toBeInTheDocument();
+  });
+
+  it("carte Aptitude : un inapte sans date de retour l'indique au lieu de rester muet (série 5)", async () => {
+    const base = dashboard();
+    const fitness = base.fitness as Exclude<BoardDashboard["fitness"], { error: string }>;
+    vi.mocked(getBoardDashboard).mockResolvedValue(
+      dashboard({
+        fitness: {
+          ...fitness,
+          unfit_players: [{ membership_id: 9, player_name: "Patrick Ilunga", photo: null, fitness_status: "unfit", return_date: null }],
+        },
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText("Patrick Ilunga · date de retour non précisée")).toBeInTheDocument();
+  });
+
   it("aucun terme de diagnostic médical sur la page", async () => {
     vi.mocked(getBoardDashboard).mockResolvedValue(dashboard());
     renderPage();

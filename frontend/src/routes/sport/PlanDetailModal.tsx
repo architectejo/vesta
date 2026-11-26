@@ -155,7 +155,7 @@ export function PlanDetailModal({ open, planId, isCoach, ownMembershipId, onClos
               className={isHorizontalLayout ? "flex-shrink-0 space-y-2" : "space-y-2"}
               style={pitchColumnStyle}
             >
-              <StatusBadge status={plan.is_published ? "lineup_published" : "lineup_draft"} />
+              <StatusBadge status={plan.is_published ? "plan_published" : "lineup_draft"} />
               <PitchBoard
                 mode="readonly"
                 ariaLabel={plan.name}

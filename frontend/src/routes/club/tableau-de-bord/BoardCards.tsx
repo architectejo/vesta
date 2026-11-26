@@ -396,7 +396,7 @@ export function FitnessBoardCard({ card, env, onOpen }: CardProps<FitnessCard>) 
             {card.unfit_players.map((p) => (
               <li key={p.membership_id} className="break-words">
                 {p.player_name}
-                {p.return_date ? ` · retour prévu le ${dateLabel(p.return_date)}` : ""}
+                {p.return_date ? ` · retour prévu le ${dateLabel(p.return_date)}` : " · date de retour non précisée"}
               </li>
             ))}
           </ul>

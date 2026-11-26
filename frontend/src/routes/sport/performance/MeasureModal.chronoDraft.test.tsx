@@ -285,6 +285,25 @@ describe("MeasureModal — sauvegarde locale du chrono", () => {
     expect(window.localStorage.getItem(chronoDraftKey(USER_ID, EVENT_ID))).not.toBeNull();
   });
 
+  it("chrono repris, focus DANS la modale : Échap demande la confirmation d'abandon (série 5, C6.2)", async () => {
+    const user = userEvent.setup();
+    const first = renderModal({ userId: USER_ID });
+    await chooseAndStart(user);
+    mono = 1000;
+    await user.click(screen.getByRole("button", { name: "Départ" }));
+    mono = 2000;
+    wall = 1_001_000;
+    first.unmount();
+    mono = 10;
+    wall = 1_060_000;
+    renderModal({ userId: USER_ID, restore: readChronoDraft(USER_ID, EVENT_ID, wall)! });
+    const stop = await screen.findByRole("button", { name: "Arrêter Alice Durand" });
+    stop.focus();
+    await user.keyboard("{Escape}");
+    expect(await screen.findByRole("dialog", { name: "Abandonner ces mesures ?" })).toBeInTheDocument();
+    expect(window.localStorage.getItem(chronoDraftKey(USER_ID, EVENT_ID))).not.toBeNull();
+  });
+
   it("chargement impossible pendant la reprise : message d'erreur, la sauvegarde reste intacte", async () => {
     const user = userEvent.setup();
     const draft = cooperDraft();

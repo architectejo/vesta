@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -528,5 +528,45 @@ describe("VestiairePage - présents sans équipe (sport-vestiaire.md §9.1)", ()
     expect(await screen.findByText("Luc Tshala")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Luc T. : indisponible" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Anne K." })).toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Série 5 (B2) : en-tête et rafraîchissement (sport-vestiaire.md §3 et §6)
+  // -------------------------------------------------------------------------
+
+  it("écrit la date de l'événement dans le contexte de l'en-tête (§3)", async () => {
+    vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null, next_event: null });
+    renderPage();
+    expect(await screen.findByText("Club de test · jeudi 1 octobre")).toBeInTheDocument();
+  });
+
+  it("garde le vestiaire affiché quand un rafraîchissement échoue et propose « Réessayer » (§6)", async () => {
+    vi.mocked(getLockerRoom).mockResolvedValueOnce({ session: makeSessionWithTeams(), match: null, my_situation: null, next_event: null });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <MemoryRouter>
+            <VestiairePage />
+          </MemoryRouter>
+        </ToastProvider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(/Mis à jour à \d{2}:\d{2}/)).toBeInTheDocument();
+    vi.mocked(getLockerRoom).mockRejectedValue(new Error("réseau"));
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ["sport", "locker-room"] });
+    });
+    expect(await screen.findByText(/Mise à jour impossible · \d{2}:\d{2}/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Réessayer" })).toBeInTheDocument();
+    // La dernière version reçue reste affichée, sans page d'erreur.
+    expect(screen.getByText("Vestiaire du jour")).toBeInTheDocument();
+    expect(screen.queryByText("Impossible de charger le vestiaire.")).not.toBeInTheDocument();
+  });
+
+  it("affiche la page d'erreur seulement si aucun vestiaire n'a jamais été reçu", async () => {
+    vi.mocked(getLockerRoom).mockRejectedValue(new Error("réseau"));
+    renderPage();
+    expect(await screen.findByText("Impossible de charger le vestiaire.")).toBeInTheDocument();
   });
 });

@@ -64,6 +64,56 @@ describe("Modal", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("ferme via Échap quand le focus est DANS la modale (série 5 : cas réel, focus initial sur la croix)", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Modal open onClose={onClose} title="Titre">
+        <button type="button">Action</button>
+      </Modal>,
+    );
+    screen.getByRole("button", { name: "Action" }).focus();
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("Échap dans une modale de niveau 2 ne ferme que celle-ci", async () => {
+    const onCloseParent = vi.fn();
+    const onCloseChild = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Modal open onClose={onCloseParent} title="Parent">
+        <Modal open onClose={onCloseChild} title="Enfant" level={2}>
+          <button type="button">Dans l'enfant</button>
+        </Modal>
+      </Modal>,
+    );
+    screen.getByRole("button", { name: "Dans l'enfant" }).focus();
+    await user.keyboard("{Escape}");
+    expect(onCloseChild).toHaveBeenCalledTimes(1);
+    expect(onCloseParent).not.toHaveBeenCalled();
+  });
+
+  it("Échap utilise le onClose du rendu courant, pas celui de l'ouverture", async () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <Modal open onClose={first} title="Titre">
+        <button type="button">Action</button>
+      </Modal>,
+    );
+    rerender(
+      <Modal open onClose={second} title="Titre">
+        <button type="button">Action</button>
+      </Modal>,
+    );
+    screen.getByRole("button", { name: "Action" }).focus();
+    await user.keyboard("{Escape}");
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(first).not.toHaveBeenCalled();
+  });
+
   it("ferme au clic sur le voile seulement si l'appui et le relâchement y ont lieu", () => {
     const onClose = vi.fn();
     render(
