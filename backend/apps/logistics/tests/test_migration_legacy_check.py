@@ -53,8 +53,15 @@ def test_drops_legacy_check_on_existing_db_and_noop_on_fresh_db():
 
 @pytest.mark.django_db(transaction=True)
 def test_migration_roundtrip():
-    executor = MigrationExecutor(connection)
-    executor.migrate([("logistics", "0001_initial")])
-    executor = MigrationExecutor(connection)
-    executor.migrate([("logistics", "0002_drop_legacy_inventoryline_gap_check")])
-    assert LEGACY not in _names()
+    # Revenir a 0001 deroule aussi logistics 0003+ et les migrations dependantes
+    # des autres apps : on reapplique toutes les feuilles du graphe (finally)
+    # pour que la base de test reste complete pour les tests suivants.
+    leaves = MigrationExecutor(connection).loader.graph.leaf_nodes()
+    try:
+        executor = MigrationExecutor(connection)
+        executor.migrate([("logistics", "0001_initial")])
+        executor = MigrationExecutor(connection)
+        executor.migrate([("logistics", "0002_drop_legacy_inventoryline_gap_check")])
+        assert LEGACY not in _names()
+    finally:
+        MigrationExecutor(connection).migrate(leaves)

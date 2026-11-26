@@ -578,3 +578,101 @@ class TestCommandeDeReequilibrage:
         output = run_command("--club", str(ctx.club.id), "--apply")
         assert not fee_dues(legacy_credit).exists()
         assert "0 adhésion(s)" in output
+
+
+class TestReequilibrageCasLimites:
+    """Compléments A1 : cas limites du rééquilibrage (service exposé à la
+    commande), toujours sur la base de test."""
+
+    def _legacy_pay(self, ctx, membership, amount, monkeypatch):
+        monkeypatch.setattr(services, "_ensure_fee_due_for_payment", lambda **kwargs: None)
+        pay_fee(ctx, membership, amount)
+        monkeypatch.undo()
+        assert not fee_dues(membership).exists()
+
+    def test_credit_d_adhesion_masquant_une_mensualite_repasse_en_dette(self, ctx, fee_type, monkeypatch):
+        """Avant la décision, 5 $ de frais payés en crédit couvraient une
+        mensualité de 5 $ impayée : solde 0. Après rééquilibrage, le crédit
+        couvre le dû d'adhésion et la mensualité redevient une dette."""
+
+        services.create_contribution_type(
+            club=ctx.club,
+            created_by=ctx.president.user,
+            name="Mensuelle 5",
+            nature=ContributionType.Nature.MANDATORY,
+            periodicity=ContributionType.Periodicity.MONTHLY,
+            amount="5",
+        )
+        services.generate_dues_for_period(
+            club=ctx.club, period=club_today(ctx).replace(day=1), actor=ctx.president.user
+        )
+        self._legacy_pay(ctx, ctx.player, "5", monkeypatch)
+        later_now = timezone.now() + datetime.timedelta(days=45)
+        later = club_today(ctx) + datetime.timedelta(days=45)
+        assert balance(ctx, ctx.player, later) == Decimal("0.00")
+
+        lines = services.rebalance_membership_fee_dues(ctx.club, apply=True, now=later_now)
+
+        assert [(line.membership_id, line.amount) for line in lines] == [(ctx.player.pk, FEE)]
+        assert lines[0].balance_before == Decimal("0.00")
+        assert lines[0].balance_after == Decimal("-5.00")
+        assert balance(ctx, ctx.player, later) == Decimal("-5.00")
+        in_order, amount_due, _reason = services.is_in_good_standing(ctx.player, at_date=later)
+        assert in_order is False
+        assert amount_due == Decimal("5.00")
+
+    def test_paiement_partiel_historique_laisse_le_reste_du(self, ctx, fee_type, monkeypatch):
+        self._legacy_pay(ctx, ctx.pending_member, "3", monkeypatch)
+        assert balance(ctx, ctx.pending_member) == Decimal("3.00")
+
+        lines = services.rebalance_membership_fee_dues(ctx.club, apply=True)
+
+        assert [line.balance_after for line in lines] == [Decimal("-2.00")]
+        assert fee_dues(ctx.pending_member).get().amount == FEE
+        assert balance(ctx, ctx.pending_member) == Decimal("-2.00")
+        assert services.has_paid_membership_fee(ctx.pending_member) is False
+
+    def test_simulation_annonce_exactement_ce_que_l_application_fera(self, ctx, fee_type, monkeypatch):
+        self._legacy_pay(ctx, ctx.pending_member, "5", monkeypatch)
+
+        simulated = services.rebalance_membership_fee_dues(ctx.club, apply=False)
+        assert not fee_dues(ctx.pending_member).exists()
+        applied = services.rebalance_membership_fee_dues(ctx.club, apply=True)
+
+        assert simulated == applied
+        assert services.rebalance_membership_fee_dues(ctx.club, apply=True) == []
+
+    def test_aucun_solde_stocke_sur_les_modeles_de_tresorerie(self):
+        """CLAUDE.md règle 2 : aucun champ « solde » stocké."""
+
+        from django.apps import apps as django_apps
+
+        for model in django_apps.get_app_config("treasury").get_models():
+            for field in model._meta.get_fields():
+                assert "balance" not in field.name and "solde" not in field.name, (
+                    f"{model.__name__}.{field.name}"
+                )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_migration_0016_reversible_sur_la_base_de_test():
+    """Aller-retour de la migration 0016 sur la base de test uniquement
+    (jamais sur db.sqlite3). Les migrations dépendantes (logistics) sont
+    réappliquées ensuite : l'état final est celui de toutes les feuilles."""
+
+    from django.db import connection
+    from django.db.migrations.executor import MigrationExecutor
+
+    target = ("treasury", "0016_due_membership_fee_and_cancellation")
+    previous = [("treasury", "0015_paymentreversal_multiple_requests")]
+    leaves = MigrationExecutor(connection).loader.graph.leaf_nodes()
+    try:
+        MigrationExecutor(connection).migrate(previous)
+        executor = MigrationExecutor(connection)
+        assert target not in executor.loader.applied_migrations
+        assert "treasury_duecancellation" not in connection.introspection.table_names()
+    finally:
+        MigrationExecutor(connection).migrate(leaves)
+    executor = MigrationExecutor(connection)
+    assert target in executor.loader.applied_migrations
+    assert "treasury_duecancellation" in connection.introspection.table_names()

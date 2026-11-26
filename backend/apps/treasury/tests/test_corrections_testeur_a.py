@@ -213,6 +213,11 @@ def test_migration_0015_reversible_sur_la_base_de_test():
 
     previous = [("treasury", "0014_remove_cashsession_pin_verified_at")]
     latest = [("treasury", "0015_paymentreversal_multiple_requests")]
+    # Retour a TOUTES les feuilles du graphe : revenir a 0014 deroule aussi
+    # les migrations posterieures (treasury 0016, logistics 0003...) ; ne
+    # reappliquer que 0015 laisserait la base de test sans leurs tables
+    # (« no such table: treasury_duecancellation » dans les tests suivants).
+    leaves = MigrationExecutor(connection).loader.graph.leaf_nodes()
     try:
         executor = MigrationExecutor(connection)
         executor.migrate(previous)
@@ -220,7 +225,7 @@ def test_migration_0015_reversible_sur_la_base_de_test():
         assert latest[0] not in executor.loader.applied_migrations
     finally:
         executor = MigrationExecutor(connection)
-        executor.migrate(latest)
+        executor.migrate(leaves)
     assert latest[0] in MigrationExecutor(connection).loader.applied_migrations
 
 
