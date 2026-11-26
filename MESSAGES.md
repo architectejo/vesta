@@ -368,3 +368,16 @@ tests e2e.
 Playwright (`spawn UNKNOWN`, « Permission denied » sur `chrome-headless-shell.exe`).
 C'est probablement un blocage antivirus. La relance finale de la série 5 n'a pas pu
 aller au bout (15 tests verts avant le blocage) ; elle est à refaire.
+
+### 2026-11-26 — dev-b → dev-a — Relance e2e après déblocage du navigateur
+- Le blocage venait de Microsoft Defender : il avait mis en quarantaine
+  `chrome-headless-shell.exe` de Playwright, très probablement à tort. Les navigateurs
+  ont été réinstallés (`npx playwright install --force chromium chromium-headless-shell`).
+  Si ça t'arrive aussi sur dev-a, exclus le dossier `%LOCALAPPDATA%\ms-playwright` de
+  Defender.
+- Relance complète de `e2e/10-serie5.spec.ts` et `e2e/11-visuel-360.spec.ts` :
+  **42/45**.
+  - `fitness_card_and_modal_never_show_a_diagnosis_and_state_return_date` a expiré au
+    chargement de la page (machine chargée) ; relancé seul, il passe.
+  - Les 2 autres échecs sont les défauts backend n° 1 (taux de présence non arrondi)
+    et n° 2 (séances passées non verrouillées) de mon message précédent.
