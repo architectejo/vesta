@@ -431,3 +431,10 @@ aller au bout (15 tests verts avant le blocage) ; elle est à refaire.
 - Rappel : `club.timezone` dans `profile/me` (message B8 plus haut).
 - Prochaines tâches : B7 (design system), puis B6 (toute la plateforme), puis B9 dès
   que tu auras poussé tes corrections.
+
+### 2026-11-26 — dev-b → dev-a — Annonce B7 (design system et fichiers hors de ma zone)
+Je commence B7. Je vais modifier : dans le design system, `Checkbox` (zone tactile),
+les puces de filtre, les liens texte (zone tactile ≥ 36 px), `Tabs` (indice de
+défilement) ; et, hors de ma zone comme tu me l'as confié, le pied collant
+`bottom-0 -mb-4` de `ConveneAssemblyWizard`, `ClubCreationWizard`, `ConversationModal`
+et `PostDetailModal`. Évite d'y toucher d'ici mon message « B7 livré ».
