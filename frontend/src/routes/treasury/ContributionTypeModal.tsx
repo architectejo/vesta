@@ -6,7 +6,7 @@ import type {
   ContributionType,
   ContributionTypeInput,
 } from "../../api/treasury";
-import { Button, Modal, MoneyField, TextField } from "../../design-system";
+import { Button, Checkbox, Modal, MoneyField, TextField } from "../../design-system";
 import { isPositiveAmount, toApiAmount } from "./money";
 import { NATURE_LABELS, PERIODICITY_OPTIONS } from "./contributionTypeLabels";
 
@@ -81,6 +81,10 @@ export function ContributionTypeModal({
   const [amount, setAmount] = useState(type?.amount ?? "");
   const [periodicity, setPeriodicity] = useState<ContributionPeriodicity>(type?.periodicity ?? "monthly");
   const [dueDay, setDueDay] = useState(type?.due_day ? String(type.due_day) : DEFAULT_DUE_DAY);
+  // « Frais d'adhésion » (tresorerie-tableau-de-bord.md §4.6, CDC 4.3) : sans
+  // ce marqueur, aucun club ne peut encaisser les frais d'adhésion ni faire
+  // passer un joueur « Inscrit » (constaté en série 6).
+  const [isMembershipFee, setIsMembershipFee] = useState(type?.is_membership_fee ?? false);
   const [errors, setErrors] = useState<FormErrors>({});
 
   function submit(): void {
@@ -94,6 +98,9 @@ export function ContributionTypeModal({
       periodicity,
       due_day: hasDueDay(periodicity) ? Number(dueDay) : null,
       scope: type?.scope ?? "all",
+      // Envoyé dès qu'il est coché, et toujours en modification ; à la
+      // création, l'absence vaut « non » côté API.
+      ...(isMembershipFee || type ? { is_membership_fee: isMembershipFee } : {}),
     });
   }
 
@@ -176,6 +183,15 @@ export function ContributionTypeModal({
             error={errors.dueDay}
           />
         ) : null}
+        <div>
+          <Checkbox
+            checked={isMembershipFee}
+            onChange={setIsMembershipFee}
+            disabled={!canEdit}
+            label="Frais d'adhésion"
+          />
+          <p className="text-sm text-text-muted">Son paiement fait passer le joueur Inscrit.</p>
+        </div>
         {submitError ? (
           <p role="alert" className="text-sm text-status-danger-fg">
             {submitError}

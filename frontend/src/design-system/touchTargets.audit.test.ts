@@ -46,8 +46,24 @@ describe("zones tactiles et pieds collants (B7)", () => {
   });
 
   it("aucune puce de filtre ne descend à 32 px", () => {
-    const bad = offenders((literal) => /(^"|\s)h-8 rounded-full border/.test(literal));
+    const bad = offenders((literal) => /(^"|\s)h-[5-8] rounded-full border/.test(literal));
     expect(bad).toEqual([]);
+  });
+
+  it("série 6 : boutons repérés sous 36 px à 360 px (retrait de filtre, tri, banc, pointage, préférence)", () => {
+    const source = (suffix: string) => Object.entries(SOURCES).find(([file]) => file.endsWith(suffix))?.[1] ?? "";
+    // Croix « Retirer le filtre … » des puces de DataTable (16 px).
+    expect(source("components/DataTable.tsx")).toMatch(/Retirer le filtre \$\{chip\.label\}`\}\s*className="[^"]*\bh-9 w-9\b/);
+    // Bouton de tri d'en-tête de colonne (18 px).
+    expect(source("components/DataTable.tsx")).toMatch(/toggleSort\(column\.key\)\}\s*className="[^"]*\bmin-h-control-sm\b/);
+    // Recherche du banc (32 px) du panneau d'équipe.
+    expect(source("sport/TeamFieldPanel.tsx")).not.toMatch(/"h-8 w-full rounded-sm/);
+    // « N joueurs pas encore pointés » du Vestiaire (20 px).
+    expect(source("sport/VestiairePage.tsx")).toMatch(/"flex min-h-control-sm items-center gap-1 text-sm text-text"/);
+    // Nom d'un joueur sans numéro ni poste dans le pointage de séance (20 px).
+    expect(source("sport/SeancePage.tsx")).toMatch(/className="min-h-control-sm min-w-0 flex-1 text-left"/);
+    // Interrupteur « Recevoir aussi mes notifications par email » (20 px).
+    expect(source("profil/ProfilPage.tsx")).toMatch(/<label className="[^"]*\bmin-h-control-sm\b[^"]*">\s*<span>Recevoir aussi mes notifications par email/);
   });
 
   it("aucun pied collant de modale ne reste à `bottom-0` avec `-mb-4`", () => {

@@ -320,7 +320,7 @@ function PointageTab({
                 />
                 <button
                   type="button"
-                  className="min-w-0 flex-1 text-left"
+                  className="min-h-control-sm min-w-0 flex-1 text-left"
                   disabled={!row.attendance}
                   onClick={() => row.attendance && onOpenDetail(row.attendance)}
                 >

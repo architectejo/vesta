@@ -17,4 +17,15 @@ describe("StatusBadge", () => {
     render(<StatusBadge status="suspended" />);
     expect(screen.getByText("Suspendu")).toBeInTheDocument();
   });
+
+  it("n'affiche pas un complément identique au libellé (« En attente · En attente », série 6)", () => {
+    render(<StatusBadge status="pending" detail="En attente" />);
+    expect(screen.getByText("En attente")).toBeInTheDocument();
+    expect(screen.queryByText(/En attente · En attente/)).not.toBeInTheDocument();
+  });
+
+  it("garde un complément différent du libellé", () => {
+    render(<StatusBadge status="registered" detail="Inscrit le 3 mars" />);
+    expect(screen.getByText("Inscrit · Inscrit le 3 mars")).toBeInTheDocument();
+  });
 });

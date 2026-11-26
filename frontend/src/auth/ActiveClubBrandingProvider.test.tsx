@@ -17,7 +17,14 @@ import { ActiveClubBrandingProvider } from "./ActiveClubBrandingProvider";
 
 let mockAuth: {
   status: "anonymous" | "authenticated";
-  user: { id: number; email: string; first_name: string; last_name: string; is_superuser: boolean } | null;
+  user: {
+    id: number;
+    email: string;
+    first_name: string;
+    last_name: string;
+    is_superuser: boolean;
+    must_change_password?: boolean;
+  } | null;
   club: {
     id: number;
     slug: string;
@@ -146,5 +153,14 @@ describe("ActiveClubBrandingProvider — variables CSS globales du thème Classi
 
     expect(document.documentElement.getAttribute("style") ?? "").toBe("");
     expect(getMyProfile).not.toHaveBeenCalled();
+  });
+
+  it("ne demande pas le profil tant que le mot de passe provisoire n'est pas changé (série 6)", () => {
+    mockAuth = { ...CLUB_MEMBER_AUTH, user: { ...CLUB_MEMBER_AUTH.user, must_change_password: true } };
+
+    renderTree();
+
+    expect(getMyProfile).not.toHaveBeenCalled();
+    expect(document.documentElement.style.getPropertyValue("--color-sidebar-bg")).toBe("#1b2143");
   });
 });

@@ -69,12 +69,59 @@ const programmaticPopEvents = new WeakSet<Event>();
 /** Filet de sécurité : un retour sans `popstate` (rien à dépiler) expire. */
 const PROGRAMMATIC_BACK_TTL_MS = 1000;
 
-function goBackProgrammatically(): void {
+function goBackProgrammatically(steps = 1): void {
   const token = setTimeout(() => {
     pendingProgrammaticBacks.delete(token);
   }, PROGRAMMATIC_BACK_TTL_MS);
   pendingProgrammaticBacks.add(token);
-  window.history.back();
+  if (steps === 1) window.history.back();
+  else window.history.go(-steps);
+}
+
+/**
+ * Retours demandés par le nettoyage des modales, différés d'une tâche
+ * (série 6). Deux raisons :
+ * - React StrictMode (développement) démonte puis remonte chaque modale
+ *   aussitôt : un `history.back()` immédiat suivi du `pushState` du remontage
+ *   faisait revenir le navigateur sur l'entrée de la PAGE (le retour est
+ *   calculé avant le `pushState`), si bien que la fermeture suivante
+ *   ramenait à la page précédente (constaté : « Valider » des frais
+ *   d'adhésion renvoyait du Comité à la Trésorerie). Le remontage annule
+ *   donc simplement le retour en attente et garde son entrée.
+ * - Plusieurs modales fermées ensemble (confirmation + formulaire) : un seul
+ *   `history.go(-n)` au lieu de n retours concurrents, dont le navigateur
+ *   ne réalise parfois qu'un seul.
+ */
+interface ScheduledBack {
+  flushed: boolean;
+}
+const scheduledBacks = new Set<ScheduledBack>();
+let scheduledBacksTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleProgrammaticBack(): ScheduledBack {
+  const entry: ScheduledBack = { flushed: false };
+  scheduledBacks.add(entry);
+  if (scheduledBacksTimer === null) {
+    scheduledBacksTimer = setTimeout(() => {
+      scheduledBacksTimer = null;
+      const steps = scheduledBacks.size;
+      for (const item of scheduledBacks) item.flushed = true;
+      scheduledBacks.clear();
+      // Une vraie navigation a pu avoir lieu entre-temps (ex. « Accéder à mon
+      // club » ferme la modale puis redirige) : on ne dépile alors rien, pour
+      // ne pas annuler cette navigation (série 6 : page blanche).
+      const stillOurMarker = (window.history.state as { vestaModal?: boolean } | null)?.vestaModal === true;
+      if (steps > 0 && stillOurMarker) goBackProgrammatically(steps);
+    }, 0);
+  }
+  return entry;
+}
+
+/** Annule un retour encore en attente ; vrai si l'entrée d'historique est toujours là. */
+function cancelScheduledBack(entry: ScheduledBack | null): boolean {
+  if (!entry || entry.flushed || !scheduledBacks.has(entry)) return false;
+  scheduledBacks.delete(entry);
+  return true;
 }
 
 if (typeof window !== "undefined") {
@@ -130,6 +177,7 @@ export function Modal({
   const dragStartYRef = useRef<number | null>(null);
   const pushedHistoryRef = useRef(false);
   const closingViaPopStateRef = useRef(false);
+  const scheduledBackRef = useRef<ScheduledBack | null>(null);
 
   const canCloseNow = !blocking && !isSubmitting;
 
@@ -172,7 +220,11 @@ export function Modal({
   // retour ferme la modale au lieu de quitter la page.
   useEffect(() => {
     if (!open) return undefined;
-    window.history.pushState({ vestaModal: true }, "");
+    // Remontage immédiat (StrictMode) : l'entrée factice est encore là.
+    if (!cancelScheduledBack(scheduledBackRef.current)) {
+      window.history.pushState({ vestaModal: true }, "");
+    }
+    scheduledBackRef.current = null;
     pushedHistoryRef.current = true;
 
     function handlePopState(event: PopStateEvent): void {
@@ -201,7 +253,7 @@ export function Modal({
         const currentStateIsStillOurMarker =
           (window.history.state as { vestaModal?: boolean } | null)?.vestaModal === true;
         if (!closingViaPopStateRef.current && currentStateIsStillOurMarker) {
-          goBackProgrammatically();
+          scheduledBackRef.current = scheduleProgrammaticBack();
         }
       }
       closingViaPopStateRef.current = false;

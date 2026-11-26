@@ -31,6 +31,9 @@ const PILL_CLASS: Record<StatusFamily, string> = {
  */
 export function StatusBadge({ status, detail, className = "" }: StatusBadgeProps) {
   const entry = STATUS_MAP[status];
+  // Un complément identique au libellé (ex. libellé de statut renvoyé tel
+  // quel par l'API : « En attente · En attente ») n'apporte rien : omis.
+  const extra = detail && detail.trim().toLowerCase() !== entry.label.toLowerCase() ? detail : "";
   return (
     <span
       className={[
@@ -42,7 +45,7 @@ export function StatusBadge({ status, detail, className = "" }: StatusBadgeProps
       <span aria-hidden="true" className={["h-1.5 w-1.5 rounded-full", DOT_CLASS[entry.family]].join(" ")} />
       <span>
         {entry.label}
-        {detail ? ` · ${detail}` : ""}
+        {extra ? ` · ${extra}` : ""}
       </span>
     </span>
   );

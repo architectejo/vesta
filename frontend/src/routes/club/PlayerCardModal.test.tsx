@@ -9,10 +9,12 @@ vi.mock("../../api/clubs", async () => {
   return {
     ...actual,
     getPlayerCard: vi.fn(),
+    getMyProfile: vi.fn(),
+    getMembershipApplication: vi.fn(),
   };
 });
 
-import { getPlayerCard } from "../../api/clubs";
+import { getMembershipApplication, getMyProfile, getPlayerCard } from "../../api/clubs";
 import { ApiError } from "../../api/client";
 
 const CARD = {
@@ -137,5 +139,51 @@ describe("PlayerCardModal", () => {
     expect(closeButtons.length).toBeGreaterThanOrEqual(2);
     await user.click(closeButtons[closeButtons.length - 1]!);
     expect(onClose).toHaveBeenCalled();
+  });
+
+  describe("joueur en attente vu par le Trésorier (statut masqué « unavailable », série 6)", () => {
+    const PENDING_MASKED = { ...CARD, membership_status: "unavailable", membership_status_label: "Indisponible", roles: [] };
+
+    it("affiche « Indisponible » et non « En attente » quand l'API masque le statut", async () => {
+      vi.mocked(getPlayerCard).mockResolvedValue(PENDING_MASKED);
+      vi.mocked(getMyProfile).mockReturnValue(new Promise(() => {}));
+      vi.mocked(getMembershipApplication).mockReturnValue(new Promise(() => {}));
+      renderModal();
+
+      expect(await screen.findByText("Indisponible")).toBeInTheDocument();
+      expect(screen.queryByText("En attente")).not.toBeInTheDocument();
+    });
+
+    it("propose « Enregistrer les frais d'adhésion » au Trésorier tant que le dossier est en attente", async () => {
+      vi.mocked(getPlayerCard).mockResolvedValue(PENDING_MASKED);
+      vi.mocked(getMyProfile).mockResolvedValue({
+        membership_id: 26,
+        roles: [{ role: "treasurer", label: "Trésorier" }],
+      } as unknown as Awaited<ReturnType<typeof getMyProfile>>);
+      vi.mocked(getMembershipApplication).mockResolvedValue({
+        id: 2,
+        membership_id: 7,
+        membership_status: "pending",
+        membership_fee_paid: false,
+        application_pdf_url: null,
+        generated_at: null,
+        sponsor_notified_at: null,
+        sponsor_decision: "pending",
+        sponsor_signed_by_id: null,
+        sponsor_signed_at: null,
+        sponsor_refused_reason: "",
+        sponsor_reminder_sent_at: null,
+        president_alerted_at: null,
+        resolved_at: null,
+        cancelled_by_id: null,
+        cancelled_reason: "",
+        membership_fee_payment_id: null,
+        membership_fee_disposition: "",
+      } as Awaited<ReturnType<typeof getMembershipApplication>>);
+      renderModal();
+
+      expect(await screen.findByRole("button", { name: "Enregistrer les frais d'adhésion" })).toBeInTheDocument();
+      expect(getMembershipApplication).toHaveBeenCalledWith(7);
+    });
   });
 });

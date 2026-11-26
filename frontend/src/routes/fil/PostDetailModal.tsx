@@ -106,6 +106,9 @@ export function PostDetailModal({
     try {
       await addComment(postId, commentBody.trim());
       setCommentBody("");
+      // Le fil (compteur « Commenter », derniers commentaires de la carte)
+      // doit refléter le nouveau commentaire dès la fermeture de la modale.
+      onChanged();
       await queryClient.invalidateQueries({ queryKey: ["social", "post", postId] });
       await queryClient.invalidateQueries({ queryKey: ["social", "post", postId, "comments"] });
     } catch {
@@ -120,6 +123,7 @@ export function PostDetailModal({
     try {
       await deleteComment(commentId);
       showToast("Commentaire supprimé.");
+      onChanged();
       await queryClient.invalidateQueries({ queryKey: ["social", "post", postId] });
       await queryClient.invalidateQueries({ queryKey: ["social", "post", postId, "comments"] });
       setDeleteCommentId(null);

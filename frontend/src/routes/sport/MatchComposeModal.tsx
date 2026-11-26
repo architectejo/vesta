@@ -29,18 +29,13 @@ export interface MatchComposeModalProps {
 /**
  * « Composer l'équipe » (docs/ecrans/sport-feuille-de-match.md §4.1).
  *
- * **Écart signalé au compte rendu** : le CDC prévoit un pré-grisage des
- * joueurs non sélectionnables (dette, suspension, inaptitude, attente
- * d'adhésion) directement dans cette liste, avec rafraîchissement toutes
- * les 15 s (§4.1 bis). Aucune route de l'API livrée (`apps.clubs`/
- * `apps.sport`) ne renvoie l'éligibilité de tout l'effectif en une fois —
- * seul le service `add_to_composition` la connaît, joueur par joueur, au
- * moment de la tentative. Le contrôle réel (CLAUDE.md règle n° 5) reste
- * donc entièrement fait par ce service : un joueur non sélectionnable
- * n'est jamais réellement composé, mais l'interface ne peut pas le griser
- * par avance. L'erreur de l'API s'affiche alors sur sa ligne, telle
- * quelle. Point à remonter pour une prochaine itération (endpoint
- * d'éligibilité groupée).
+ * Pré-grisage (§4.1 bis, série 6) : la liste de l'effectif porte
+ * désormais `is_unavailable` ; un joueur en dette, suspendu, inapte ou en
+ * attente d'adhésion a sa case désactivée et n'est jamais envoyé. **Écart
+ * restant** : la liste ne donne pas le motif détaillé (« En dette : 30 $ »,
+ * « Suspendu : encore 1 match »…) ni de rafraîchissement d'éligibilité ;
+ * le contrôle réel (CLAUDE.md règle n° 5) reste fait par le service
+ * `add_to_composition`, dont l'erreur s'affiche sur la ligne.
  */
 export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }: MatchComposeModalProps) {
   const [search, setSearch] = useState("");
@@ -55,8 +50,16 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
   });
 
   const alreadyComposed = useMemo(() => new Set(existing.map((e) => e.membership_id)), [existing]);
+  const blockedIds = useMemo(
+    () => new Set((rosterQuery.data ?? []).filter((p) => p.is_unavailable).map((p) => p.membership_id)),
+    [rosterQuery.data],
+  );
 
-  const filtered = (rosterQuery.data ?? []).filter((player) => {
+  // Sélectionnables d'abord, non sélectionnables ensuite (§4.1).
+  const sorted = [...(rosterQuery.data ?? [])].sort(
+    (a, b) => Number(Boolean(a.is_unavailable)) - Number(Boolean(b.is_unavailable)),
+  );
+  const filtered = sorted.filter((player) => {
     if (!search.trim()) return true;
     const q = search.trim().toLowerCase();
     return (
@@ -91,6 +94,7 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
     for (const [idStr, draft] of Object.entries(drafts)) {
       const membershipId = Number(idStr);
       if (alreadyComposed.has(membershipId)) continue;
+      if (blockedIds.has(membershipId)) continue;
       if (draft.jerseyNumber == null) {
         errors[membershipId] = "Indiquez un numéro du jour.";
         continue;
@@ -146,19 +150,28 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
           <ul className="divide-y divide-border">
             {filtered.map((player) => {
               const composed = alreadyComposed.has(player.membership_id);
+              // §4.1 bis : un joueur en dette, suspendu, inapte ou en attente
+              // n'est jamais cochable (CLAUDE.md règle 5). La liste de l'effectif
+              // ne donne que l'indicateur `is_unavailable`, sans le motif :
+              // le service de composition reste le contrôle réel.
+              const blocked = Boolean(player.is_unavailable) && !composed;
               const draft = drafts[player.membership_id];
               const error = rowErrors[player.membership_id];
               return (
                 <li key={player.membership_id} className="py-2">
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 shrink-0"
-                      checked={Boolean(draft) || composed}
-                      disabled={composed}
-                      onChange={() => toggle(player)}
-                      aria-label={`Sélectionner ${player.first_name} ${player.last_name}`}
-                    />
+                  <div className={["flex items-center gap-3", blocked ? "opacity-60" : ""].join(" ")}>
+                    {/* Zone tactile de 44 px autour de la case (§4.1, B7). */}
+                    <label className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center">
+                      <input
+                        type="checkbox"
+                        className="h-5 w-5 shrink-0"
+                        checked={(Boolean(draft) || composed) && !blocked}
+                        disabled={composed || blocked}
+                        aria-disabled={composed || blocked}
+                        onChange={() => toggle(player)}
+                        aria-label={`Sélectionner ${player.first_name} ${player.last_name}`}
+                      />
+                    </label>
                     <Avatar name={`${player.first_name} ${player.last_name}`} photoUrl={player.photo} size={40} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm text-text">
@@ -166,9 +179,12 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
                         {composed ? " (déjà composé)" : ""}
                       </p>
                       <p className="truncate text-xs text-text-muted">{player.position_label}</p>
+                      {blocked ? (
+                        <p className="text-sm text-status-danger-fg">Non sélectionnable (dette, suspension, inaptitude ou adhésion en attente)</p>
+                      ) : null}
                     </div>
                   </div>
-                  {draft && !composed ? (
+                  {draft && !composed && !blocked ? (
                     <div className="mt-2 flex flex-wrap items-end gap-3 pl-7">
                       <SegmentedControl
                         label="Rôle"

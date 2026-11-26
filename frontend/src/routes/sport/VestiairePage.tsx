@@ -340,7 +340,7 @@ function PasEncorePointesCard({ session, canSee }: { session: SessionDetail; can
     <section className="rounded-md border border-border p-3">
       <button
         type="button"
-        className="flex items-center gap-1 text-sm text-text"
+        className="flex min-h-control-sm items-center gap-1 text-sm text-text"
         onClick={() => setExpanded((v) => !v)}
       >
         {count} joueurs pas encore pointés

@@ -291,7 +291,7 @@ export function ProfilPage() {
 
       <section className="rounded-lg bg-surface p-3 shadow-card sm:p-4">
         <h2 className="text-base font-semibold text-text">Préférences</h2>
-        <label className="mt-2 flex items-center justify-between gap-2 text-sm text-text">
+        <label className="mt-2 flex min-h-control-sm cursor-pointer items-center justify-between gap-2 py-2 text-sm text-text">
           <span>Recevoir aussi mes notifications par email</span>
           <input
             type="checkbox"

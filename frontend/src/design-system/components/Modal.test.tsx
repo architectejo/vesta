@@ -399,4 +399,82 @@ describe("Modal — historique (bouton Retour) et React StrictMode", () => {
     expect(onCloseBase).not.toHaveBeenCalled();
     expect(onCloseTop).not.toHaveBeenCalled();
   });
+
+  it("sous StrictMode, l'ouverture ne déclenche aucun retour d'historique (série 6 : retour à la page précédente)", async () => {
+    // Le double effet de StrictMode faisait back() puis pushState() : le
+    // navigateur revenait alors sur l'entrée de la page, et la fermeture
+    // suivante ramenait à la page précédente.
+    vi.mocked(window.history.back).mockClear();
+    const pushSpy = vi.spyOn(window.history, "pushState");
+    render(
+      <StrictMode>
+        <Modal open onClose={vi.fn()} title="Frais d'adhésion">
+          Corps
+        </Modal>
+      </StrictMode>,
+    );
+    await flushHistory();
+
+    expect(window.history.back).not.toHaveBeenCalled();
+    expect(pushSpy.mock.calls.filter(([state]) => (state as { vestaModal?: boolean } | null)?.vestaModal)).toHaveLength(1);
+    pushSpy.mockRestore();
+  });
+
+  it("une redirection juste après la fermeture (« Accéder à mon club ») n'est pas annulée par le retour différé", async () => {
+    const { rerender } = render(
+      <Modal open onClose={vi.fn()} title="Créer votre club">
+        Corps
+      </Modal>,
+    );
+    await flushHistory();
+    vi.mocked(window.history.back).mockClear();
+
+    act(() => {
+      rerender(
+        <Modal open={false} onClose={vi.fn()} title="Créer votre club">
+          Corps
+        </Modal>,
+      );
+    });
+    // `<Navigate replace />` de la page de connexion, juste après le
+    // démontage, avant que le retour différé ne parte.
+    window.history.replaceState({ realNav: true }, "", "/");
+    await flushHistory();
+
+    expect(window.history.back).not.toHaveBeenCalled();
+    expect((window.history.state as { realNav?: boolean } | null)?.realNav).toBe(true);
+  });
+
+  it("fermer ensemble deux modales empilées dépile leurs deux entrées en un seul retour", async () => {
+    const goSpy = vi.spyOn(window.history, "go").mockImplementation(() => {
+      setTimeout(() => window.dispatchEvent(new PopStateEvent("popstate")), 0);
+    });
+    function Stack({ open }: { open: boolean }) {
+      return (
+        <StrictMode>
+          {open ? (
+            <>
+              <Modal open onClose={vi.fn()} title="Formulaire">
+                Corps
+              </Modal>
+              <Modal open onClose={vi.fn()} title="Confirmation" level={2}>
+                Confirmer
+              </Modal>
+            </>
+          ) : null}
+        </StrictMode>
+      );
+    }
+    const { rerender } = render(<Stack open />);
+    await flushHistory();
+    vi.mocked(window.history.back).mockClear();
+
+    rerender(<Stack open={false} />);
+    await flushHistory();
+
+    expect(goSpy).toHaveBeenCalledTimes(1);
+    expect(goSpy).toHaveBeenCalledWith(-2);
+    expect(window.history.back).not.toHaveBeenCalled();
+    goSpy.mockRestore();
+  });
 });

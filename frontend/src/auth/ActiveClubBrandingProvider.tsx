@@ -38,12 +38,17 @@ const NEUTRAL_BRANDING: ClubBranding = {
 export function ActiveClubBrandingProvider({ children }: { children: ReactNode }) {
   const auth = useAuth();
   const isClubMember = auth.status === "authenticated" && !auth.user?.is_superuser;
+  // Mot de passe provisoire (ex. Président juste après « Créer un club ») :
+  // aucune donnée du club n'est demandée avant le changement obligatoire
+  // (comptes-connexion.md §4.2) — l'API répondrait 403. L'instantané de
+  // connexion sert de marque blanche en attendant (série 6).
+  const mustChangePassword = Boolean(auth.user?.must_change_password);
 
   const profileQuery = useQuery({
     queryKey: ["profile", "me"],
     queryFn: getMyProfile,
     staleTime: 60_000,
-    enabled: isClubMember,
+    enabled: isClubMember && !mustChangePassword,
   });
 
   const branding = useMemo<ClubBranding>(() => {

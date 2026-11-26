@@ -112,6 +112,27 @@ describe("ContributionTypeModal", () => {
     expect(screen.getByRole("button", { name: "Obligatoire" })).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("permet de marquer le type « Frais d'adhésion » et l'envoie à l'API (CDC 4.3, série 6)", async () => {
+    const { onSubmit } = renderModal();
+    const user = userEvent.setup();
+    expect(screen.getByText("Son paiement fait passer le joueur Inscrit.")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Nom"), "Adhésion");
+    await user.type(screen.getByLabelText("Montant"), "5");
+    await user.selectOptions(screen.getByLabelText("Périodicité"), "one_off");
+    await user.click(screen.getByRole("checkbox", { name: "Frais d'adhésion" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ name: "Adhésion", is_membership_fee: true }));
+  });
+
+  it("préremplit la case « Frais d'adhésion » d'un type existant et la renvoie en modification", async () => {
+    const { onSubmit } = renderModal({ type: { ...EXISTING, is_membership_fee: true } });
+    expect(screen.getByRole("checkbox", { name: "Frais d'adhésion" })).toBeChecked();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ is_membership_fee: true }));
+  });
+
   it("conserve le périmètre du type modifié à l'envoi", async () => {
     const { onSubmit } = renderModal({ type: EXISTING });
     await userEvent.setup().click(screen.getByRole("button", { name: "Enregistrer" }));

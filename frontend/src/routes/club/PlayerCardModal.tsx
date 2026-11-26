@@ -19,7 +19,18 @@ export const MEMBERSHIP_STATUS_KEY: Record<string, StatusKey> = {
   pending: "pending",
   active: "registered",
   departed: "left",
+  // L'API masque le motif pour les membres non habilités (CDC 4.12, 10.2
+  // n° 16) : « Indisponible », neutre, jamais « En attente » par défaut.
+  unavailable: "medical_unavailable",
 };
+
+/**
+ * Statuts pour lesquels une adhésion peut encore être en cours. L'API
+ * renvoie « unavailable » (motif masqué) au Trésorier ou au parrain pour un
+ * joueur « En attente » : `MembershipActions` vérifie lui-même, sur le
+ * dossier d'adhésion, s'il reste une action à proposer (série 6).
+ */
+const MEMBERSHIP_ACTION_STATUSES: ReadonlySet<string> = new Set(["pending", "unavailable"]);
 
 /** « Membre depuis mars 2024 » à partir d'une date « YYYY-MM-DD » (A3, A9). */
 function formatJoinedMonthYear(isoDate: string): string {
@@ -72,7 +83,7 @@ export function PlayerCardModal({
               Fermer
             </Button>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              {card && card.membership_status === "pending" ? (
+              {card && MEMBERSHIP_ACTION_STATUSES.has(card.membership_status) ? (
                 <MembershipActions membershipId={card.membership_id} />
               ) : null}
               {card ? (

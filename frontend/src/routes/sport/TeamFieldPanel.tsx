@@ -296,7 +296,7 @@ export function TeamFieldPanel({
                   placeholder="Nom ou numéro"
                   value={benchQuery}
                   onChange={(e) => setBenchQuery(e.target.value)}
-                  className="h-8 w-full rounded-sm border border-border-strong bg-surface px-2 text-xs text-text placeholder:text-text-muted"
+                  className="h-control-sm w-full rounded-sm border border-border-strong bg-surface px-2 text-sm text-text placeholder:text-text-muted"
                 />
                 <div className="flex flex-wrap gap-1">
                   {BENCH_POSITION_FILTERS.map((f) => (
@@ -306,7 +306,7 @@ export function TeamFieldPanel({
                       onClick={() => setBenchPositionFilter((v) => (v === f.value ? "" : f.value))}
                       aria-pressed={benchPositionFilter === f.value}
                       className={[
-                        "h-6 rounded-full border px-2 text-[11px] font-medium",
+                        "h-control-sm rounded-full border px-3 text-xs font-medium",
                         benchPositionFilter === f.value
                           ? "border-primary bg-primary text-on-primary"
                           : "border-border-strong bg-surface text-text",

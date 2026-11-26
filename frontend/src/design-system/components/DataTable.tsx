@@ -207,7 +207,7 @@ export function DataTable<T>({
                 type="button"
                 onClick={chip.onRemove}
                 aria-label={`Retirer le filtre ${chip.label}`}
-                className="text-text-muted hover:text-text"
+                className="-my-2 -mr-2 inline-flex h-9 w-9 items-center justify-center text-text-muted hover:text-text"
               >
                 <IconRemove aria-hidden="true" className="h-4 w-4" />
               </button>
@@ -263,7 +263,7 @@ export function DataTable<T>({
                         <button
                           type="button"
                           onClick={() => toggleSort(column.key)}
-                          className="inline-flex items-center gap-1"
+                          className="-my-2 inline-flex min-h-control-sm items-center gap-1"
                         >
                           {column.header}
                           {isActiveSort ? (
