@@ -22,7 +22,7 @@ import {
   type DataTableColumn,
 } from "../../design-system";
 import { formatDayMonth, formatNote, formatRate, formatSignedInt, formatSignedNote } from "./statsFormat";
-import { formatTime } from "./sportTime";
+import { formatTime, useClubTimeZone } from "./sportTime";
 import { SessionMeasuresCard } from "./performance/SessionMeasuresCard";
 
 type ListKey = "late" | "excused" | "absent";
@@ -94,6 +94,7 @@ function ExpandableList({
 // ---------------------------------------------------------------------------
 
 function AttendanceCard({ attendance }: { attendance: SessionAttendanceStats }) {
+  const tz = useClubTimeZone();
   const [open, setOpen] = useState<Record<ListKey, boolean>>({ late: false, excused: false, absent: false });
   const refs = useRef<Partial<Record<ListKey, HTMLDivElement | null>>>({});
 
@@ -165,7 +166,7 @@ function AttendanceCard({ attendance }: { attendance: SessionAttendanceStats }) 
           {(limit) =>
             a.late_list
               .slice(0, limit ?? undefined)
-              .map((p) => <PlayerLine key={p.membership_id} player={p} right={formatTime(p.arrived_at)} />)
+              .map((p) => <PlayerLine key={p.membership_id} player={p} right={formatTime(p.arrived_at, tz)} />)
           }
         </ExpandableList>
         <ExpandableList
@@ -542,6 +543,7 @@ export const sessionStatsKey = (sessionId: number) => ["sport", "session-stats",
  * (partie C : le joueur n'y voit que les siennes, côté API).
  */
 export function SessionStatsPanel({ sessionId, onEvaluate, onMeasure, measuresExtra }: SessionStatsPanelProps) {
+  const tz = useClubTimeZone();
   const query = useQuery({
     queryKey: sessionStatsKey(sessionId),
     queryFn: () => getSessionStats(sessionId),
@@ -561,7 +563,7 @@ export function SessionStatsPanel({ sessionId, onEvaluate, onMeasure, measuresEx
   }
   const stats = query.data;
   const online = typeof navigator === "undefined" || navigator.onLine;
-  const stamp = formatTime(stats.generated_at);
+  const stamp = formatTime(stats.generated_at, tz);
 
   return (
     <div className="space-y-4">

@@ -58,7 +58,7 @@ import { IncidentModal } from "./IncidentModal";
 import { useBulkAttendance, type BulkAttendanceState } from "./useBulkAttendance";
 import { MatchComposeModal } from "./MatchComposeModal";
 import { getSportAccess } from "./sportAccess";
-import { formatTime } from "./sportTime";
+import { formatTime, useClubTimeZone } from "./sportTime";
 
 /** Section « Équipements reçus » (feuille de match, complète §4.5/§4.6 de
  * `docs/ecrans/logistique.md` : la modale « Ajouter des équipements » n'avait
@@ -262,6 +262,7 @@ function MatchAttendanceCard({
   onMark: (membershipId: number) => void;
   bulk: BulkAttendanceState;
 }) {
+  const tz = useClubTimeZone();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [excuseOpen, setExcuseOpen] = useState(false);
   // Droits renvoyés par l'API (faux si le match est verrouillé).
@@ -318,7 +319,7 @@ function MatchAttendanceCard({
           <li key={a.id} className="flex items-center gap-3 py-1.5">
             <Avatar name={a.player.name} photoUrl={a.player.photo} size={32} />
             <span className="min-w-0 flex-1 break-words text-sm text-text">{a.player.name}</span>
-            <span className="text-xs text-text-muted">{formatTime(a.arrived_at)}</span>
+            <span className="text-xs text-text-muted">{formatTime(a.arrived_at, tz)}</span>
             <StatusBadge status={attendanceStatusKey(a.status)} />
           </li>
         ))}
@@ -392,6 +393,7 @@ function MatchAttendanceCard({
 
       <BulkConfirmModal
         open={confirmOpen}
+        timeZone={tz}
         players={selectedPlayers}
         canSetTime={canSetTime}
         eventDate={match.event_date}
@@ -675,6 +677,7 @@ function MatchEditModal({
 // ---------------------------------------------------------------------------
 
 export function MatchPage() {
+  const tz = useClubTimeZone();
   const { id } = useParams();
   const matchId = Number(id);
   const queryClient = useQueryClient();
@@ -770,7 +773,7 @@ export function MatchPage() {
         client_recorded_at: clientRecordedAt,
       });
       void queryClient.invalidateQueries({ queryKey: ["sport", "match", matchId] });
-      showToast(`Pointé à ${formatTime(clientRecordedAt)}.`);
+      showToast(`Pointé à ${formatTime(clientRecordedAt, tz)}.`);
     } catch (error) {
       if (error instanceof ApiError && error.status === 0) {
         pendingQueue.enqueue({ membershipId, clientUuid, clientRecordedAt });

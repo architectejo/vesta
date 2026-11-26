@@ -3,7 +3,7 @@ import { ApiError } from "../../api/client";
 import { correctAttendanceTime, excuseSessionAttendance, type Attendance } from "../../api/sport";
 import { Button, Modal, SegmentedControl, StatusBadge, TextField } from "../../design-system";
 import type { StatusKey } from "../../design-system";
-import { combineDateTimeToIso, formatTime } from "./sportTime";
+import { combineDateTimeToIso, formatTime, useClubTimeZone } from "./sportTime";
 
 const EXCUSE_MOTIVES = [
   { value: "Blessé", label: "Blessé" },
@@ -42,8 +42,9 @@ export function AttendanceDetailModal({
   onClose,
   onUpdated,
 }: AttendanceDetailModalProps) {
+  const tz = useClubTimeZone();
   const [mode, setMode] = useState<"view" | "excuse">("view");
-  const [time, setTime] = useState(formatTime(attendance.arrived_at) || "00:00");
+  const [time, setTime] = useState(formatTime(attendance.arrived_at, tz) || "00:00");
   const [motive, setMotive] = useState<(typeof EXCUSE_MOTIVES)[number]["value"]>("Blessé");
   const [detail, setDetail] = useState("");
   const [error, setError] = useState<string | undefined>(undefined);
@@ -55,7 +56,7 @@ export function AttendanceDetailModal({
     setError(undefined);
     setSubmitting(true);
     try {
-      await correctAttendanceTime(attendance.id, combineDateTimeToIso(eventDate, time));
+      await correctAttendanceTime(attendance.id, combineDateTimeToIso(eventDate, time, tz));
       onUpdated();
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : "Une erreur est survenue. Réessayez.");
@@ -113,7 +114,7 @@ export function AttendanceDetailModal({
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm text-text">
-              Heure d'arrivée : {formatTime(attendance.arrived_at) || "—"}
+              Heure d'arrivée : {formatTime(attendance.arrived_at, tz) || "—"}
               {arrivalRank ? ` · rang #${arrivalRank}` : ""}
             </p>
             {attendance.excused_reason ? (

@@ -10,7 +10,7 @@ import {
   type BulkExcuseReasonCode,
 } from "../../api/sport";
 import { useToast } from "../../design-system";
-import { formatTime } from "./sportTime";
+import { formatTime, useClubTimeZone } from "./sportTime";
 
 export type BulkEventKind = "session" | "match";
 
@@ -56,6 +56,7 @@ function plural(n: number, word: string): string {
  * décide du statut (Présent / En retard), des refus et du verrouillage.
  */
 export function useBulkAttendance({ kind, eventId, onChanged, enqueueOffline }: Options) {
+  const tz = useClubTimeZone();
   const { showToast } = useToast();
   const [active, setActive] = useState(false);
   const [selected, setSelected] = useState<number[]>([]);
@@ -125,7 +126,7 @@ export function useBulkAttendance({ kind, eventId, onChanged, enqueueOffline }: 
     if (counts.skipped + counts.refused === 0) {
       showToast(
         request.action === "arrive"
-          ? `${pluralPlayers(counts.created)} ${counts.created > 1 ? "pointés" : "pointé"} à ${formatTime(usedTime)}.`
+          ? `${pluralPlayers(counts.created)} ${counts.created > 1 ? "pointés" : "pointé"} à ${formatTime(usedTime, tz)}.`
           : `${plural(counts.created, "absence")} ${counts.created > 1 ? "excusées enregistrées" : "excusée enregistrée"}.`,
       );
       setActive(false);

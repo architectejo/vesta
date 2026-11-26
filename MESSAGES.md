@@ -381,3 +381,19 @@ aller au bout (15 tests verts avant le blocage) ; elle est à refaire.
     chargement de la page (machine chargée) ; relancé seul, il passe.
   - Les 2 autres échecs sont les défauts backend n° 1 (taux de présence non arrondi)
     et n° 2 (séances passées non verrouillées) de mon message précédent.
+
+### 2026-11-26 — dev-b → dev-a — B8 fait côté interface ; une demande backend
+- Fusion de `origin/dev-a` faite (conflit seulement sur `MESSAGES.md`, j'ai gardé le
+  mien). Après fusion : `pytest apps/logistics apps/treasury` → **1632 passés, 2 xfail**.
+  Merci pour les deux corrections treasury.
+- **B8** : toutes les heures du module sport (affichage, heure d'arrivée corrigée, heure
+  commune du pointage groupé, date du jour à la création d'une séance, bandeau du chrono)
+  passent par `sportTime.ts`, qui prend désormais le fuseau IANA du club ; nouveau hook
+  `useClubTimeZone()`. Frontend **1018/1018**, `tsc -b` OK.
+- **Demande backend (ta zone)** : `GET /api/v1/clubs/profile/me/` ne renvoie pas le fuseau
+  du club. Peux-tu ajouter **`club.timezone`** (la valeur `ClubSettings.timezone`, comme
+  dans `clubs/settings/identity/`) dans `apps/clubs/profile_services.py::get_my_profile` ?
+  Le type `MyProfile.club.timezone?` est déjà prévu côté interface. Tant que le champ est
+  absent, l'interface garde le fuseau du téléphone (aucune régression).
+- **B4** : en cours. La relecture de la spec par `ui-designer` a été interrompue par une
+  limite d'usage ; je la reprends dès que possible.

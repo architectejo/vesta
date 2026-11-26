@@ -23,7 +23,7 @@ import { PlansLibrary } from "./PlansLibrary";
 import { PlayerCardModal } from "./PlayerCardModal";
 import { useTeamsPitchWidthStyle } from "./pitchSizing";
 import { getSportAccess } from "./sportAccess";
-import { formatDateLong, formatNextEventLabel, formatTime } from "./sportTime";
+import { formatDateLong, formatNextEventLabel, formatTime, useClubTimeZone } from "./sportTime";
 import { TeamsBoard } from "./TeamsBoard";
 import { useTeamFieldActions } from "./useTeamFieldActions";
 
@@ -62,6 +62,7 @@ function MaSituationCard({
   session: SessionDetail | null;
   match: MatchDetail | null;
 }) {
+  const tz = useClubTimeZone();
   if (!situation) return null;
   const cutoff = session?.late_arrival_cutoff;
   let text: string;
@@ -73,12 +74,12 @@ function MaSituationCard({
     text = `Vous êtes pointé, mais vous ne pouvez pas jouer aujourd'hui : ${situation.reason}`;
   } else if (situation.attendance.status === "late_absent") {
     text = situation.team
-      ? `Vous êtes arrivé à ${formatTime(situation.attendance.arrived_at)}, après l'heure limite · Équipe ${situation.team}`
-      : `Vous êtes arrivé à ${formatTime(situation.attendance.arrived_at)}, après l'heure limite : vous êtes compté absent. Le Coach ou le Capitaine peut vous placer dans une équipe.`;
+      ? `Vous êtes arrivé à ${formatTime(situation.attendance.arrived_at, tz)}, après l'heure limite · Équipe ${situation.team}`
+      : `Vous êtes arrivé à ${formatTime(situation.attendance.arrived_at, tz)}, après l'heure limite : vous êtes compté absent. Le Coach ou le Capitaine peut vous placer dans une équipe.`;
   } else {
     text = situation.team
-      ? `Vous êtes pointé présent à ${formatTime(situation.attendance.arrived_at)} · Équipe ${situation.team}`
-      : `Vous êtes pointé présent à ${formatTime(situation.attendance.arrived_at)}`;
+      ? `Vous êtes pointé présent à ${formatTime(situation.attendance.arrived_at, tz)} · Équipe ${situation.team}`
+      : `Vous êtes pointé présent à ${formatTime(situation.attendance.arrived_at, tz)}`;
   }
   void cutoff;
   return (

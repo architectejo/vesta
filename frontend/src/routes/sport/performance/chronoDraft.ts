@@ -291,6 +291,6 @@ export function isWorthSaving(state: ChronoDraftState): boolean {
 }
 
 /** « 14:32 » : heure de la dernière sauvegarde, pour le message de reprise. */
-export function formatDraftTime(savedAt: number): string {
-  return formatTime(new Date(savedAt).toISOString());
+export function formatDraftTime(savedAt: number, timeZone?: string | null): string {
+  return formatTime(new Date(savedAt).toISOString(), timeZone);
 }

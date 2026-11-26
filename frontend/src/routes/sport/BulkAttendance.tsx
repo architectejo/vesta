@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Banner, Button, Checkbox, ConfirmDialog, Modal, SegmentedControl, TextArea } from "../../design-system";
 import type { BulkExcuseReasonCode } from "../../api/sport";
 import { pluralPlayers, type BulkRequest, type BulkSummary } from "./useBulkAttendance";
-import { formatTime } from "./sportTime";
+import { combineDateTimeToIso, formatTime, nowTimeHHMM } from "./sportTime";
 
 export interface BulkPlayer {
   id: number;
@@ -145,16 +145,13 @@ function PlayersFold({ players }: { players: BulkPlayer[] }) {
 // Confirmation « Pointer N joueurs ? »
 // ---------------------------------------------------------------------------
 
-function pad(n: number): string {
-  return String(n).padStart(2, "0");
-}
-
 export function BulkConfirmModal({
   open,
   players,
   canSetTime,
   eventDate,
   lateCutoff,
+  timeZone: tz,
   lateCountsAbsent,
   blockedCount = 0,
   submitting,
@@ -171,6 +168,8 @@ export function BulkConfirmModal({
   canSetTime: boolean;
   /** Date de l'événement (AAAA-MM-JJ), pour construire l'heure commune. */
   eventDate: string;
+  /** Fuseau IANA du club : heure commune saisie et affichée à l'heure du club. */
+  timeZone?: string;
   /** Heure limite « HH:MM » (séance) ou coup d'envoi (match). */
   lateCutoff?: string;
   lateCountsAbsent?: boolean;
@@ -188,12 +187,14 @@ export function BulkConfirmModal({
     const current = new Date();
     setNow(current);
     setCustomOn(false);
-    setTime(`${pad(current.getHours())}:${pad(current.getMinutes())}`);
-  }, [open]);
+    setTime(nowTimeHHMM(tz, current));
+    // L'heure proposée suit le fuseau du club, connu après l'ouverture parfois.
+  }, [open, tz]);
 
-  const arrivedAt = customOn && time ? new Date(`${eventDate}T${time}:00`) : null;
+  // Heure commune saisie à l'heure du club (CLAUDE.md §7), envoyée en UTC.
+  const arrivedAt = customOn && time ? new Date(combineDateTimeToIso(eventDate, time, tz)) : null;
   const effective = arrivedAt && !Number.isNaN(arrivedAt.getTime()) ? arrivedAt : now;
-  const effectiveHm = `${pad(effective.getHours())}:${pad(effective.getMinutes())}`;
+  const effectiveHm = nowTimeHHMM(tz, effective);
   const afterCutoff = Boolean(lateCutoff) && effectiveHm > lateCutoff!.slice(0, 5);
 
   return (
@@ -215,7 +216,7 @@ export function BulkConfirmModal({
       description={
         <div className="space-y-2">
           <p className="text-text">
-            Heure enregistrée : {customOn ? effectiveHm : formatTime(now.toISOString())}
+            Heure enregistrée : {customOn ? effectiveHm : formatTime(now.toISOString(), tz)}
             {customOn ? "" : " (heure de ce téléphone)"}.
           </p>
           {afterCutoff ? (

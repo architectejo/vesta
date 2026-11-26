@@ -58,7 +58,7 @@ import { PlayerCardModal } from "./PlayerCardModal";
 import { shortLabel } from "./pinLayout";
 import { SessionEditModal } from "./SessionEditModal";
 import { getSportAccess } from "./sportAccess";
-import { formatTime } from "./sportTime";
+import { formatTime, useClubTimeZone } from "./sportTime";
 import { TeamsBoard } from "./TeamsBoard";
 import { useTeamFieldActions } from "./useTeamFieldActions";
 
@@ -136,6 +136,7 @@ function PointageTab({
   onOpenDetail: (attendance: Attendance) => void;
   bulk: BulkAttendanceState;
 }) {
+  const tz = useClubTimeZone();
   const [filter, setFilter] = useState<PointageFilter>("not_marked");
   const [search, setSearch] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -337,7 +338,7 @@ function PointageTab({
                   <StatusBadge status="queued" />
                 ) : row.attendance ? (
                   <div className="flex shrink-0 flex-col items-end gap-0.5">
-                    <span className="text-xs text-text-muted">{formatTime(row.attendance.arrived_at)}</span>
+                    <span className="text-xs text-text-muted">{formatTime(row.attendance.arrived_at, tz)}</span>
                     <StatusBadge
                       status={attendanceStatusKey(row.attendance.status)}
                       detail={row.attendance.status === "excused_absent" ? row.attendance.excused_reason : undefined}
@@ -373,6 +374,7 @@ function PointageTab({
 
       <BulkConfirmModal
         open={confirmOpen}
+        timeZone={tz}
         players={selectedPlayers}
         canSetTime={canSetTime}
         eventDate={session.event_date}
@@ -714,6 +716,7 @@ function BilanTab({
 // ---------------------------------------------------------------------------
 
 export function SeancePage() {
+  const tz = useClubTimeZone();
   const { id } = useParams();
   const sessionId = Number(id);
   const queryClient = useQueryClient();
@@ -827,7 +830,7 @@ export function SeancePage() {
     const clientRecordedAt = new Date().toISOString();
     if (!navigator.onLine) {
       pendingQueue.enqueue({ membershipId, clientUuid, clientRecordedAt });
-      showToast(`Pointé à ${formatTime(clientRecordedAt)}. Il sera envoyé au retour du réseau.`);
+      showToast(`Pointé à ${formatTime(clientRecordedAt, tz)}. Il sera envoyé au retour du réseau.`);
       return;
     }
     try {
@@ -838,7 +841,7 @@ export function SeancePage() {
         client_recorded_at: clientRecordedAt,
       });
       void queryClient.invalidateQueries({ queryKey: ["sport", "session", sessionId] });
-      showToast(`Pointé à ${formatTime(clientRecordedAt)}.`);
+      showToast(`Pointé à ${formatTime(clientRecordedAt, tz)}.`);
     } catch (error) {
       if (error instanceof ApiError && error.status === 0) {
         pendingQueue.enqueue({ membershipId, clientUuid, clientRecordedAt });
@@ -976,7 +979,7 @@ export function SeancePage() {
             </span>
           }
         >
-          Un chrono non enregistré a été retrouvé ({chronoDraft.testName}, {formatDraftTime(chronoDraft.savedAt)}).
+          Un chrono non enregistré a été retrouvé ({chronoDraft.testName}, {formatDraftTime(chronoDraft.savedAt, tz)}).
         </Banner>
       ) : null}
 

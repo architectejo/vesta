@@ -103,6 +103,8 @@ export interface MyProfile {
     logo: string | null;
     primary_color: string;
     secondary_color: string;
+    /** Fuseau IANA du club (ex. « Africa/Kinshasa ») ; demandé à dev-a, absent tant que l'API ne l'envoie pas. */
+    timezone?: string;
   };
   identity: {
     first_name: string;

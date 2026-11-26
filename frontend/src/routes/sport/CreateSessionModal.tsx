@@ -2,7 +2,7 @@ import { useState } from "react";
 import { createSession, type SessionInput } from "../../api/sport";
 import { ApiError } from "../../api/client";
 import { Modal, TextArea, TextField } from "../../design-system";
-import { todayIsoDate } from "./sportTime";
+import { todayIsoDate, useClubTimeZone } from "./sportTime";
 
 export interface CreateSessionModalProps {
   open: boolean;
@@ -21,7 +21,8 @@ export interface CreateSessionModalProps {
  * qu'un formulaire de modification n'a pas besoin d'imposer à l'identique.
  */
 export function CreateSessionModal({ open, onClose, onCreated }: CreateSessionModalProps) {
-  const [eventDate, setEventDate] = useState(todayIsoDate());
+  const tz = useClubTimeZone();
+  const [eventDate, setEventDate] = useState(todayIsoDate(tz));
   const [gatheringTime, setGatheringTime] = useState("");
   const [cutoff, setCutoff] = useState("");
   const [location, setLocation] = useState("");
@@ -37,7 +38,7 @@ export function CreateSessionModal({ open, onClose, onCreated }: CreateSessionMo
   const [submitting, setSubmitting] = useState(false);
 
   function reset(): void {
-    setEventDate(todayIsoDate());
+    setEventDate(todayIsoDate(tz));
     setGatheringTime("");
     setCutoff("");
     setLocation("");
@@ -53,7 +54,7 @@ export function CreateSessionModal({ open, onClose, onCreated }: CreateSessionMo
 
   function validate(): boolean {
     let ok = true;
-    if (!eventDate || eventDate < todayIsoDate()) {
+    if (!eventDate || eventDate < todayIsoDate(tz)) {
       setDateError("La date ne peut pas être passée.");
       ok = false;
     } else {
