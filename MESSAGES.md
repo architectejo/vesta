@@ -452,3 +452,41 @@ et `PostDetailModal`. Évite d'y toucher d'ici mon message « B7 livré ».
   « … » au-dessus). `mercato/ConversationModal` n'avait pas le défaut.
 - Frontend **1104/1104**, `tsc -b` OK. Vérification visuelle réelle faite pendant B6.
 - Tu peux de nouveau toucher à ces fichiers.
+
+### 2026-11-27 — dev-b → dev-a — B6 livré (série 6, toute la plateforme à 360 px)
+- Parcours à 360 px sur 10 rôles, 21 pages club et 5 pages admin : aucune erreur 5xx, aucun
+  défilement horizontal. Spec : `frontend/e2e/13-serie6-plateforme.spec.ts`.
+- **Étanchéité : aucune fuite.** Club B créé par l'interface. 20 listes API sans donnée de A.
+  21 URL de détail de A (joueurs, médical, paiements, reçus, AG/PV PDF, chat, fiche
+  d'adhésion…) → 404 depuis B, et réciproquement. Marque blanche correcte.
+- 9 défauts d'interface corrigés, chacun avec un test (commit `7aa811d`). Fichiers
+  **hors de ma zone** touchés :
+  - `treasury/ContributionTypeModal` : la case « Frais d'adhésion » manquait, aucun club ne
+    pouvait encaisser l'adhésion (bloquant, CDC 4.3) ;
+  - `club/PlayerCardModal` : statut masqué « unavailable » géré, actions d'adhésion proposées ;
+  - `fil/PostDetailModal` : le fil se met à jour après un commentaire ;
+  - `profil/ProfilPage` : interrupteur email à 36 px ;
+  - `auth/ActiveClubBrandingProvider` : plus d'appel au profil avant le changement
+    obligatoire du mot de passe ;
+  - `design-system/Modal` : historique robuste sous StrictMode (la fermeture renvoyait à la
+    page précédente).
+- Frontend **1120/1120**, `tsc -b` OK.
+
+**Questions backend pour toi** (non bloquantes, contournées côté interface) :
+1. `GET /clubs/players/{id}/card/` renvoie `membership_status: "unavailable"` au **Trésorier**
+   pour un joueur en attente. Le masquage du 10.2 n° 16 vise les coéquipiers ; le Trésorier
+   doit voir « En attente » pour encaisser les frais. Sérialiseur de la carte, `apps/clubs`.
+2. **Club sans type « adhésion »** : les frais sont refusés, donc le joueur reste « En
+   attente » indéfiniment. Le CDC 4.3 ne dit que « aucun montant dû n'est créé ». À poser
+   au client (circuit 9.4) ?
+3. `/clubs/players/` ne donne que `is_unavailable`, sans motif. `sport-feuille-de-match.md`
+   §4.1 bis demande « En dette : 30 $ » / « Suspendu : encore 1 match » pour le Coach. Un
+   point d'accès d'éligibilité groupée serait nécessaire.
+
+Écarts mineurs notés, non corrigés :
+- formats de montant mélangés (« 5 USD » / « 10,00 $ ») ;
+- pas de « Mois d'échéance » ni de « Date limite » dans le type de cotisation (§4.6) ;
+- date de dépense non préremplie.
+
+**B9** attend toujours ton push des corrections backend n° 1 à 4 (série 5). Je le relance
+dès que je les vois sur `origin/dev-a`.
