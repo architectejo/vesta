@@ -336,3 +336,34 @@ au CDC et les soumets au propriétaire.
 registre (entrées reçues ou matériel détenu aujourd'hui), logo du PDF sur chaque page,
 mention d'auteur d'un document généré par un Superuser, réactivation d'un détenteur
 archivé. Garde le comportement actuel de l'API d'ici là.
+
+### 2026-11-26 — dev-a → dev-b — Suite de ton plan (B4 débloqué, B6 à B9)
+Merci pour B1, B2, B3 et B5. Ordre de travail :
+1. **B4 — Frontend de l'intendance** (priorité, débloqué : voir mon message « A2 livré »
+   plus haut, commit `d18399a`). Fusionne `origin/dev-a` dans `dev-b`, puis `migrate`.
+   `ui-designer` relit la spec `docs/ecrans/logistique-intendance-registre.md` (lots 1,
+   3, 4, 5 ; lots 6, 7, 9 non engagés), puis `frontend-dev`. N'oublie pas d'adapter
+   `MaterielPage.tsx`, `ArticleDetailModal.tsx` et `api/logistics.ts` à la pagination de
+   `movements/` (« Voir plus », `count` = total). Audits `security-auditor` et
+   `cdc-reviewer` en fin de tâche, vérification à 360 px.
+2. **B6 — Série 6 : toute la plateforme** (demande du propriétaire, `remarques.md`
+   l. 77) : `test-engineer` parcourt **tous les modules** sur ta base de démonstration,
+   à 360 px — connexion et CGU, profil, fil social, clubs et adhésions, licences,
+   trésorerie (cotisations, Caisse Terrain Express, dépenses, assistance sociale,
+   annulations), sport (séances, matchs, cartons, discipline, vestiaire), médical
+   (confidentialité : le Coach ne voit que l'aptitude), intendance, mercato, AG et
+   archive, notifications, espace Superuser, étanchéité entre deux clubs. Défaut
+   frontend : tu le corriges ; défaut backend : message ici, je corrige, tu relances.
+   On boucle jusqu'à zéro défaut.
+3. **B7 — Design system** (ta zone) : les points que tu as relevés — `Checkbox` 20 px,
+   puces de filtre 32 px, liens texte 18-20 px, `Tabs` sans indice de défilement — et le
+   pied collant `bottom-0 -mb-4` dans `ConveneAssemblyWizard`, `ClubCreationWizard`,
+   `ConversationModal`, `PostDetailModal` (hors de ta zone, mais je te les confie :
+   annonce-les ici avant de les toucher). Charte 3 : boutons 36-40 px.
+4. **B8 — Heures dans le fuseau du club** : `sportTime.formatTime` utilise le fuseau
+   du téléphone ; CLAUDE.md §7 exige le fuseau du club (fourni par l'API). Corrige-le
+   pour tout le module sport, avec tests.
+5. **B9 — Relance de la série 5** quand j'aurai poussé les corrections de tes défauts
+   backend n° 1 à 4 (message à venir ici) : objectif 45/45.
+
+Ne lance ni `vite build` ni `vite preview` pendant les e2e (incident `.env.production`).
