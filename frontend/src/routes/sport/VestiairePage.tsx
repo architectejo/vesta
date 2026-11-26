@@ -136,8 +136,11 @@ function EquipesCard({
   onSetFormation,
   onPlacePlayer,
   onShowCard,
+  myMembershipId = null,
 }: {
   session: SessionDetail;
+  /** Adhésion du joueur connecté (« Ma situation »), mise en avant dans la vue « Liste ». */
+  myMembershipId?: number | null;
   canAssign: boolean;
   onAssign: (membershipId: number, team: "A" | "B") => void;
   onSetFormation: (team: "A" | "B", formation: Formation) => void;
@@ -177,14 +180,26 @@ function EquipesCard({
                 <p className="text-xs text-text-muted">Aucun joueur pour l'instant.</p>
               ) : (
                 <ul className="space-y-1">
-                  {team.members.map((item) => (
-                    <li key={item.id} className="flex items-center gap-2">
-                      <Avatar name={item.player.name} photoUrl={item.player.photo} size={32} />
-                      <span className="truncate text-sm text-text tabular-nums">
-                        {item.player.jersey_number ?? ""} {item.player.name}
-                      </span>
-                    </li>
-                  ))}
+                  {team.members.map((item) => {
+                    // §3 point 3 et §7 : lignes de 44 px, « Prénom N. » sur deux
+                    // lignes au plus, jamais tronqué ; le joueur connecté est mis
+                    // en avant (fond muted et mention « Vous »).
+                    const isMe = myMembershipId !== null && item.membership_id === myMembershipId;
+                    return (
+                      <li
+                        key={item.id}
+                        aria-current={isMe ? "true" : undefined}
+                        className={`flex min-h-11 items-center gap-2 rounded-sm ${isMe ? "bg-surface-muted" : ""}`}
+                      >
+                        <Avatar name={item.player.name} photoUrl={item.player.photo} size={32} />
+                        <span className="min-w-0 break-words text-sm text-text" title={item.player.name}>
+                          {item.player.jersey_number !== null ? <span className="tabular-nums">{item.player.jersey_number} </span> : null}
+                          {shortLabel(item.player.name)}
+                          {isMe ? <span className="block text-xs font-medium text-text-muted">Vous</span> : null}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>
@@ -526,6 +541,7 @@ function LockerRoomToday() {
         <>
           <EquipesCard
             session={activeSession}
+            myMembershipId={data.my_situation?.attendance?.membership_id ?? null}
             canAssign={canAssignTeams}
             onAssign={(id, team) => void handleAssign(id, team)}
             onSetFormation={(team, formation) => void handleSetFormation(team, formation)}

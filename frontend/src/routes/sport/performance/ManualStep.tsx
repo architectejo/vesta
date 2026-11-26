@@ -72,7 +72,7 @@ export function ManualStep({ test, players, intro, onDirtyChange, onReview, init
           help="Saisie une fois pour tous : tours × longueur du tour + mètres en plus."
         />
       ) : null}
-      <p className="sticky top-0 z-10 -mx-4 bg-surface px-4 py-1 text-sm text-text-muted">
+      <p className="sticky -top-4 z-10 -mx-4 bg-surface px-4 py-1 text-sm text-text-muted">
         {filled.length} résultat{filled.length > 1 ? "s" : ""} saisi{filled.length > 1 ? "s" : ""} sur {players.length}{" "}
         joueur{players.length > 1 ? "s" : ""}
       </p>
@@ -96,7 +96,7 @@ export function ManualStep({ test, players, intro, onDirtyChange, onReview, init
       </ul>
       <StepFooter>
         <Button variant="primary" className="w-full" disabled={filled.length === 0 || hasError} onClick={review}>
-          Envoyer les mesures ({filled.length})
+          Enregistrer ({filled.length})
         </Button>
       </StepFooter>
     </div>

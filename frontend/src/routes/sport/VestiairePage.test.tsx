@@ -222,6 +222,36 @@ describe("VestiairePage", () => {
     expect(screen.queryByText("Créer une séance")).not.toBeInTheDocument();
   });
 
+  it("vue Liste : « Prénom N. » jamais tronqué, ligne de 44 px, joueur connecté mis en avant avec « Vous » (§3 point 3, §7)", async () => {
+    // Vérification visuelle B3 (360 px) : les noms complets étaient coupés
+    // par des points de suspension (« Gérard Simu… ») et « Vous » manquait.
+    vi.mocked(getLockerRoom).mockResolvedValue({
+      session: makeSessionWithTeams(),
+      match: null,
+      my_situation: {
+        attendance: { id: 9, membership_id: 102 } as unknown as SessionDetail["attendances"][number],
+        team: "A",
+        eligible: true,
+        reason: "",
+        reason_code: "",
+      },
+      next_event: null,
+    });
+    renderPage();
+
+    const jean = (await screen.findByText("Jean K.")).closest("li")!;
+    expect(jean).toHaveTextContent("7 Jean K.");
+    expect(jean.innerHTML).not.toMatch(/\btruncate\b/);
+    expect(jean.className).toMatch(/\bmin-h-11\b/);
+    expect(jean).not.toHaveAttribute("aria-current");
+    expect(screen.queryByText("Jean Kalala")).not.toBeInTheDocument();
+
+    const me = screen.getByText("Paul M.").closest("li")!;
+    expect(me).toHaveAttribute("aria-current", "true");
+    expect(me).toHaveTextContent("Vous");
+    expect(me.className).toMatch(/\bbg-surface-muted\b/);
+  });
+
   it("vue Terrain : place le pion à la vraie position renvoyée par l'API, pas sur une grille décorative", async () => {
     vi.mocked(getLockerRoom).mockResolvedValue({ session: makeSessionWithTeams(), match: null, my_situation: null, next_event: null });
     renderPage();

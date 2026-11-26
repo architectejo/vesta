@@ -51,26 +51,31 @@ export function BulkHeaderBar({
           />
         </label>
         {allChecked ? (
-          <Button size="sm" variant="ghost" disabled={disabled} onClick={onUncheckAll}>
+          <Button size="sm" variant="ghost" className="whitespace-nowrap" disabled={disabled} onClick={onUncheckAll}>
             Tout décocher
           </Button>
         ) : (
           <Button
             size="sm"
             variant="ghost"
+            className="whitespace-nowrap"
             disabled={disabled || checkableIds.length === 0}
             onClick={() => onCheckAll(checkableIds)}
           >
             Tout cocher ({checkableIds.length})
           </Button>
         )}
+        {/* Spec §3.2 point 1 : un seul bouton « Tout cocher » / « Tout décocher ».
+            Ce second bouton (sélection partielle) ne tient pas dans la barre de
+            44 px à 360 px : les libellés passaient sur 2 à 3 lignes et sortaient
+            de la barre (vérification visuelle B3). Il n'apparaît qu'à partir de 640 px. */}
         {selected.length > 0 && !allChecked ? (
-          <Button size="sm" variant="ghost" disabled={disabled} onClick={onUncheckAll}>
+          <Button size="sm" variant="ghost" className="whitespace-nowrap max-sm:hidden" disabled={disabled} onClick={onUncheckAll}>
             Tout décocher
           </Button>
         ) : null}
       </div>
-      <Button size="sm" variant="ghost" disabled={disabled} onClick={onStop}>
+      <Button size="sm" variant="ghost" className="whitespace-nowrap" disabled={disabled} onClick={onStop}>
         Terminer
       </Button>
     </div>
@@ -99,7 +104,7 @@ export function BulkActionBar({
     <div
       role="region"
       aria-label="Actions sur la sélection"
-      className="sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center justify-between gap-2 border-t border-border bg-surface px-4 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+      className="sticky bottom-0 z-20 -mx-3 flex flex-wrap items-center justify-between gap-2 border-t border-border bg-surface px-3 py-2 sm:-mx-4 sm:px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
     >
       <p className="text-sm text-text" aria-live="polite">
         {count} sélectionné{count > 1 ? "s" : ""}

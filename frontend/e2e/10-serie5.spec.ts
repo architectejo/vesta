@@ -425,7 +425,8 @@ test.describe("Tests de performance et chrono", () => {
     await dialog.getByRole("button", { name: "Arrêter Fabrice Fauxf" }).click();
     await expect(dialog.getByText("Chrono terminé")).toBeVisible();
     await expect(dialog.getByText(/km\/h/).first()).toBeVisible();
-    await dialog.getByRole("button", { name: /Envoyer les mesures \(2\)/ }).click();
+    // Pied du chrono : « Enregistrer ({n}) » (sport-statistiques-seance.md C6.2).
+    await dialog.getByRole("button", { name: "Enregistrer (2)" }).click();
     const confirm = page.getByRole("dialog").filter({ hasText: /Envoyer 2 mesures/ });
     await confirm.getByRole("button", { name: "Envoyer les mesures" }).click();
     await expect(page.getByText(/2 (résultats|mesures) enregistré/).first()).toBeVisible();

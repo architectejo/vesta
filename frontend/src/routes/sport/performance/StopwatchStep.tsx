@@ -371,7 +371,7 @@ export function StopwatchStep({
               Nouvel essai
             </Button>
             <Button variant="primary" className="flex-1" disabled={items.length === 0} onClick={() => onReview(items)}>
-              Envoyer les mesures ({items.length})
+              Enregistrer ({items.length})
             </Button>
           </>
         ) : null}

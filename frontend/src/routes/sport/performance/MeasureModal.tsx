@@ -120,6 +120,7 @@ function MeasureModalBody({
   const [summary, setSummary] = useState<{ response: BulkPerformanceResponse; names: Record<number, string> } | null>(null);
   const [usedMethod, setUsedMethod] = useState<PerformanceMethod>(restore ? "stopwatch" : "manual");
   const [formError, setFormError] = useState<string | null>(null);
+  const formErrorRef = useRef<HTMLDivElement>(null);
   const [newTestOpen, setNewTestOpen] = useState(false);
 
   // Clés d'idempotence : conservées tant que l'envoi n'a pas reçu de réponse (nouvel essai réseau).
@@ -245,18 +246,29 @@ function MeasureModalBody({
     setSelected((current) => (current.includes(id) ? current.filter((x) => x !== id) : [...current, id]));
   }
 
+  /**
+   * Erreur de l'étape de choix : le bandeau est en haut de la modale alors que
+   * « Commencer » est dans le pied collant ; à 360 px, avec la liste des joueurs
+   * défilée, il restait hors de vue et l'appui semblait sans effet (B3). On le
+   * ramène donc à l'écran. `scrollIntoView` n'existe pas dans jsdom.
+   */
+  function showFormError(message: string) {
+    setFormError(message);
+    window.setTimeout(() => formErrorRef.current?.scrollIntoView?.({ block: "nearest" }), 0);
+  }
+
   function begin() {
     if (!test) {
-      setFormError("Choisissez un test.");
+      showFormError("Choisissez un test.");
       return;
     }
     if (selected.length === 0) {
-      setFormError("Cochez au moins un joueur.");
+      showFormError("Cochez au moins un joueur.");
       return;
     }
     const stopwatch = effectiveMethod === "stopwatch";
     if (stopwatch && test.kind === "timed_distance" && startMode === "group" && selected.length > MAX_GROUP_SIZE) {
-      setFormError(`${MAX_GROUP_SIZE} joueurs au plus par départ groupé. Choisissez « Un par un » ou réduisez la sélection.`);
+      showFormError(`${MAX_GROUP_SIZE} joueurs au plus par départ groupé. Choisissez « Un par un » ou réduisez la sélection.`);
       return;
     }
     setUsedMethod(stopwatch ? "stopwatch" : "manual");
@@ -341,7 +353,11 @@ function MeasureModalBody({
       <Modal open onClose={requestClose} size="xl" title={title} hideFooter isSubmitting={submitting}>
         {step === "choose" ? (
           <div className="space-y-4">
-            {formError ? <Banner variant="danger">{formError}</Banner> : null}
+            {formError ? (
+              <div ref={formErrorRef} className="scroll-mt-4">
+                <Banner variant="danger">{formError}</Banner>
+              </div>
+            ) : null}
 
             <section aria-label="Test">
               <div className="mb-1 flex items-center justify-between">

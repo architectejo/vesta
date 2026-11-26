@@ -110,26 +110,29 @@ export function PlanDetailModal({ open, planId, isCoach, ownMembershipId, onClos
         size="lg"
         loading={query.isLoading}
         footer={
-          <div className="flex w-full items-center justify-between gap-2">
-            <div className="flex gap-2">
-              {isCoach && plan ? (
-                <>
-                  <Button variant="ghost" size="sm" onClick={() => onDuplicate({ id: plan.id, name: plan.name })}>
-                    Dupliquer
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => onDelete({ id: plan.id, name: plan.name })}>
-                    Supprimer le plan
-                  </Button>
-                </>
-              ) : null}
-            </div>
-            <div className="flex gap-2">
-              <Button variant="secondary" onClick={onClose}>
+          // À 360 px, quatre boutons ne tiennent pas sur une ligne : le libellé
+          // « Modifier sur le tableau noir » débordait de l'écran (vérification
+          // visuelle B3, CDC 3.1). Sous 640 px, les actions secondaires passent
+          // sur leur propre ligne et l'action principale prend la place restante.
+          <div data-plan-footer="" className="flex w-full flex-wrap items-center justify-between gap-2">
+            {isCoach && plan ? (
+              <div className="flex w-full gap-2 sm:w-auto">
+                <Button variant="ghost" size="sm" onClick={() => onDuplicate({ id: plan.id, name: plan.name })}>
+                  Dupliquer
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => onDelete({ id: plan.id, name: plan.name })}>
+                  Supprimer le plan
+                </Button>
+              </div>
+            ) : null}
+            <div className="ml-auto flex w-full gap-2 sm:w-auto">
+              <Button variant="secondary" className={isCoach && plan ? "shrink-0" : "flex-1 sm:flex-none"} onClick={onClose}>
                 Fermer
               </Button>
               {isCoach && plan ? (
                 <Button
                   variant="primary"
+                  className="min-w-0 flex-1 sm:flex-none"
                   onClick={() => {
                     // Ferme proprement la modale avant de changer de route :
                     // sans cela, l'état React du parent (ex. `detailPlanId`)

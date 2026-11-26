@@ -55,7 +55,7 @@ function makePlan(): TacticalPlanDetail {
   };
 }
 
-function renderModal() {
+function renderModal(isCoach = false) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
@@ -63,7 +63,7 @@ function renderModal() {
         <PlanDetailModal
           open
           planId={1}
-          isCoach={false}
+          isCoach={isCoach}
           ownMembershipId={undefined}
           onClose={() => {}}
           onDuplicate={() => {}}
@@ -93,6 +93,23 @@ function mockMatchMedia(matching: string[]): void {
 describe("PlanDetailModal", () => {
   afterEach(() => {
     mockMatchMedia([]);
+  });
+
+  it("pied du Coach à 360 px : actions secondaires sur leur ligne, action principale extensible (B3)", async () => {
+    // Vérification visuelle B3 : quatre boutons sur une ligne, « Modifier sur le
+    // tableau noir » débordait de l’écran. jsdom ne calcule pas la mise en
+    // page : on fige la structure qui permet le retour à la ligne.
+    mockMatchMedia([]);
+    vi.mocked(getTacticalPlan).mockResolvedValue(makePlan());
+    renderModal(true);
+    const main = await screen.findByRole("button", { name: "Modifier sur le tableau noir" });
+    const footer = main.closest("[data-plan-footer]")!;
+    expect(footer.className.split(" ")).toContain("flex-wrap");
+    expect(main.className.split(" ")).toEqual(expect.arrayContaining(["min-w-0", "flex-1"]));
+    const secondary = screen.getByRole("button", { name: "Dupliquer" }).parentElement!;
+    expect(secondary.className.split(" ")).toContain("w-full");
+    expect(secondary).toContainElement(screen.getByRole("button", { name: "Supprimer le plan" }));
+    expect(secondary).not.toContainElement(main);
   });
 
   it("affiche le terrain et les consignes, empilés en portrait mobile", async () => {

@@ -131,6 +131,24 @@ describe("MeasureModal — choix", () => {
     expect(await screen.findByText("Choisissez un test.")).toBeInTheDocument();
   });
 
+  it("ramène à l'écran le bandeau d'erreur, placé en haut alors que « Commencer » est dans le pied collant (360 px)", async () => {
+    // Vérification visuelle B3 : avec plus de 12 joueurs en départ groupé, la
+    // liste défilée cachait l'erreur et l'appui semblait sans effet.
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, "scrollIntoView", { value: scrollIntoView, configurable: true, writable: true });
+    try {
+      const user = userEvent.setup();
+      renderModal();
+      await screen.findByRole("radio", { name: /Sprint 30 m/ });
+      await user.click(screen.getByRole("button", { name: "Commencer" }));
+      const banner = await screen.findByText("Choisissez un test.");
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" }));
+      expect(scrollIntoView.mock.contexts.at(-1)).toContainElement(banner);
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
   it("propose le chronomètre seulement pour les tests chronométrables", async () => {
     const user = userEvent.setup();
     renderModal([makeTest({ id: 2, name: "Tirs cadrés", kind: "repetitions", stopwatch_available: false, attempts: 10, distance_m: null })]);
@@ -190,7 +208,7 @@ describe("MeasureModal — chrono groupé", () => {
         { membership_id: 3, outcome: "created", message: "", warning: "", result: { id: 13, attempt_no: 1, ...makeValue({ outcome: "dnf", time_ms: null, display: "Abandon", derived: {} }) } },
       ]),
     );
-    await user.click(screen.getByRole("button", { name: "Envoyer les mesures (3)" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer (3)" }));
     const dialog = await screen.findByRole("dialog", { name: "Envoyer 3 mesures ?" });
     expect(within(dialog).getByText("4,40 s")).toBeInTheDocument();
     expect(within(dialog).getByText("5,00 s")).toBeInTheDocument();
@@ -233,7 +251,7 @@ describe("MeasureModal — chrono groupé", () => {
       .mockResolvedValueOnce(
         bulkResponse([{ membership_id: 1, outcome: "created", message: "", warning: "", result: { id: 1, attempt_no: 1, ...makeValue() } }]),
       );
-    await user.click(screen.getByRole("button", { name: "Envoyer les mesures (1)" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer (1)" }));
     let dialog = await screen.findByRole("dialog", { name: "Envoyer 1 mesure ?" });
     await user.click(within(dialog).getByRole("button", { name: "Envoyer les mesures" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Une erreur est survenue");
@@ -268,7 +286,7 @@ describe("MeasureModal — chrono groupé", () => {
         { membership_id: 2, outcome: "refused", message: "Bob Martin est inapte : il ne peut pas être mesuré.", warning: "", result: null },
       ]),
     );
-    await user.click(screen.getByRole("button", { name: "Envoyer les mesures (2)" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer (2)" }));
     const dialog = await screen.findByRole("dialog", { name: "Envoyer 2 mesures ?" });
     await user.click(within(dialog).getByRole("button", { name: "Envoyer les mesures" }));
 
@@ -299,7 +317,7 @@ describe("MeasureModal — chrono groupé", () => {
     expect(within(dialog).getByText(/1 joueur n'a pas été arrêté : il sera noté « Abandon »\./)).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Arrêter" }));
     expect(screen.getByText("Chrono terminé")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Envoyer les mesures (2)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enregistrer (2)" })).toBeInTheDocument();
   });
 
   it("plusieurs essais : « Nouvel essai » numérote l'essai suivant", async () => {
@@ -322,7 +340,7 @@ describe("MeasureModal — chrono groupé", () => {
         { membership_id: 1, outcome: "created", message: "", warning: "", result: { id: 2, attempt_no: 2, ...makeValue() } },
       ]),
     );
-    await user.click(screen.getByRole("button", { name: "Envoyer les mesures (2)" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer (2)" }));
     const dialog = await screen.findByRole("dialog", { name: "Envoyer 2 mesures ?" });
     await user.click(within(dialog).getByRole("button", { name: "Envoyer les mesures" }));
     await waitFor(() => expect(bulkPerformanceResults).toHaveBeenCalled());
@@ -405,7 +423,7 @@ describe("MeasureModal — hors connexion", () => {
     await user.click(screen.getByRole("button", { name: "Départ" }));
     now = 4520;
     await user.click(screen.getByRole("button", { name: "Arrêter Alice Durand" }));
-    await user.click(screen.getByRole("button", { name: "Envoyer les mesures (1)" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer (1)" }));
     const dialog = await screen.findByRole("dialog", { name: "Envoyer 1 mesure ?" });
     await user.click(within(dialog).getByRole("button", { name: "Envoyer les mesures" }));
 
@@ -440,7 +458,7 @@ describe("MeasureModal — hors connexion", () => {
     now = 4000;
     await user.click(screen.getByRole("button", { name: "Arrêter Alice Durand" }));
     vi.mocked(bulkPerformanceResults).mockRejectedValueOnce(new ApiError(0, null)).mockImplementation(() => new Promise(() => undefined));
-    await user.click(screen.getByRole("button", { name: "Envoyer les mesures (1)" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer (1)" }));
     const dialog = await screen.findByRole("dialog", { name: "Envoyer 1 mesure ?" });
     await user.click(within(dialog).getByRole("button", { name: "Envoyer les mesures" }));
     await waitFor(() => expect(screen.getByText("fermée")).toBeInTheDocument());
@@ -467,7 +485,7 @@ describe("MeasureModal — hors connexion", () => {
         },
       ]),
     );
-    await user.click(screen.getByRole("button", { name: "Envoyer les mesures (1)" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer (1)" }));
     const dialog = await screen.findByRole("dialog", { name: "Envoyer 1 mesure ?" });
     await user.click(within(dialog).getByRole("button", { name: "Envoyer les mesures" }));
     const local = await screen.findByRole("region", { name: "Mesures non envoyées" });
@@ -506,7 +524,7 @@ describe("MeasureModal — saisie manuelle", () => {
     vi.mocked(bulkPerformanceResults).mockResolvedValue(
       bulkResponse([{ membership_id: 1, outcome: "created", message: "", warning: "", result: { id: 1, attempt_no: 1, ...makeValue() } }]),
     );
-    await user.click(screen.getByRole("button", { name: "Envoyer les mesures (1)" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer (1)" }));
     const dialog = await screen.findByRole("dialog", { name: "Envoyer 1 mesure ?" });
     await user.click(within(dialog).getByRole("button", { name: "Envoyer les mesures" }));
     await waitFor(() => expect(bulkPerformanceResults).toHaveBeenCalled());
@@ -534,7 +552,7 @@ describe("MeasureModal — saisie manuelle", () => {
     vi.mocked(bulkPerformanceResults).mockResolvedValue(
       bulkResponse([{ membership_id: 1, outcome: "created", message: "", warning: "", result: { id: 1, attempt_no: 1, ...makeValue({ count: 2, time_ms: null, display: "2 sur 10", derived: {} }) } }]),
     );
-    await user.click(screen.getByRole("button", { name: "Envoyer les mesures (1)" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer (1)" }));
     const dialog = await screen.findByRole("dialog", { name: "Envoyer 1 mesure ?" });
     expect(within(dialog).getByText("2 sur 10")).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Envoyer les mesures" }));
@@ -552,7 +570,7 @@ describe("MeasureModal — saisie manuelle", () => {
     vi.mocked(bulkPerformanceResults).mockResolvedValue(
       bulkResponse([{ membership_id: 1, outcome: "created", message: "", warning: "", result: { id: 1, attempt_no: 1, ...makeValue({ time_ms: null, value: "17.5", display: "17,5 pts", derived: {} }) } }]),
     );
-    await user.click(screen.getByRole("button", { name: "Envoyer les mesures (1)" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer (1)" }));
     await user.click(within(await screen.findByRole("dialog", { name: "Envoyer 1 mesure ?" })).getByRole("button", { name: "Envoyer les mesures" }));
     await waitFor(() => expect(bulkPerformanceResults).toHaveBeenCalled());
     expect(sentBody().items[0]).toMatchObject({ membership_id: 1, value: "17.5" });
@@ -569,7 +587,7 @@ describe("MeasureModal — saisie manuelle", () => {
     vi.mocked(bulkPerformanceResults).mockResolvedValue(
       bulkResponse([{ membership_id: 1, outcome: "created", message: "", warning: "", result: { id: 1, attempt_no: 1, ...makeValue({ outcome: "dnf", time_ms: null, display: "Abandon", derived: {} }) } }]),
     );
-    await user.click(screen.getByRole("button", { name: "Envoyer les mesures (1)" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer (1)" }));
     await user.click(within(await screen.findByRole("dialog", { name: "Envoyer 1 mesure ?" })).getByRole("button", { name: "Envoyer les mesures" }));
     await waitFor(() => expect(bulkPerformanceResults).toHaveBeenCalled());
     expect(sentBody().items[0]).toEqual({ membership_id: 1, attempt_no: 1, outcome: "dnf", client_uuid: expect.any(String) });
@@ -598,7 +616,7 @@ describe("MeasureModal — distance en temps donné", () => {
     vi.mocked(bulkPerformanceResults).mockResolvedValue(
       bulkResponse([{ membership_id: 1, outcome: "created", message: "", warning: "", result: { id: 1, attempt_no: 1, ...makeValue({ time_ms: null, distance_m: "2450.00", display: "2 450 m" }) } }]),
     );
-    await user.click(screen.getByRole("button", { name: "Envoyer les mesures (1)" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer (1)" }));
     await user.click(within(await screen.findByRole("dialog", { name: "Envoyer 1 mesure ?" })).getByRole("button", { name: "Envoyer les mesures" }));
     await waitFor(() => expect(bulkPerformanceResults).toHaveBeenCalled());
     expect(sentBody().method).toBe("stopwatch");

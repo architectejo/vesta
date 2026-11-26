@@ -161,7 +161,7 @@ describe("MeasureModal — sauvegarde locale du chrono", () => {
         { membership_id: 2, outcome: "created", message: "", warning: "", result: { id: 12, attempt_no: 1, ...makeValue({ outcome: "dnf", time_ms: null, display: "Abandon", derived: {} }) } },
       ]),
     );
-    await user.click(screen.getByRole("button", { name: "Envoyer les mesures (2)" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer (2)" }));
     const dialog = await screen.findByRole("dialog", { name: "Envoyer 2 mesures ?" });
     await user.click(within(dialog).getByRole("button", { name: "Envoyer les mesures" }));
     await waitFor(() => expect(bulkPerformanceResults).toHaveBeenCalledTimes(1));
