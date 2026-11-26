@@ -20,6 +20,7 @@ import { ConnexionPage } from "./routes/connexion/ConnexionPage";
 import { FilPage } from "./routes/fil/FilPage";
 import { DesignSystemDemoPage } from "./routes/dev/DesignSystemDemo";
 import { MaterielPage } from "./routes/logistics/MaterielPage";
+import { RegisterPage } from "./routes/logistics/RegisterPage";
 import { MedicalPage } from "./routes/medical/MedicalPage";
 import { MercatoPage } from "./routes/mercato/MercatoPage";
 import { ProfilPage } from "./routes/profil/ProfilPage";
@@ -161,6 +162,16 @@ export function App() {
           <ProtectedRoute>
             <AppLayout>
               <MaterielPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/materiel/registre"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <RegisterPage />
             </AppLayout>
           </ProtectedRoute>
         }

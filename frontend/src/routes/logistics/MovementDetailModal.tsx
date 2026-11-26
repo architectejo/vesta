@@ -3,6 +3,7 @@ import { getMovement } from "../../api/logistics";
 import { getExpense } from "../../api/treasury";
 import { Avatar, Modal } from "../../design-system";
 import { formatDateFr, formatDateTimeFr } from "./format";
+import { UNLOCATED_LABEL } from "./HolderSearch";
 
 export interface MovementDetailModalProps {
   movementId: number | null;
@@ -14,6 +15,8 @@ export interface MovementDetailModalProps {
   /** Le lien et le détail complet de la dépense liée ne sont visibles que
    * pour le Président, le Vice-président et le Trésorier (§4.3). */
   canSeeExpenseDetail?: boolean;
+  /** « Voir le déclassement » (mouvement de déclassement, spec B4 §2.3). */
+  onOpenDecommission?: (decommissionId: number) => void;
 }
 
 /** « Mouvement » (détail, lecture seule) — fiche `logistique.md` §4.3. */
@@ -24,6 +27,7 @@ export function MovementDetailModal({
   onOpenMatch,
   onOpenExpense,
   canSeeExpenseDetail = false,
+  onOpenDecommission,
 }: MovementDetailModalProps) {
   const open = movementId !== null;
   const query = useQuery({
@@ -76,6 +80,10 @@ export function MovementDetailModal({
               <span className="text-text-muted">Motif</span>
               <span className="text-right text-text">{movement.reason || "Aucun motif"}</span>
             </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-text-muted">Chez</span>
+              <span className="text-right text-text">{movement.holder?.name ?? UNLOCATED_LABEL}</span>
+            </div>
             {movement.membership ? (
               <div className="flex items-center justify-between gap-2">
                 <span className="text-text-muted">Joueur concerné</span>
@@ -86,6 +94,60 @@ export function MovementDetailModal({
               </div>
             ) : null}
           </div>
+
+          {movement.provenance ? (
+            <div className="space-y-2 rounded-md border border-border p-3">
+              <p className="font-semibold text-text">Provenance</p>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-text-muted">Origine</span>
+                <span className="text-right text-text">{movement.provenance.origin_kind_display}</span>
+              </div>
+              {movement.provenance.donor ? (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-text-muted">Donateur</span>
+                  <span className="text-right text-text">
+                    {movement.provenance.donor.name}
+                    {movement.provenance.donor.membership_id === null ? " (hors club)" : ""}
+                  </span>
+                </div>
+              ) : null}
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-text-muted">Date d'acquisition</span>
+                <span className="text-right text-text">
+                  {movement.provenance.acquisition_date_unknown
+                    ? `Date inconnue${movement.provenance.acquisition_date_note ? ` — ${movement.provenance.acquisition_date_note}` : ""}`
+                    : movement.provenance.acquisition_date
+                      ? formatDateFr(movement.provenance.acquisition_date)
+                      : "—"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-text-muted">État à l'entrée</span>
+                <span className="text-right text-text">{movement.provenance.condition_at_entry_display}</span>
+              </div>
+            </div>
+          ) : null}
+
+          {movement.transfer_group ? (
+            <div className="rounded-md border border-border p-3">
+              <p className="font-semibold text-text">Déplacement lié</p>
+              <p className="mt-1 text-text-muted">
+                {movement.movement_type === "out_transfer"
+                  ? "Sortie d'un déplacement : l'entrée correspondante est enregistrée chez le nouveau détenteur."
+                  : "Entrée d'un déplacement : la sortie correspondante est enregistrée chez l'ancien détenteur."}
+              </p>
+            </div>
+          ) : null}
+
+          {movement.decommission_id && onOpenDecommission ? (
+            <button
+              type="button"
+              onClick={() => onOpenDecommission(movement.decommission_id as number)}
+              className="block text-sm font-medium text-primary-text hover:underline"
+            >
+              Voir le déclassement
+            </button>
+          ) : null}
 
           {movement.match_id ? (
             <button

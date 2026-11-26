@@ -1,16 +1,31 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ApiError } from "../../api/client";
-import { archiveArticle, listMovements, reactivateArticle, type Article } from "../../api/logistics";
-import { Button, ConfirmDialog, IconButton, IconMore, Modal, StatusBadge } from "../../design-system";
+import {
+  PROVENANCE_MOVEMENT_TYPES,
+  archiveArticle,
+  getArticle,
+  listMovements,
+  reactivateArticle,
+  toArticleSearchResult,
+  type Article,
+  type Provenance,
+} from "../../api/logistics";
+import { Button, ConfirmDialog, IconButton, IconMore, Loader, Modal, StatusBadge } from "../../design-system";
 import { useClosingState } from "../../hooks/useClosingState";
+import { DecommissionDetailModal } from "./DecommissionDetailModal";
+import { DecommissionFlagModal } from "./DecommissionFlagModal";
 import { formatDateFr } from "./format";
+import { UNLOCATED_LABEL } from "./HolderSearch";
 import { MovementDetailModal } from "./MovementDetailModal";
 import { RecordMovementModal } from "./RecordMovementModal";
+import { TransferModal } from "./TransferModal";
 
 export interface ArticleDetailModalProps {
   article: Article | null;
   canManage: boolean;
+  /** 2 quand ouverte depuis la modale d'un détenteur. */
+  level?: 1 | 2;
   onClose: () => void;
   onEdit: (article: Article) => void;
   onChanged: (message: string) => void;
@@ -25,10 +40,34 @@ function apiErrorMessage(error: unknown): string {
 
 const PAGE_STEP = 10;
 
-/** « Article » (détail) — fiche `logistique.md` §4.1. */
+/** Libellé d'origine d'une provenance (spec B4 §2.2) ; libellés de l'API. */
+export function provenanceOriginLabel(provenance: Provenance): string {
+  if (provenance.origin_kind === "donation") {
+    return provenance.donor ? `Don de ${provenance.donor.name}` : "Don";
+  }
+  if (provenance.origin_kind === "club_funds") return "Frais de l'équipe";
+  if (provenance.origin_kind === "unknown") return "Origine inconnue";
+  return provenance.origin_kind_display;
+}
+
+/** 2e ligne d'une provenance : date d'acquisition et détenteur. */
+export function provenanceDetailLabel(provenance: Provenance): string {
+  let dateText: string;
+  if (provenance.acquisition_date_unknown) {
+    dateText = provenance.acquisition_date_note
+      ? `Date inconnue — ${provenance.acquisition_date_note}`
+      : "Date inconnue";
+  } else {
+    dateText = `Acquis le ${formatDateFr(provenance.acquisition_date ?? provenance.movement_date)}`;
+  }
+  return `${dateText} · chez ${provenance.holder?.name ?? UNLOCATED_LABEL}`;
+}
+
+/** « Article » (détail) — fiche `logistique.md` §4.1, spec B4 §2.2. */
 export function ArticleDetailModal({
-  article,
+  article: listedArticle,
   canManage,
+  level = 1,
   onClose,
   onEdit,
   onChanged,
@@ -36,21 +75,43 @@ export function ArticleDetailModal({
   onOpenExpense,
   canSeeExpenseDetail = false,
 }: ArticleDetailModalProps) {
-  const open = article !== null;
+  const open = listedArticle !== null;
   const [menuOpen, setMenuOpen] = useState(false);
   const { mounted: menuMounted, dataState: menuDataState, onAnimationEnd: onMenuAnimationEnd } =
     useClosingState(menuOpen, 200);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [archiveError, setArchiveError] = useState<string | undefined>(undefined);
   const [archiving, setArchiving] = useState(false);
-  const [movementLimit, setMovementLimit] = useState(PAGE_STEP);
   const [recordOpen, setRecordOpen] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [flagOpen, setFlagOpen] = useState(false);
   const [selectedMovementId, setSelectedMovementId] = useState<number | null>(null);
+  const [moreProvenances, setMoreProvenances] = useState(false);
+  const [decommissionId, setDecommissionId] = useState<number | null>(null);
 
-  const movementsQuery = useQuery({
-    queryKey: ["logistics", "movements", "article", article?.id],
-    queryFn: () => listMovements({ article: article?.id }),
+  // Le détail porte les provenances (5 au plus) et une répartition à jour.
+  const detailQuery = useQuery({
+    queryKey: ["logistics", "articles", "detail", listedArticle?.id],
+    queryFn: () => getArticle(listedArticle!.id),
     enabled: open,
+  });
+  const article = detailQuery.data ?? listedArticle;
+
+  const movementsQuery = useInfiniteQuery({
+    queryKey: ["logistics", "movements", "article", listedArticle?.id],
+    queryFn: ({ pageParam }) => listMovements({ article: listedArticle!.id, limit: PAGE_STEP, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.next_offset ?? undefined,
+    enabled: open,
+  });
+
+  const provenancesQuery = useInfiniteQuery({
+    queryKey: ["logistics", "movements", "article-provenances", listedArticle?.id],
+    queryFn: ({ pageParam }) =>
+      listMovements({ article: listedArticle!.id, types: PROVENANCE_MOVEMENT_TYPES, limit: PAGE_STEP, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.next_offset ?? undefined,
+    enabled: open && moreProvenances,
   });
 
   async function handleArchiveToggle(): Promise<void> {
@@ -73,10 +134,24 @@ export function ArticleDetailModal({
     }
   }
 
+  function afterWrite(message: string): void {
+    void detailQuery.refetch();
+    void movementsQuery.refetch();
+    if (moreProvenances) void provenancesQuery.refetch();
+    onChanged(message);
+  }
+
   if (!article) return null;
 
-  const movements = movementsQuery.data?.results ?? [];
-  const visibleMovements = movements.slice(0, movementLimit);
+  const movements = (movementsQuery.data?.pages ?? []).flatMap((page) => page.results);
+  const provenances: Provenance[] = moreProvenances
+    ? (provenancesQuery.data?.pages ?? [])
+        .flatMap((page) => page.results)
+        .map((movement) => movement.provenance)
+        .filter((p): p is Provenance => p !== null)
+    : (article.provenances ?? []);
+  const searchResult = toArticleSearchResult(article);
+  const isActive = article.status === "active";
 
   return (
     <>
@@ -86,12 +161,13 @@ export function ArticleDetailModal({
         title={article.name}
         subtitle={`${article.category_display} · ${article.unit}`}
         size="lg"
+        level={level}
         footer={
           <div className="flex w-full items-center justify-end gap-2">
             <Button variant="secondary" size="md" onClick={onClose}>
               Fermer
             </Button>
-            {canManage && article.status === "active" ? (
+            {canManage && isActive ? (
               <Button variant="primary" size="md" onClick={() => setRecordOpen(true)}>
                 Enregistrer un mouvement
               </Button>
@@ -125,6 +201,18 @@ export function ArticleDetailModal({
                     >
                       Modifier l'article
                     </button>
+                    {isActive && article.in_stock > 0 ? (
+                      <button
+                        type="button"
+                        className="block w-full px-3 py-2 text-left text-sm text-text hover:bg-surface-muted"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          setFlagOpen(true);
+                        }}
+                      >
+                        Signaler à déclasser
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="block w-full px-3 py-2 text-left text-sm text-text hover:bg-surface-muted"
@@ -134,7 +222,7 @@ export function ArticleDetailModal({
                         setConfirmArchive(true);
                       }}
                     >
-                      {article.status === "active" ? "Archiver l'article" : "Réactiver l'article"}
+                      {isActive ? "Archiver l'article" : "Réactiver l'article"}
                     </button>
                   </div>
                 ) : null}
@@ -142,12 +230,16 @@ export function ArticleDetailModal({
             ) : null}
           </div>
 
-          <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
             <div className="rounded-md border border-border p-2">
               <p className="text-xs text-text-muted">En stock</p>
               <p className="tabular-nums text-base font-semibold text-text">
                 {article.in_stock} {article.unit}
               </p>
+            </div>
+            <div className="rounded-md border border-border p-2">
+              <p className="text-xs text-text-muted">À déclasser</p>
+              <p className="tabular-nums text-base font-semibold text-text">{article.pending_decommission}</p>
             </div>
             <div className="rounded-md border border-border p-2">
               <p className="text-xs text-text-muted">Sortis pour un match</p>
@@ -159,16 +251,91 @@ export function ArticleDetailModal({
             </div>
           </div>
 
-          <div>
+          <section>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-text">Répartition</h3>
+              {canManage && isActive && article.stock_by_holder.length > 0 ? (
+                <Button size="sm" variant="secondary" onClick={() => setTransferOpen(true)}>
+                  Déplacer
+                </Button>
+              ) : null}
+            </div>
+            {article.stock_by_holder.length === 0 ? (
+              <p className="text-sm text-text-muted">Aucune pièce en stock.</p>
+            ) : (
+              <ul className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+                {article.stock_by_holder.map((row) => (
+                  <li key={row.holder_id ?? "none"} className={row.holder_id === null ? "text-text-muted" : "text-text"}>
+                    {row.holder_name} · <span className="tabular-nums">{row.quantity}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section>
+            <h3 className="mb-2 text-sm font-semibold text-text">Provenances</h3>
+            {detailQuery.isLoading || (moreProvenances && provenancesQuery.isLoading) ? (
+              <Loader loading variant="list" count={2} />
+            ) : provenances.length === 0 ? (
+              <p className="text-sm text-text-muted">Aucune provenance enregistrée.</p>
+            ) : (
+              <>
+                <ul className="divide-y divide-border">
+                  {provenances.map((provenance) => (
+                    <li key={provenance.movement_id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedMovementId(provenance.movement_id)}
+                        className="w-full py-2 text-left"
+                      >
+                        <span className="block text-sm text-text">
+                          <span className="tabular-nums">
+                            {provenance.quantity} {article.unit}
+                          </span>{" "}
+                          · {provenanceOriginLabel(provenance)}
+                        </span>
+                        <span className="block text-[13px] text-text-muted">{provenanceDetailLabel(provenance)}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {!moreProvenances && provenances.length >= 5 ? (
+                  <div className="mt-2 text-center">
+                    <Button size="sm" variant="secondary" onClick={() => setMoreProvenances(true)}>
+                      Voir plus
+                    </Button>
+                  </div>
+                ) : moreProvenances && provenancesQuery.hasNextPage ? (
+                  <div className="mt-2 text-center">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      loading={provenancesQuery.isFetchingNextPage}
+                      onClick={() => void provenancesQuery.fetchNextPage()}
+                    >
+                      Voir plus
+                    </Button>
+                  </div>
+                ) : null}
+              </>
+            )}
+          </section>
+
+          <section>
             <h3 className="mb-2 text-sm font-semibold text-text">Derniers mouvements</h3>
             {movementsQuery.isLoading ? (
-              <p className="text-sm text-text-muted">Chargement…</p>
+              <Loader loading variant="list" count={3} />
+            ) : movementsQuery.isError ? (
+              <p role="alert" className="text-sm text-status-danger-fg">
+                Impossible de charger les mouvements. Réessayez.
+              </p>
             ) : movements.length === 0 ? (
               <p className="text-sm text-text-muted">Aucun mouvement pour cet article.</p>
             ) : (
               <>
                 <ul className="divide-y divide-border">
-                  {visibleMovements.map((movement) => (
+                  {movements.map((movement) => (
                     <li key={movement.id}>
                       <button
                         type="button"
@@ -187,16 +354,21 @@ export function ArticleDetailModal({
                     </li>
                   ))}
                 </ul>
-                {movements.length > movementLimit ? (
+                {movementsQuery.hasNextPage ? (
                   <div className="mt-2 text-center">
-                    <Button size="sm" variant="secondary" onClick={() => setMovementLimit((l) => l + PAGE_STEP)}>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      loading={movementsQuery.isFetchingNextPage}
+                      onClick={() => void movementsQuery.fetchNextPage()}
+                    >
                       Voir plus
                     </Button>
                   </div>
                 ) : null}
               </>
             )}
-          </div>
+          </section>
 
           <p className="text-xs text-text-muted">
             Ajouté par {article.created_by.name || "Système Vesta"} le {formatDateFr(article.created_at.slice(0, 10))}.
@@ -206,12 +378,34 @@ export function ArticleDetailModal({
 
       <RecordMovementModal
         open={recordOpen}
+        level={2}
         lockedArticle={article}
         onClose={() => setRecordOpen(false)}
         onSaved={(message) => {
           setRecordOpen(false);
-          void movementsQuery.refetch();
-          onChanged(message);
+          afterWrite(message);
+        }}
+      />
+
+      <TransferModal
+        open={transferOpen}
+        level={2}
+        lockedArticle={searchResult}
+        onClose={() => setTransferOpen(false)}
+        onSaved={(message) => {
+          setTransferOpen(false);
+          afterWrite(message);
+        }}
+      />
+
+      <DecommissionFlagModal
+        open={flagOpen}
+        level={2}
+        lockedArticle={searchResult}
+        onClose={() => setFlagOpen(false)}
+        onSaved={(message) => {
+          setFlagOpen(false);
+          afterWrite(message);
         }}
       />
 
@@ -222,24 +416,34 @@ export function ArticleDetailModal({
         onOpenMatch={onOpenMatch}
         onOpenExpense={onOpenExpense}
         canSeeExpenseDetail={canSeeExpenseDetail}
+        onOpenDecommission={(id) => {
+          setSelectedMovementId(null);
+          setDecommissionId(id);
+        }}
+      />
+
+      <DecommissionDetailModal
+        decommissionId={decommissionId}
+        level={2}
+        canManage={canManage}
+        onClose={() => setDecommissionId(null)}
+        onChanged={afterWrite}
       />
 
       <ConfirmDialog
         open={confirmArchive}
-        title={article.status === "active" ? `Archiver ${article.name} ?` : `Réactiver ${article.name} ?`}
+        title={isActive ? `Archiver ${article.name} ?` : `Réactiver ${article.name} ?`}
         description={
-          <>
-            {article.status === "active" ? (
-              <span>
-                L'article n'apparaîtra plus dans les choix de mouvement ni dans les prochains inventaires. Son
-                historique est conservé.
-              </span>
-            ) : null}
-            {archiveError ? <span className="mt-2 block text-status-danger-fg">{archiveError}</span> : null}
-          </>
+          isActive ? (
+            <span>
+              L'article n'apparaîtra plus dans les choix de mouvement ni dans les prochains inventaires. Son historique
+              est conservé.
+            </span>
+          ) : undefined
         }
-        confirmLabel={article.status === "active" ? "Archiver" : "Réactiver"}
-        danger={article.status === "active"}
+        error={archiveError}
+        confirmLabel={isActive ? "Archiver" : "Réactiver"}
+        danger={isActive}
         loading={archiving}
         onConfirm={() => void handleArchiveToggle()}
         onCancel={() => setConfirmArchive(false)}

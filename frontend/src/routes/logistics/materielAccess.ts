@@ -18,6 +18,8 @@ export interface MaterialAccess {
   canManageMaterial: boolean;
   canSeeExpenseDetail: boolean;
   isCoach: boolean;
+  /** Alerte « A quitté le club » : Intendant et Président (Q20, position provisoire). */
+  canSeeLeftHolderAlert: boolean;
 }
 
 export function getMaterialAccess(roles: ProfileRole[] | undefined): MaterialAccess {
@@ -26,5 +28,6 @@ export function getMaterialAccess(roles: ProfileRole[] | undefined): MaterialAcc
     canManageMaterial: hasAnyRole(roles, ["steward"]),
     canSeeExpenseDetail: hasAnyRole(roles, EXPENSE_DETAIL_ROLES),
     isCoach: hasAnyRole(roles, ["coach", "assistant_coach"]),
+    canSeeLeftHolderAlert: hasAnyRole(roles, ["steward", "president"]),
   };
 }

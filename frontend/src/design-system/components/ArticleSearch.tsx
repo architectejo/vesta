@@ -23,6 +23,21 @@ export interface ArticleSearchResult {
   unit: string;
   /** Stock renvoyé par l'API : jamais recalculé ici (§3.1). */
   inStock: number;
+  /**
+   * Répartition du stock par détenteur, telle que renvoyée par l'API
+   * (`holder_id: null` = « Non localisé »). Facultatif : seuls les écrans
+   * de l'intendance la lisent.
+   */
+  stockByHolder?: Array<{
+    holder_id: number | null;
+    holder: { id: number; name: string; kind: "member" | "place" } | null;
+    holder_name: string;
+    quantity: number;
+  }>;
+  /** Détenteur proposé par l'API pour une sortie (facultatif). */
+  suggestedHolder?: { id: number; name: string; kind: "member" | "place" } | null;
+  /** Pièces signalées à déclasser (facultatif). */
+  pendingDecommission?: number;
 }
 
 export type SearchArticles = (query: string) => Promise<ArticleSearchResult[]>;

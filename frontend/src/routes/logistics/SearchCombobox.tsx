@@ -21,6 +21,10 @@ export interface SearchComboboxProps<T extends { id: number | string }> {
   disabled?: boolean;
   /** Message affiché à la place du champ (accès refusé, ex. Intendant / dépenses). */
   unavailableMessage?: string;
+  /** Propose la liste dès l'ouverture, sans saisie (petites listes : détenteurs). */
+  searchOnEmpty?: boolean;
+  /** Nombre maximal de suggestions affichées (8 par défaut). */
+  maxResults?: number;
 }
 
 export function SearchCombobox<T extends { id: number | string }>({
@@ -34,6 +38,8 @@ export function SearchCombobox<T extends { id: number | string }>({
   emptyHint = "Tapez pour rechercher.",
   disabled,
   unavailableMessage,
+  searchOnEmpty = false,
+  maxResults = 8,
 }: SearchComboboxProps<T>) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -45,7 +51,7 @@ export function SearchCombobox<T extends { id: number | string }>({
 
   useEffect(() => {
     if (unavailableMessage) return;
-    if (debounced.trim() === "") {
+    if (debounced.trim() === "" && !(searchOnEmpty && open)) {
       setResults([]);
       setState("idle");
       return;
@@ -64,7 +70,7 @@ export function SearchCombobox<T extends { id: number | string }>({
         setResults([]);
         setState("error");
       });
-  }, [debounced, search, unavailableMessage]);
+  }, [debounced, search, unavailableMessage, searchOnEmpty, open]);
 
   if (unavailableMessage) {
     return <p className="text-xs text-text-muted">{unavailableMessage}</p>;
@@ -117,7 +123,7 @@ export function SearchCombobox<T extends { id: number | string }>({
           aria-label={ariaLabel}
           className="absolute z-10 mt-1 max-h-72 w-full overflow-y-auto rounded-md border border-border bg-surface shadow-elevated"
         >
-          {query.trim() === "" ? (
+          {query.trim() === "" && !searchOnEmpty ? (
             <li className="px-3 py-2 text-sm text-text-muted">{emptyHint}</li>
           ) : state === "loading" ? (
             <li className="px-3 py-2 text-sm text-text-muted">Recherche…</li>
@@ -126,9 +132,11 @@ export function SearchCombobox<T extends { id: number | string }>({
               Recherche impossible. Vérifiez votre connexion.
             </li>
           ) : results.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-text-muted">Aucun résultat pour « {query} ».</li>
+            <li className="px-3 py-2 text-sm text-text-muted">
+              {query.trim() ? `Aucun résultat pour « ${query} ».` : "Aucun résultat."}
+            </li>
           ) : (
-            results.slice(0, 8).map((item) => (
+            results.slice(0, maxResults).map((item) => (
               <li
                 key={item.id}
                 role="option"

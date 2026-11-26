@@ -1,5 +1,7 @@
-import { getExpenses, type Expense } from "../../api/treasury";
+import { searchLinkableExpenses, type LinkableExpense } from "../../api/logistics";
 import { listMatches, type MatchListItem } from "../../api/sport";
+import { listClubPlayers, toPlayerSearchResult } from "../../api/clubs";
+import type { PlayerSearchResult } from "../../design-system";
 
 /**
  * Recherche de match pour « Enregistrer un mouvement » (fiche `logistique.md`
@@ -25,50 +27,25 @@ export async function searchMatchesForMovement(query: string): Promise<MatchList
     });
 }
 
-/** Vue réduite d'une dépense pour la recherche du matériel : seulement date,
- * catégorie, montant et statut (fiche §4.8, jamais le bénéficiaire, le motif
- * ni le justificatif). */
-export interface ExpenseSearchRow {
-  id: number;
-  expense_date: string;
-  category_name: string;
-  amount: string;
-  currency: string;
-  status_label: string;
-}
-
-function toExpenseSearchRow(expense: Expense): ExpenseSearchRow {
-  return {
-    id: expense.id,
-    expense_date: expense.expense_date,
-    category_name: expense.category.name,
-    amount: expense.amount,
-    currency: expense.currency,
-    status_label: expense.status_label,
-  };
+/**
+ * Recherche de dépense pour « Dépense liée » d'un achat (10.2 n° 167) :
+ * `GET logistics/expenses/linkable/?q=`, ouvert à l'Intendant. L'API ne
+ * renvoie que les dépenses libérées, avec référence, date, montant, devise,
+ * catégorie et statut (jamais le bénéficiaire, le motif ni le justificatif).
+ */
+export async function searchExpensesForMovement(query: string): Promise<LinkableExpense[]> {
+  if (!query.trim()) return [];
+  return searchLinkableExpenses(query);
 }
 
 /**
- * Recherche de dépense pour « Enregistrer un mouvement » (fiche §4.4, §4.8,
- * point ouvert n° 1) : dépenses libérées, justifiées ou non justifiées
- * (proposition de la fiche), jamais en attente ni refusées. Le point
- * d'accès `/treasury/expenses/` reste réservé au Président, Vice-président,
- * Trésorier et Trésorier adjoint (matrice 2.4) — **pas à l'Intendant**, seul
- * rôle pouvant ouvrir cette modale (`CanManageMaterial`). Cette fonction
- * n'est donc utilisable qu'une fois ce point ouvert tranché côté API ; en
- * attendant, l'appelant doit détecter un refus 403 et masquer le champ
- * (voir `RecordMovementModal`, compte rendu de la tâche).
+ * Joueurs pouvant devenir détenteurs ou donateurs : adhésions actives **et
+ * en attente** (l'API accepte les deux, écart n° 3 de la spec B4). Les
+ * joueurs partis ne sont jamais proposés : un ancien membre se saisit en
+ * texte libre comme donateur hors club.
  */
-export async function searchExpensesForMovement(query: string): Promise<ExpenseSearchRow[]> {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return [];
-  const response = await getExpenses({ status: ["released", "justified", "unjustified"], limit: 200 });
-  return response.results
-    .filter(
-      (expense) =>
-        expense.category.name.toLowerCase().includes(needle) ||
-        expense.expense_date.includes(needle) ||
-        expense.amount.includes(needle),
-    )
-    .map(toExpenseSearchRow);
+export async function searchHolderCandidates(query: string): Promise<PlayerSearchResult[]> {
+  if (!query.trim()) return [];
+  const items = await listClubPlayers({ search: query });
+  return items.filter((item) => item.membership_status !== "departed").map(toPlayerSearchResult);
 }

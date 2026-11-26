@@ -86,14 +86,25 @@ export function ArticleFormModal({ open, article, onClose, onSubmit }: ArticleFo
     >
       <div className="space-y-4">
         <TextField label="Nom" value={name} onChange={setName} maxLength={120} error={nameError} />
-        <SegmentedControl
-          label="Catégorie"
-          value={category}
-          onChange={setCategory}
-          options={ARTICLE_CATEGORY_OPTIONS}
-          error={categoryError}
-          wrapOnMobile
-        />
+        {/* 10 catégories : `<select>` natif permis (ce n'est pas un joueur,
+            spec intendance §8) ; un SegmentedControl ne tient pas à 360 px. */}
+        <label className="block text-sm font-medium text-text">
+          Catégorie
+          <select
+            value={category ?? ""}
+            onChange={(e) => setCategory(e.target.value ? (e.target.value as ArticleCategory) : null)}
+            aria-invalid={categoryError ? true : undefined}
+            className="mt-1 h-control-md w-full rounded-sm border border-border-strong bg-surface px-3 text-base text-text"
+          >
+            <option value="">Choisissez une catégorie</option>
+            {ARTICLE_CATEGORY_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          {categoryError ? <p className="mt-1 text-xs text-status-danger-fg">{categoryError}</p> : null}
+        </label>
         <TextField
           label="Unité"
           value={unit}
@@ -101,7 +112,13 @@ export function ArticleFormModal({ open, article, onClose, onSubmit }: ArticleFo
           maxLength={20}
           help="Par exemple : pièce, paire, lot."
         />
-        <SegmentedControl label="État" value={condition} onChange={setCondition} options={ARTICLE_CONDITION_OPTIONS} />
+        <SegmentedControl
+          label="État"
+          value={condition}
+          onChange={setCondition}
+          options={ARTICLE_CONDITION_OPTIONS}
+          wrapOnMobile
+        />
         {!isEdit ? (
           <p className="text-xs text-text-muted">
             Le stock démarre à 0. Enregistrez ensuite une entrée (achat, dotation) pour indiquer les quantités.

@@ -107,7 +107,13 @@ export type StatusKey =
   // Import des cotisations historiques (CDC 4.4.8 ; fiche tresorerie-import-cotisations.md §6)
   | "import_ready" // Prête
   | "import_failed" // Échec
-  | "import_to_check"; // À vérifier (ligne prête avec avertissements)
+  | "import_to_check" // À vérifier (ligne prête avec avertissements)
+  // Registre de l'intendance (logistique-intendance-registre.md)
+  | "holder_left" // A quitté le club (détenteur)
+  | "unlocated" // À localiser
+  | "decommission_pending" // À déclasser
+  | "decommission_done" // Déclassé
+  | "decommission_cancelled"; // Annulé
 
 export const STATUS_MAP: Record<StatusKey, { family: StatusFamily; label: string }> = {
   in_good_standing: { family: "success", label: "En ordre" },
@@ -208,4 +214,10 @@ export const STATUS_MAP: Record<StatusKey, { family: StatusFamily; label: string
   import_ready: { family: "success", label: "Prête" },
   import_failed: { family: "danger", label: "Échec" },
   import_to_check: { family: "warning", label: "À vérifier" },
+
+  holder_left: { family: "danger", label: "A quitté le club" },
+  unlocated: { family: "neutral", label: "À localiser" },
+  decommission_pending: { family: "warning", label: "À déclasser" },
+  decommission_done: { family: "neutral", label: "Déclassé" },
+  decommission_cancelled: { family: "neutral", label: "Annulé" },
 };

@@ -22,7 +22,7 @@ export interface OutstandingEquipmentRow {
  * d'accès inventé.
  */
 export async function listOutstandingMatchEquipment(): Promise<OutstandingEquipmentRow[]> {
-  const movements = await listMovements({ movement_type: "out_loan" });
+  const movements = await listMovements({ movement_type: "out_loan", limit: 200 });
   const matchIds = [...new Set(movements.results.map((m) => m.match_id).filter((id): id is number => id != null))];
   const capped = matchIds.slice(0, 15);
 
