@@ -24,13 +24,26 @@ import {
   TextField,
   useToast,
 } from "../../../design-system";
+import {
+  CHRONO_DRAFT_SAVE_INTERVAL_MS,
+  clearChronoDraft,
+  fromDraft,
+  isWorthSaving,
+  toDraft,
+  writeChronoDraft,
+  type ChronoDraft,
+  type ChronoDraftContext,
+  type ChronoDraftState,
+  type ManualEntries,
+  type StopwatchSnapshot,
+} from "./chronoDraft";
 import { CountdownStep } from "./CountdownStep";
 import { ManualStep } from "./ManualStep";
 import type { DraftItem, PendingMeasureBatch } from "./measureTypes";
 import { StepFooter } from "./StepFooter";
 import { StopwatchStep } from "./StopwatchStep";
 import { TestFormModal } from "./TestFormModal";
-import type { Clock } from "./useTicker";
+import { monotonicClock, type Clock } from "./useTicker";
 import type { MeasureOutbox } from "./useMeasureOutbox";
 
 /** Au-delà, il devient impossible d'arrêter chaque chrono au bon moment (C6.1). */
@@ -48,6 +61,15 @@ export interface MeasureModalProps {
   initialTestId?: number | null;
   /** Horloge monotone injectable (tests) ; `performance.now()` par défaut. */
   clock?: Clock;
+  /**
+   * Utilisateur connecté : sans lui, le chrono n'est pas sauvegardé sur le
+   * téléphone (la sauvegarde n'est proposée qu'à la même personne).
+   */
+  userId?: number | null;
+  /** Chrono non enregistré retrouvé sur le téléphone, à reprendre. */
+  restore?: ChronoDraft | null;
+  /** Heure réelle injectable (tests) ; `Date.now()` par défaut. */
+  wallClock?: () => number;
 }
 
 function plural(count: number, one: string, many: string): string {
@@ -63,13 +85,32 @@ export function MeasureModal({ open, ...rest }: MeasureModalProps) {
   return open ? <MeasureModalBody {...rest} /> : null;
 }
 
-function MeasureModalBody({ eventId, outbox, onClose, initialTestId = null, clock }: Omit<MeasureModalProps, "open">) {
+function initialStep(restored: ChronoDraftState | null): Step {
+  if (!restored) return "choose";
+  if (restored.step === "stopwatch") return "stopwatch";
+  return restored.countdown.elapsed ? "manual" : "countdown";
+}
+
+function MeasureModalBody({
+  eventId,
+  outbox,
+  onClose: closeModal,
+  initialTestId = null,
+  clock,
+  userId = null,
+  restore = null,
+  wallClock = Date.now,
+}: Omit<MeasureModalProps, "open">) {
   const { showToast } = useToast();
-  const [step, setStep] = useState<Step>("choose");
-  const [testId, setTestId] = useState<number | null>(initialTestId);
+  // Sauvegarde reconvertie une seule fois dans l'horloge de cette page.
+  const [restored] = useState<ChronoDraftState | null>(() =>
+    restore ? fromDraft(restore, { mono: (clock ?? monotonicClock)(), wall: wallClock() }) : null,
+  );
+  const [step, setStep] = useState<Step>(() => initialStep(restored));
+  const [testId, setTestId] = useState<number | null>(restore?.testId ?? initialTestId);
   const [method, setMethod] = useState<PerformanceMethod>("stopwatch");
-  const [startMode, setStartMode] = useState<PerformanceStartMode>("group");
-  const [selected, setSelected] = useState<number[]>([]);
+  const [startMode, setStartMode] = useState<PerformanceStartMode>(restore?.startMode ?? "group");
+  const [selected, setSelected] = useState<number[]>(restore?.playerIds ?? []);
   const [search, setSearch] = useState("");
   const [dirty, setDirty] = useState(false);
   const [confirmAbandon, setConfirmAbandon] = useState(false);
@@ -77,7 +118,7 @@ function MeasureModalBody({ eventId, outbox, onClose, initialTestId = null, cloc
   const [submitting, setSubmitting] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [summary, setSummary] = useState<{ response: BulkPerformanceResponse; names: Record<number, string> } | null>(null);
-  const [usedMethod, setUsedMethod] = useState<PerformanceMethod>("manual");
+  const [usedMethod, setUsedMethod] = useState<PerformanceMethod>(restore ? "stopwatch" : "manual");
   const [formError, setFormError] = useState<string | null>(null);
   const [newTestOpen, setNewTestOpen] = useState(false);
 
@@ -119,8 +160,78 @@ function MeasureModalBody({ eventId, outbox, onClose, initialTestId = null, cloc
 
   const onDirtyChange = useCallback((value: boolean) => setDirty(value), []);
 
+  // --- Sauvegarde locale du chrono (partie C : « Le téléphone s'éteint ») ---
+  const snapshotRef = useRef<ChronoDraftState | null>(restored);
+  const wroteRef = useRef(false);
+  const doneRef = useRef(false);
+  const clocksRef = useRef({ mono: clock ?? monotonicClock, wall: wallClock });
+  const contextHolder = useRef<ChronoDraftContext | null>(null);
+  const testName = test?.name ?? null;
+  useEffect(() => {
+    clocksRef.current = { mono: clock ?? monotonicClock, wall: wallClock };
+    contextHolder.current =
+      userId !== null && testId !== null && testName !== null
+        ? { userId, eventId, testId, testName, startMode, playerIds: selected }
+        : null;
+  }, [clock, wallClock, userId, eventId, testId, testName, startMode, selected]);
+
+  const persist = useCallback(() => {
+    const context = contextHolder.current;
+    const state = snapshotRef.current;
+    // Rien n'est écrit avant le premier départ : une sauvegarde plus ancienne reste intacte.
+    if (!context || !state || doneRef.current || !isWorthSaving(state)) return;
+    writeChronoDraft(toDraft(context, state, { mono: clocksRef.current.mono(), wall: clocksRef.current.wall() }));
+    wroteRef.current = true;
+  }, []);
+
+  const forgetDraft = useCallback(() => {
+    doneRef.current = true;
+    if (userId !== null && (wroteRef.current || restore)) clearChronoDraft(userId, eventId);
+  }, [userId, eventId, restore]);
+
+  const onClose = useCallback(() => {
+    forgetDraft();
+    closeModal();
+  }, [forgetDraft, closeModal]);
+
+  const onStopwatchSnapshot = useCallback(
+    (snapshot: StopwatchSnapshot) => {
+      snapshotRef.current = { step: "stopwatch", stopwatch: snapshot };
+      persist();
+    },
+    [persist],
+  );
+
+  // Écriture toutes les secondes pendant la mesure, et quand la page passe en arrière-plan.
+  const measuring = step === "stopwatch" || step === "countdown" || step === "manual";
+  useEffect(() => {
+    if (!measuring) return undefined;
+    const timer = window.setInterval(persist, CHRONO_DRAFT_SAVE_INTERVAL_MS);
+    const onHide = () => persist();
+    window.addEventListener("pagehide", onHide);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("pagehide", onHide);
+      document.removeEventListener("visibilitychange", onHide);
+    };
+  }, [measuring, persist]);
+
+  // Distances saisies après le compte à rebours : gardées avec le chrono.
+  const onManualSnapshot = useCallback(
+    (entries: ManualEntries) => {
+      const current = snapshotRef.current;
+      if (current?.step !== "countdown") return;
+      snapshotRef.current = { step: "countdown", countdown: { ...current.countdown, entries } };
+      persist();
+    },
+    [persist],
+  );
+
   function requestClose() {
-    if (step !== "summary" && dirty) setConfirmAbandon(true);
+    // Un chrono déjà parti compte comme une mesure non enregistrée (C6.2 : « pendant ou après »).
+    const chronoTaken = snapshotRef.current !== null && isWorthSaving(snapshotRef.current);
+    if (step !== "summary" && (dirty || chronoTaken)) setConfirmAbandon(true);
     else onClose();
   }
 
@@ -186,6 +297,8 @@ function MeasureModalBody({ eventId, outbox, onClose, initialTestId = null, cloc
     const names = Object.fromEntries(review.map((item) => [item.membershipId, item.name]));
     try {
       const outcome = await outbox.submit(buildBatch(review, test));
+      // Envoyées ou mises en file : la sauvegarde du chrono n'a plus lieu d'être.
+      forgetDraft();
       lotUuid.current = null;
       itemUuids.current = new Map();
       setReview(null);
@@ -206,6 +319,15 @@ function MeasureModalBody({ eventId, outbox, onClose, initialTestId = null, cloc
       setSubmitting(false);
     }
   }
+
+  // Reprise d'un chrono retrouvé : attendre les joueurs pointés et le test avant d'afficher l'état.
+  // Échec de chargement (hors connexion après redémarrage) : rien n'est affiché
+  // ni réécrit, la sauvegarde reste intacte pour une prochaine tentative.
+  const restoreFailed = restore !== null && step !== "summary" && (sessionQuery.isError || testsQuery.isError);
+  const restoring = restore !== null && !restoreFailed && (sessionQuery.isLoading || testsQuery.isLoading);
+  const restoreLost =
+    restore !== null && !restoreFailed && testsQuery.isSuccess && step !== "summary" && test === null;
+  const showStep = !restoring && !restoreFailed;
 
   const title =
     step === "choose" || step === "summary" || !test
@@ -342,19 +464,61 @@ function MeasureModalBody({ eventId, outbox, onClose, initialTestId = null, cloc
           </div>
         ) : null}
 
-        {step === "countdown" && test ? (
+        {restoring ? <Loader loading variant="list" count={4} /> : null}
+
+        {restoreFailed ? (
+          <div className="space-y-3">
+            <EmptyState
+              variant="error"
+              message="Impossible de charger le chrono retrouvé. Vérifiez la connexion."
+              actionLabel="Réessayer"
+              onAction={() => {
+                if (sessionQuery.isError) void sessionQuery.refetch();
+                if (testsQuery.isError) void testsQuery.refetch();
+              }}
+            />
+            <StepFooter>
+              <Button variant="primary" className="w-full" onClick={closeModal}>
+                Fermer
+              </Button>
+            </StepFooter>
+          </div>
+        ) : null}
+
+        {restoreLost ? (
+          <div className="space-y-3">
+            <EmptyState message="Ce test n'est plus proposé : le chrono retrouvé ne peut pas être repris." />
+            <StepFooter>
+              <Button variant="primary" className="w-full" onClick={onClose}>
+                Fermer
+              </Button>
+            </StepFooter>
+          </div>
+        ) : null}
+
+        {step === "countdown" && test && showStep ? (
           <CountdownStep
             test={test}
             clock={clock}
             onDirtyChange={onDirtyChange}
+            initialStartedAt={restored?.step === "countdown" ? restored.countdown.startedAt : null}
+            onStarted={(startedAt) => {
+              snapshotRef.current = { step: "countdown", countdown: { startedAt, elapsed: false } };
+              persist();
+            }}
             onElapsed={() => {
+              const current = snapshotRef.current;
+              if (current?.step === "countdown") {
+                snapshotRef.current = { step: "countdown", countdown: { ...current.countdown, elapsed: true } };
+                persist();
+              }
               setDirty(false);
               setStep("manual");
             }}
           />
         ) : null}
 
-        {step === "stopwatch" && test ? (
+        {step === "stopwatch" && test && showStep ? (
           <StopwatchStep
             test={test}
             players={players}
@@ -362,16 +526,20 @@ function MeasureModalBody({ eventId, outbox, onClose, initialTestId = null, cloc
             clock={clock}
             onDirtyChange={onDirtyChange}
             onReview={setReview}
+            initial={restored?.step === "stopwatch" ? restored.stopwatch : undefined}
+            onSnapshot={onStopwatchSnapshot}
           />
         ) : null}
 
-        {step === "manual" && test ? (
+        {step === "manual" && test && showStep ? (
           <ManualStep
             test={test}
             players={players}
             intro={usedMethod === "stopwatch" ? "Temps écoulé. Saisissez la distance de chaque joueur." : undefined}
             onDirtyChange={onDirtyChange}
             onReview={setReview}
+            initial={restored?.step === "countdown" ? restored.countdown.entries : undefined}
+            onSnapshot={onManualSnapshot}
           />
         ) : null}
 

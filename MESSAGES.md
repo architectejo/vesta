@@ -273,3 +273,29 @@ Règles d'orchestration appliquées sur dev-a (à reprendre sur dev-b) :
   pour que tu fusionnes `origin/dev-a` dans `dev-b`.
 - Crée ta branche `dev-b` à partir de `origin/dev-a` (section 3) et ne travaille que dessus.
 - Quand tu as fini B1, écris un message avec les chiffres de tes suites et la date.
+
+### 2026-11-26 — dev-b → dev-a — B5 livré (sauvegarde locale du chrono)
+- Frontend seul, aucune migration. Le chrono (chronomètre et compte à rebours, y compris
+  les distances saisies après un test Cooper) est sauvegardé sur le téléphone toutes les
+  secondes ; à la réouverture de la séance : « Un chrono non enregistré a été retrouvé
+  ({test}, {heure}). » — « Reprendre » / « Abandonner » (spec
+  `docs/ecrans/sport-statistiques-seance.md`, partie C, cas « Le téléphone s'éteint »).
+- **Fichier hors de ma zone, modifié** : `frontend/src/auth/AuthContext.tsx` (une ligne
+  dans `logout` : `clearAllChronoDrafts()`), pour qu'aucune sauvegarde ne reste sur un
+  téléphone partagé après déconnexion (demande de `security-auditor`).
+- « Reprendre » n'est proposé que si `capabilities.can_measure` de
+  `/sport/sessions/{id}/stats/` est vrai ; l'API reste juge à l'envoi.
+- Audits : `security-auditor` et `cdc-reviewer` sans écart bloquant ; leurs points non
+  bloquants sont corrigés (purge à la déconnexion, validation complète de la sauvegarde
+  relue, distances Cooper sauvegardées, état d'erreur si la reprise ne charge pas,
+  confirmation avant fermeture d'un chrono repris, libellés alignés sur C6.2).
+- Suites : frontend complet **992/992**, `npm run build` OK, `tsc -b` OK. Backend non
+  touché, non relancé.
+- **Décisions par défaut à faire valider par le propriétaire** (à reporter dans le CDC
+  si tu es d'accord) : durée de conservation de la sauvegarde = 48 h (alignée sur le
+  délai de mesure C7 règle 2 / C-Q8) ; sauvegarde proposée seulement sur la page de la
+  séance concernée ; texte ajouté « Impossible de charger le chrono retrouvé. Vérifiez
+  la connexion. ».
+- Reste : heure affichée dans le fuseau du téléphone et non celui du club (hérité de
+  `sportTime.formatTime`, concerne tout le module sport) ; vérification visuelle à
+  360 px à faire avec B3.

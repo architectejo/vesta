@@ -11,6 +11,7 @@ import {
   type RunnerMap,
   type RunnerState,
 } from "./chronoState";
+import type { StopwatchSnapshot } from "./chronoDraft";
 import type { DraftItem } from "./measureTypes";
 import { describeFields, formatStopwatch, formatTimeMs, indicativeSpeedKmh } from "./performanceFormat";
 import { StepFooter } from "./StepFooter";
@@ -28,6 +29,20 @@ export interface StopwatchStepProps {
   onDirtyChange: (dirty: boolean) => void;
   /** Le Coach demande l'envoi : le parent affiche le récapitulatif de confirmation. */
   onReview: (items: DraftItem[]) => void;
+  /** État restauré d'une sauvegarde locale (horloge monotone de la page). */
+  initial?: StopwatchSnapshot;
+  /** Reçoit l'état à chaque changement, pour la sauvegarde locale. */
+  onSnapshot?: (snapshot: StopwatchSnapshot) => void;
+}
+
+/** Garde seulement les joueurs encore à l'écran (une sauvegarde peut en citer d'autres). */
+function pick(map: RunnerMap, ids: number[]): RunnerMap {
+  const kept: RunnerMap = {};
+  for (const id of ids) {
+    const state = map[id];
+    if (state !== undefined) kept[id] = state;
+  }
+  return kept;
 }
 
 function stateOf(map: RunnerMap, id: number): RunnerState {
@@ -65,18 +80,33 @@ function itemsOf(test: PerformanceTest, players: PlayerBrief[], map: RunnerMap, 
  * monotone, en millisecondes entières : exact même si l'écran se met en
  * veille. Les lignes ne changent jamais de place pendant le chrono.
  */
-export function StopwatchStep({ test, players, startMode, clock = monotonicClock, onDirtyChange, onReview }: StopwatchStepProps) {
+export function StopwatchStep({
+  test,
+  players,
+  startMode,
+  clock = monotonicClock,
+  onDirtyChange,
+  onReview,
+  initial,
+  onSnapshot,
+}: StopwatchStepProps) {
   const ids = useMemo(() => players.map((p) => p.membership_id), [players]);
-  const [runners, setRunners] = useState<RunnerMap>(() => initialMap(ids));
-  const [rounds, setRounds] = useState<RunnerMap[]>([]);
-  const [phase, setPhase] = useState<Phase>("ready");
-  const [groupStart, setGroupStart] = useState<number | null>(null);
-  const [frozen, setFrozen] = useState(0);
+  const [runners, setRunners] = useState<RunnerMap>(() =>
+    initial ? { ...initialMap(ids), ...pick(initial.runners, ids) } : initialMap(ids),
+  );
+  const [rounds, setRounds] = useState<RunnerMap[]>(() => initial?.rounds.map((map) => pick(map, ids)) ?? []);
+  const [phase, setPhase] = useState<Phase>(() => initial?.phase ?? "ready");
+  const [groupStart, setGroupStart] = useState<number | null>(() => initial?.groupStart ?? null);
+  const [frozen, setFrozen] = useState(() => initial?.frozen ?? 0);
   const [menuFor, setMenuFor] = useState<number | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
 
   useTicker(phase === "running");
   const { held } = useWakeLock(phase === "running");
+
+  useEffect(() => {
+    onSnapshot?.({ phase, groupStart, runners, rounds, frozen });
+  }, [phase, groupStart, runners, rounds, frozen, onSnapshot]);
 
   const dirty = rounds.length > 0 || phase !== "ready" || ids.some((id) => stateOf(runners, id).status !== "idle");
   useEffect(() => {

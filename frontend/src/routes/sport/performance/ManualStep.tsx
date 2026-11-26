@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { PerformanceTest, PlayerBrief } from "../../../api/performance";
 import { Avatar, Banner, Button, TextField } from "../../../design-system";
+import type { ManualEntries } from "./chronoDraft";
 import type { DraftItem } from "./measureTypes";
 import { describeFields } from "./performanceFormat";
 import { StepFooter } from "./StepFooter";
@@ -13,12 +14,20 @@ export interface ManualStepProps {
   intro?: string;
   onDirtyChange: (dirty: boolean) => void;
   onReview: (items: DraftItem[]) => void;
+  /** Saisie restaurée d'une sauvegarde locale du chrono. */
+  initial?: ManualEntries;
+  /** Reçoit la saisie à chaque changement, pour la sauvegarde locale. */
+  onSnapshot?: (entries: ManualEntries) => void;
 }
 
 /** Saisie manuelle de secours (C6.3) : une ligne par joueur, ligne vide = non mesuré. */
-export function ManualStep({ test, players, intro, onDirtyChange, onReview }: ManualStepProps) {
-  const [drafts, setDrafts] = useState<Record<number, ValueDraft>>({});
-  const [lapLength, setLapLength] = useState("");
+export function ManualStep({ test, players, intro, onDirtyChange, onReview, initial, onSnapshot }: ManualStepProps) {
+  const [drafts, setDrafts] = useState<Record<number, ValueDraft>>(() => initial?.drafts ?? {});
+  const [lapLength, setLapLength] = useState(() => initial?.lapLength ?? "");
+
+  useEffect(() => {
+    onSnapshot?.({ drafts, lapLength });
+  }, [drafts, lapLength, onSnapshot]);
 
   const rows = useMemo(
     () =>

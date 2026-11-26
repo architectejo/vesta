@@ -10,6 +10,7 @@ import {
 import { logout as apiLogout } from "../api/auth";
 import type { ClubSummary, LoginSuccess, UserSummary } from "../api/auth";
 import type { ClubCreationSuccess } from "../api/clubs";
+import { clearAllChronoDrafts } from "../routes/sport/performance/chronoDraft";
 import {
   clearSessionTokens,
   getAccessToken,
@@ -80,6 +81,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // (CDC 7.1 : « Se déconnecter » reste toujours une issue disponible).
     } finally {
       clearSessionTokens();
+      // Téléphone partagé : aucun chrono non enregistré ne survit à la déconnexion.
+      clearAllChronoDrafts();
     }
   }, []);
 

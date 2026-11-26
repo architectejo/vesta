@@ -5,6 +5,7 @@ import { ApiError } from "../../api/client";
 import { listClubPlayers, getMyProfile, type ClubPlayerListItem } from "../../api/clubs";
 import {
   getSession,
+  getSessionStats,
   listEventIncidents,
   markSessionAttendance,
   type Attendance,
@@ -16,6 +17,7 @@ import {
   Avatar,
   Banner,
   Button,
+  ConfirmDialog,
   EmptyState,
   Loader,
   Modal,
@@ -41,6 +43,14 @@ import { useBulkAttendance, type BulkAttendanceState } from "./useBulkAttendance
 import { EvaluationModal } from "./EvaluationModal";
 import { IncidentModal } from "./IncidentModal";
 import { SessionStatsPanel, sessionStatsKey } from "./SessionStatsPanel";
+import { getStoredIdentity } from "../../auth/session";
+import {
+  clearChronoDraft,
+  formatDraftTime,
+  purgeExpiredChronoDrafts,
+  readChronoDraft,
+  type ChronoDraft,
+} from "./performance/chronoDraft";
 import { MeasureModal } from "./performance/MeasureModal";
 import { PendingMeasures } from "./performance/PendingMeasures";
 import { useMeasureOutbox } from "./performance/useMeasureOutbox";
@@ -526,6 +536,9 @@ function BilanTab({
   canSeeMedicalFull,
   isCaptain,
   injuryOffline,
+  userId,
+  resumeChrono,
+  onMeasureClosed,
 }: {
   session: SessionDetail;
   eventId: number;
@@ -535,11 +548,23 @@ function BilanTab({
   canSeeMedicalFull: boolean;
   isCaptain: boolean;
   injuryOffline: { isOnline: boolean; enqueue: (payload: InjuryReportInput) => void };
+  /** Utilisateur connecté : active la sauvegarde locale du chrono. */
+  userId: number | null;
+  /**
+   * « Reprendre » a été choisi sur le chrono retrouvé : l'onglet est remonté
+   * (nouvelle `key`) et ouvre la mesure sur la sauvegarde, relue à cet instant
+   * pour avoir son dernier état.
+   */
+  resumeChrono: boolean;
+  onMeasureClosed: () => void;
 }) {
   const [incidentOpen, setIncidentOpen] = useState(false);
   const [evalOpen, setEvalOpen] = useState(false);
   const [injuryOpen, setInjuryOpen] = useState(false);
-  const [measure, setMeasure] = useState<{ testId: number | null } | null>(null);
+  const [measure, setMeasure] = useState<{ testId: number | null; restore?: ChronoDraft } | null>(() => {
+    const draft = resumeChrono && userId !== null ? readChronoDraft(userId, eventId) : null;
+    return draft ? { testId: draft.testId, restore: draft } : null;
+  });
   const outbox = useMeasureOutbox();
   const queryClient = useQueryClient();
 
@@ -561,7 +586,12 @@ function BilanTab({
         eventId={eventId}
         outbox={outbox}
         initialTestId={measure?.testId ?? null}
-        onClose={() => setMeasure(null)}
+        userId={userId}
+        restore={measure?.restore ?? null}
+        onClose={() => {
+          setMeasure(null);
+          onMeasureClosed();
+        }}
       />
 
       <section className="rounded-md border border-border p-3">
@@ -662,6 +692,25 @@ export function SeancePage() {
   const [detailAttendance, setDetailAttendance] = useState<Attendance | null>(null);
   const [cardMembershipId, setCardMembershipId] = useState<number | null>(null);
 
+  // Chrono non enregistré retrouvé sur ce téléphone (sport-statistiques-seance.md, partie C).
+  const userId = getStoredIdentity()?.user.id ?? null;
+  const findChronoDraft = useCallback(
+    () => (userId !== null && Number.isFinite(sessionId) ? readChronoDraft(userId, sessionId) : null),
+    [userId, sessionId],
+  );
+  const [chronoDraft, setChronoDraft] = useState<ChronoDraft | null>(() => {
+    // Ménage des sauvegardes oubliées (autres séances, plus de 48 h) avant de chercher la nôtre.
+    purgeExpiredChronoDrafts();
+    return findChronoDraft();
+  });
+  const [resumeChrono, setResumeChrono] = useState(false);
+  const [bilanKey, setBilanKey] = useState(0);
+  const [confirmDropChrono, setConfirmDropChrono] = useState(false);
+  const onMeasureClosed = useCallback(() => {
+    setResumeChrono(false);
+    setChronoDraft(findChronoDraft());
+  }, [findChronoDraft]);
+
   const profileQuery = useQuery({ queryKey: ["profile", "me"], queryFn: getMyProfile, staleTime: 60_000 });
   const access = getSportAccess(profileQuery.data?.roles);
 
@@ -671,6 +720,15 @@ export function SeancePage() {
     enabled: Number.isFinite(sessionId),
     refetchInterval: 15_000,
   });
+
+  // « Reprendre » n'est proposé que si l'API autorise encore la mesure
+  // (rôle et fenêtre de saisie) ; sinon, seul « Abandonner » reste.
+  const chronoStatsQuery = useQuery({
+    queryKey: sessionStatsKey(sessionId),
+    queryFn: () => getSessionStats(sessionId),
+    enabled: chronoDraft !== null && Number.isFinite(sessionId),
+  });
+  const canResumeChrono = chronoStatsQuery.data?.capabilities.can_measure ?? false;
 
   const rosterQuery = useQuery({
     queryKey: ["clubs", "players", "active"],
@@ -860,6 +918,34 @@ export function SeancePage() {
         </Banner>
       ) : null}
       {session.is_locked ? <Banner variant="readonly">Cette séance est verrouillée : lecture seule.</Banner> : null}
+      {chronoDraft ? (
+        <Banner
+          variant="warning"
+          action={
+            <span className="flex gap-2">
+              {canResumeChrono ? (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => {
+                    setTab("bilan");
+                    setResumeChrono(true);
+                    setChronoDraft(null);
+                    setBilanKey((key) => key + 1);
+                  }}
+                >
+                  Reprendre
+                </Button>
+              ) : null}
+              <Button size="sm" variant="secondary" onClick={() => setConfirmDropChrono(true)}>
+                Abandonner
+              </Button>
+            </span>
+          }
+        >
+          Un chrono non enregistré a été retrouvé ({chronoDraft.testName}, {formatDraftTime(chronoDraft.savedAt)}).
+        </Banner>
+      ) : null}
 
       <Tabs
         label="Vue de la séance"
@@ -895,6 +981,7 @@ export function SeancePage() {
         />
       ) : (
         <BilanTab
+          key={bilanKey}
           session={session}
           eventId={session.id}
           canRecordIncident={access.canRecordIncident}
@@ -903,8 +990,25 @@ export function SeancePage() {
           canSeeMedicalFull={access.canSeeMedicalFull}
           isCaptain={access.isCaptain && !access.canSeeMedicalFull}
           injuryOffline={{ isOnline: injuryQueue.isOnline, enqueue: injuryQueue.enqueue }}
+          userId={userId}
+          resumeChrono={resumeChrono}
+          onMeasureClosed={onMeasureClosed}
         />
       )}
+
+      <ConfirmDialog
+        open={confirmDropChrono}
+        title="Abandonner ces mesures ?"
+        description="Les temps non enregistrés seront perdus."
+        confirmLabel="Abandonner"
+        cancelLabel="Continuer"
+        onConfirm={() => {
+          if (userId !== null) clearChronoDraft(userId, sessionId);
+          setConfirmDropChrono(false);
+          setChronoDraft(null);
+        }}
+        onCancel={() => setConfirmDropChrono(false)}
+      />
 
       <SessionEditModal
         open={editOpen}

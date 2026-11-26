@@ -18,14 +18,25 @@ export interface CountdownStepProps {
   /** Appelé quand le temps est écoulé (ou « Terminer maintenant ») : passage à la saisie des distances. */
   onElapsed: () => void;
   onDirtyChange: (dirty: boolean) => void;
+  /** Départ restauré d'une sauvegarde locale (horloge monotone de la page). */
+  initialStartedAt?: number | null;
+  /** Reçoit l'instant du départ, pour la sauvegarde locale. */
+  onStarted?: (startedAt: number) => void;
 }
 
 /**
  * « Distance en temps donné » (Cooper) : le chrono décompte la durée du test,
  * sans arrêt par joueur ; à zéro, on passe à la saisie de la distance.
  */
-export function CountdownStep({ test, clock = monotonicClock, onElapsed, onDirtyChange }: CountdownStepProps) {
-  const [startedAt, setStartedAt] = useState<number | null>(null);
+export function CountdownStep({
+  test,
+  clock = monotonicClock,
+  onElapsed,
+  onDirtyChange,
+  initialStartedAt = null,
+  onStarted,
+}: CountdownStepProps) {
+  const [startedAt, setStartedAt] = useState<number | null>(initialStartedAt);
   const firedRef = useRef(false);
   const total = (test.duration_s ?? 0) * 1000;
   const running = startedAt !== null;
@@ -67,7 +78,12 @@ export function CountdownStep({ test, clock = monotonicClock, onElapsed, onDirty
             Terminer maintenant
           </Button>
         ) : (
-          <Button variant="primary" className="w-full" onClick={() => setStartedAt(clock())}>
+          <Button variant="primary" className="w-full" onClick={() => {
+              const now = clock();
+              setStartedAt(now);
+              onStarted?.(now);
+            }}
+          >
             Départ
           </Button>
         )}
