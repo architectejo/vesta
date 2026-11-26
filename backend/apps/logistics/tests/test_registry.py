@@ -231,6 +231,7 @@ def test_holder_flagged_when_member_left_club(ctx: LogisticsClubContext):
     membership = make_member(ctx.club)
     holder = make_member_holder(ctx, membership)
     membership.status = "departed"
+    membership.left_by = ctx.president.user  # le départ exige un acteur réel (clubs, CDC 5.1)
     membership.save()
     data = client_for(ctx.steward.user).get(reverse("logistics:holder-list")).data
     assert data["results"][0]["has_left_club"] is True
@@ -746,8 +747,8 @@ def test_register_lists_pending_decommissions(ctx: LogisticsClubContext):
 
 
 def test_register_pdf_contains_club_name_not_imara_and_is_logged(ctx: LogisticsClubContext):
-    seed_register(ctx)
-    flag(client_for(ctx.steward.user), Article.objects.none() or Article.all_objects.get(club=ctx.club, name="Ballons de match"), 2)
+    balls, *_ = seed_register(ctx)
+    flag(client_for(ctx.steward.user), balls, 2)
     response = client_for(ctx.coach.user).get(reverse("logistics:register-pdf"))
     assert response.status_code == status.HTTP_200_OK
     assert response["Content-Type"] == "application/pdf"

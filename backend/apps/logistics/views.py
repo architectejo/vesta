@@ -35,6 +35,27 @@ def _error(exc) -> Response:
     return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+_INVALID_PARAM = {"detail": "Paramètre invalide."}
+MOVEMENTS_DEFAULT_LIMIT = 50
+MOVEMENTS_MAX_LIMIT = 200
+
+
+class _InvalidParam(Exception):
+    pass
+
+
+def _int_query_param(request, name: str):
+    """Paramètre de requête numérique facultatif ; non numérique -> 400."""
+
+    raw = request.query_params.get(name)
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise _InvalidParam(name) from None
+
+
 def _find_holder(pk):
     return Holder.objects.select_related("membership__user").filter(pk=pk).first()
 
@@ -70,21 +91,22 @@ class ArticleListCreateView(APIView):
         condition = request.query_params.get("condition")
         if condition:
             queryset = queryset.filter(reference_condition=condition)
-        search = request.query_params.get("search")
-        if search:
-            queryset = queryset.filter(name__icontains=search)
-        queryset = queryset.order_by("category", "name")
+        articles = services.filter_articles_by_search(
+            queryset.order_by("category", "name"), request.query_params.get("search") or ""
+        )
         stocks = services.bulk_stock_by_holder()
         holders_by_id = services.club_holders_by_id()
         pending = services.pending_decommission_by_article()
+        loaned = services.loaned_for_match_by_article()
         data = [
             ser.serialize_article(
                 article,
                 holder_stocks=stocks.get(article.pk, {}),
                 holders_by_id=holders_by_id,
                 pending_decommission=pending.get(article.pk, 0),
+                loaned_for_match=loaned.get(article.pk, 0),
             )
-            for article in queryset
+            for article in articles
         ]
         return Response({"count": len(data), "results": data})
 
@@ -156,12 +178,33 @@ class MovementListCreateView(APIView):
         return [c() for c in classes]
 
     def get(self, request):
-        queryset = StockMovement.objects.select_related("article", "membership__user").order_by(
+        queryset = StockMovement.objects.select_related("article", "membership__user", "holder__membership__user").order_by(
             "-movement_date", "-created_at"
         )
-        article_id = request.query_params.get("article")
-        if article_id:
+        try:
+            article_id = _int_query_param(request, "article")
+            match_id = _int_query_param(request, "match")
+            expense_id = _int_query_param(request, "expense")
+            limit = _int_query_param(request, "limit")
+            offset = _int_query_param(request, "offset") or 0
+            holder_param = request.query_params.get("holder") or ""
+            holder_id = None if holder_param in ("", "none") else _int_query_param(request, "holder")
+            types = [t.strip() for t in (request.query_params.get("types") or "").split(",") if t.strip()]
+            if any(t not in StockMovement.MovementType.values for t in types):
+                raise _InvalidParam("types")
+            if offset < 0 or (limit is not None and limit < 1):
+                raise _InvalidParam("limit")
+        except _InvalidParam:
+            return Response(_INVALID_PARAM, status=status.HTTP_400_BAD_REQUEST)
+        limit = min(limit or MOVEMENTS_DEFAULT_LIMIT, MOVEMENTS_MAX_LIMIT)
+        if article_id is not None:
             queryset = queryset.filter(article_id=article_id)
+        if holder_param == "none":
+            queryset = queryset.filter(holder__isnull=True)
+        elif holder_id is not None:
+            queryset = queryset.filter(holder_id=holder_id)
+        if types:
+            queryset = queryset.filter(movement_type__in=types)
         movement_type = request.query_params.get("movement_type")
         if movement_type:
             queryset = queryset.filter(movement_type=movement_type)
@@ -170,14 +213,22 @@ class MovementListCreateView(APIView):
             queryset = queryset.filter(movement_type__in=StockMovement.IN_TYPES)
         elif sense == "out":
             queryset = queryset.filter(movement_type__in=StockMovement.OUT_TYPES)
-        match_id = request.query_params.get("match")
-        if match_id:
+        if match_id is not None:
             queryset = queryset.filter(match_id=match_id)
-        expense_id = request.query_params.get("expense")
-        if expense_id:
+        if expense_id is not None:
             queryset = queryset.filter(expense_id=expense_id)
-        data = [ser.serialize_movement(movement, viewer=request.user) for movement in queryset[:200]]
-        return Response({"count": len(data), "results": data})
+        total = queryset.count()
+        page = queryset.order_by("-movement_date", "-created_at", "-pk")[offset : offset + limit]
+        data = [ser.serialize_movement(movement, viewer=request.user) for movement in page]
+        return Response(
+            {
+                "count": total,
+                "limit": limit,
+                "offset": offset,
+                "next_offset": offset + limit if offset + limit < total else None,
+                "results": data,
+            }
+        )
 
     def post(self, request):
         serializer = ser.MovementInputSerializer(data=request.data)
@@ -240,6 +291,17 @@ class MovementListCreateView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+class LinkableExpenseSearchView(APIView):
+    """Recherche des dépenses rattachables à un achat (10.2 n° 167) : Intendant
+    seul ; dépenses libérées du club ; ni bénéficiaire, ni motif, ni justificatif."""
+
+    permission_classes = _GATE + [CanManageMaterial]
+
+    def get(self, request):
+        results = services.linkable_expenses(club=get_active_club(), query=request.query_params.get("q") or "")
+        return Response({"count": len(results), "results": results})
 
 
 class MovementDetailView(APIView):
@@ -305,12 +367,9 @@ class MatchEquipmentReturnView(APIView):
             return Response({"detail": "Ce match n'existe pas dans ce club."}, status=status.HTTP_404_NOT_FOUND)
         serializer = ser.MatchEquipmentReturnSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        articles = {
-            a.pk: a
-            for a in Article.all_objects.filter(
-                club=get_active_club(), pk__in=[l["article_id"] for l in serializer.validated_data["lines"]]
-            )
-        }
+        articles = services.articles_by_ids(
+            club=get_active_club(), article_ids=[l["article_id"] for l in serializer.validated_data["lines"]]
+        )
         lines = []
         for line in serializer.validated_data["lines"]:
             article = articles.get(line["article_id"])
@@ -595,8 +654,11 @@ class DecommissionListCreateView(APIView):
         status_filter = request.query_params.get("status")
         if status_filter:
             queryset = queryset.filter(status=status_filter)
-        article_id = request.query_params.get("article")
-        if article_id:
+        try:
+            article_id = _int_query_param(request, "article")
+        except _InvalidParam:
+            return Response(_INVALID_PARAM, status=status.HTTP_400_BAD_REQUEST)
+        if article_id is not None:
             queryset = queryset.filter(article_id=article_id)
         data = [ser.serialize_decommission(d, viewer=request.user) for d in queryset[:200]]
         return Response(

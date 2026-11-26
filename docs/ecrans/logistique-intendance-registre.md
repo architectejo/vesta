@@ -1,6 +1,6 @@
 # Évolution — Logistique : registre de l'intendance (détenteurs, provenances, déclassement, import, registre imprimable)
 
-> **Statut : PROPOSITION soumise au client (circuit 9.4). Rien n'est à développer avant sa validation.**
+> **Statut : lots 1, 3, 4 et 5 validés par le client le 17/11/2026 (CDC 10.3 n° 181) ; positions Q15, Q16, Q18 à Q23 appliquées à titre provisoire. Lots 6, 7, 9 non engagés.**
 > Rédigée le 17/11/2026 à partir du registre d'intendance remis par le club pilote. Chaque élément absent du CDC 4.13 est marqué **[NOUVEAU]** ; ce qui découle directement du CDC ou de la fiche `logistique.md` est marqué **[CDC]**. Les numéros de décision (10.3 n° 181 et suivants) sont des propositions de numérotation, à attribuer à la validation.
 
 Sources lues :

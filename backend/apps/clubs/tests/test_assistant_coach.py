@@ -498,6 +498,9 @@ def test_migration_0012_is_reversible_on_the_test_database():
 
     previous = [("clubs", "0011_add_secretary_role")]
     latest = [("clubs", "0012_add_assistant_coach_role")]
+    # Revenir a 0011 deroule aussi les migrations dependantes des autres apps :
+    # on reapplique toutes les feuilles du graphe pour restaurer la base de test.
+    leaves = MigrationExecutor(connection).loader.graph.leaf_nodes()
     try:
         executor = MigrationExecutor(connection)
         executor.migrate(previous)
@@ -505,5 +508,5 @@ def test_migration_0012_is_reversible_on_the_test_database():
         assert latest[0] not in executor.loader.applied_migrations
     finally:
         executor = MigrationExecutor(connection)
-        executor.migrate(latest)
+        executor.migrate(leaves)
     assert latest[0] in MigrationExecutor(connection).loader.applied_migrations

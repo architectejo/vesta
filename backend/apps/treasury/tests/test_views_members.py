@@ -282,7 +282,12 @@ class TestMemberList:
         assert scenario["bruno"].pk not in good
         assert scenario["cedric"].pk not in good
         assert scenario["paul"].pk not in good
-        assert {scenario["alain"].pk, scenario["denis"].pk, ctx.president.pk, ctx.pending_member.pk} <= set(good)
+        assert {scenario["alain"].pk, scenario["denis"].pk, ctx.president.pk} <= set(good)
+        # Décision du client du 17/11/2026 (10.3 n° 100) : une adhésion non
+        # validée est « En attente », classement exclusif -- ni « En ordre »,
+        # ni « En dette » (CDC 4.3).
+        assert ctx.pending_member.pk not in good
+        assert ctx.pending_member.pk not in ids_of(in_debt)
 
     def test_filtre_statut_en_attente_et_parti(self, ctx, scenario):
         client = client_for(ctx.treasurer.user)

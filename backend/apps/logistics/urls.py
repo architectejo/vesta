@@ -26,6 +26,8 @@ urlpatterns = [
     # Registre des mouvements
     path("movements/", views.MovementListCreateView.as_view(), name="movement-list"),
     path("movements/<int:pk>/", views.MovementDetailView.as_view(), name="movement-detail"),
+    # Dépenses rattachables à un achat (10.2 n° 167)
+    path("expenses/linkable/", views.LinkableExpenseSearchView.as_view(), name="linkable-expenses"),
     # Équipements d'un match (câblage attendu par sport-feuille-de-match.md §4.5)
     path("matches/<int:match_id>/equipment/", views.MatchEquipmentView.as_view(), name="match-equipment"),
     path("matches/<int:match_id>/equipment/out/", views.MatchEquipmentOutView.as_view(), name="match-equipment-out"),

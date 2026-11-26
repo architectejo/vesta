@@ -391,6 +391,9 @@ def test_performance_migration_is_reversible_on_the_test_database():
 
     latest = [("sport", "0004_performance_tests")]
     previous = [("sport", "0003_match_result_post")]
+    # Reappliquer toutes les feuilles du graphe : le retour arriere deroule
+    # aussi les migrations dependantes des autres apps.
+    leaves = MigrationExecutor(connection).loader.graph.leaf_nodes()
     try:
         executor = MigrationExecutor(connection)
         executor.migrate(previous)
@@ -399,7 +402,7 @@ def test_performance_migration_is_reversible_on_the_test_database():
         assert "sport_performancetest" not in connection.introspection.table_names()
     finally:
         executor = MigrationExecutor(connection)
-        executor.migrate(latest)
+        executor.migrate(leaves)
     assert latest[0] in MigrationExecutor(connection).loader.applied_migrations
     assert "sport_performancetest" in connection.introspection.table_names()
 
@@ -411,12 +414,13 @@ def test_notification_event_migration_is_reversible_on_the_test_database():
 
     latest = [("notifications", "0008_performance_results_event")]
     previous = [("notifications", "0007_i_paid_rejected_event")]
+    leaves = MigrationExecutor(connection).loader.graph.leaf_nodes()
     try:
         executor = MigrationExecutor(connection)
         executor.migrate(previous)
         assert latest[0] not in MigrationExecutor(connection).loader.applied_migrations
     finally:
-        MigrationExecutor(connection).migrate(latest)
+        MigrationExecutor(connection).migrate(leaves)
     assert latest[0] in MigrationExecutor(connection).loader.applied_migrations
 
 
