@@ -33,7 +33,7 @@ function PostBody({ text, expanded }: { text: string; expanded: boolean }) {
     >
       {parts.map((part, i) =>
         /^https?:\/\//.test(part) ? (
-          <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-primary-text underline">
+          <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="-my-2 py-2 text-primary-text underline">
             {part}
           </a>
         ) : (
@@ -149,7 +149,7 @@ export function PostCard({ post, onOpen, onChanged }: { post: Post; onOpen: () =
         <div className="mt-2">
           <PostBody text={post.body} expanded={expanded || !isLong} />
           {isLong && !expanded ? (
-            <button type="button" className="mt-1 text-xs font-medium text-primary-text hover:underline" onClick={() => setExpanded(true)}>
+            <button type="button" className="inline-flex min-h-control-sm items-center text-xs font-medium text-primary-text hover:underline" onClick={() => setExpanded(true)}>
               Lire la suite
             </button>
           ) : null}
@@ -189,7 +189,7 @@ export function PostCard({ post, onOpen, onChanged }: { post: Post; onOpen: () =
             </div>
           ))}
           {post.comment_count > 2 ? (
-            <button type="button" onClick={onOpen} className="text-xs font-medium text-primary-text hover:underline">
+            <button type="button" onClick={onOpen} className="inline-flex min-h-control-sm items-center text-xs font-medium text-primary-text hover:underline">
               Voir les {post.comment_count} commentaires
             </button>
           ) : null}

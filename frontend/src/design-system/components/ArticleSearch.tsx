@@ -157,7 +157,7 @@ export function ArticleSearch({
           type="button"
           disabled={disabled}
           onClick={() => onChange(null)}
-          className="shrink-0 text-xs font-medium text-primary-text hover:underline disabled:opacity-60"
+          className="inline-flex min-h-control-sm items-center shrink-0 text-xs font-medium text-primary-text hover:underline disabled:opacity-60"
         >
           Changer
         </button>

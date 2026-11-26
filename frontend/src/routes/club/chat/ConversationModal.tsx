@@ -130,7 +130,7 @@ export function ConversationModal({ channel, onClose }: { channel: ChatChannel; 
               {messagesQuery.data && messagesQuery.data.next_offset !== null ? (
                 <button
                   type="button"
-                  className="mx-auto block text-xs font-medium text-primary-text hover:underline"
+                  className="mx-auto flex min-h-control-sm w-fit items-center text-xs font-medium text-primary-text hover:underline"
                   onClick={() => setLimit((n) => n + PAGE_SIZE)}
                 >
                   Messages précédents
@@ -170,7 +170,7 @@ export function ConversationModal({ channel, onClose }: { channel: ChatChannel; 
           <div ref={bottomRef} />
         </div>
 
-        <div className="sticky bottom-0 -mx-4 -mb-4 mt-2 space-y-2 border-t border-border bg-surface px-4 py-3">
+        <div className="sticky -bottom-4 z-20 -mx-4 -mb-4 mt-2 space-y-2 border-t border-border bg-surface px-4 py-3">
           {sendError ? <p className="text-xs text-status-danger-fg">{sendError}</p> : null}
           <ImagePickerField images={image} onChange={setImage} max={1} maxLabel="1 image au maximum." addLabel="Ajouter une image" />
           <div className="flex items-end gap-2">

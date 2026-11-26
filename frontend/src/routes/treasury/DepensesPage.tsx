@@ -349,7 +349,7 @@ export function DepensesPage() {
         >
           <span>{summaryQuery.data.reason}</span>
           {blockingId ? (
-            <button type="button" className="font-medium underline" onClick={() => setDetailExpenseId(blockingId)}>
+            <button type="button" className="-my-2 py-2 font-medium underline" onClick={() => setDetailExpenseId(blockingId)}>
               Voir la dépense
             </button>
           ) : null}

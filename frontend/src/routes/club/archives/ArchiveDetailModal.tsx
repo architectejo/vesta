@@ -197,7 +197,7 @@ export function ArchiveDetailModal({
             {isImage ? (
               <button
                 type="button"
-                className="text-[13px] text-primary-text hover:underline"
+                className="inline-flex min-h-control-sm items-center text-[13px] text-primary-text hover:underline"
                 onClick={() => setPreviewKey((k) => k + 1)}
               >
                 Recharger l'aperçu

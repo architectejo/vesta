@@ -429,7 +429,7 @@ export function ComiteBureauPage() {
                   <button
                     type="button"
                     onClick={() => setRevokingRecruiter(r)}
-                    className="text-xs font-medium text-status-danger-fg hover:underline"
+                    className="inline-flex min-h-control-sm items-center text-xs font-medium text-status-danger-fg hover:underline"
                   >
                     Retirer
                   </button>

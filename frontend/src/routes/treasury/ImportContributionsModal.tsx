@@ -588,7 +588,7 @@ export function ImportContributionsModal({
                 <span>
                   {file.name} · {formatFileSize(file)}
                 </span>
-                <label className="cursor-pointer font-medium text-primary-text hover:underline">
+                <label className="inline-flex min-h-control-sm items-center cursor-pointer font-medium text-primary-text hover:underline">
                   Changer
                   <input
                     type="file"
@@ -626,7 +626,7 @@ export function ImportContributionsModal({
             <button
               type="button"
               onClick={downloadCsvTemplate}
-              className="mt-2 text-sm font-medium text-primary-text hover:underline"
+              className="inline-flex min-h-control-sm items-center mt-1 text-sm font-medium text-primary-text hover:underline"
             >
               Télécharger un modèle vide
             </button>

@@ -92,7 +92,7 @@ export function BoardDashboardPage() {
           />
         )}
         <p>
-          <Link to="/" className="text-sm font-medium text-primary-text hover:underline">
+          <Link to="/" className="inline-flex min-h-control-sm items-center text-sm font-medium text-primary-text hover:underline">
             Retour à l'accueil
           </Link>
         </p>
@@ -125,7 +125,7 @@ export function BoardDashboardPage() {
         <h1 className="text-xl font-semibold text-text">Tableau de bord du club</h1>
         <p className="text-sm text-text-muted">
           {context} ·{" "}
-          <Link to="/" className="font-medium text-primary-text hover:underline">
+          <Link to="/" className="-my-2 py-2 font-medium text-primary-text hover:underline">
             Voir l'accueil
           </Link>
         </p>

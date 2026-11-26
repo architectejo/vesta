@@ -115,7 +115,7 @@ export function PlansLibrary() {
                   setLimit(5);
                 }}
                 className={[
-                  "h-8 rounded-full border px-3 text-xs font-medium",
+                  "h-control-sm rounded-full border px-3 text-xs font-medium",
                   filter === value ? "border-primary bg-primary text-on-primary" : "border-border-strong bg-surface text-text",
                 ].join(" ")}
               >

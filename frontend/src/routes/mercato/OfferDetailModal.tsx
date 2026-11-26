@@ -268,7 +268,7 @@ export function OfferDetailModal({
               {onOpenPublicPlayer ? (
                 <button
                   type="button"
-                  className="ml-auto shrink-0 text-xs font-medium text-primary-text hover:underline"
+                  className="inline-flex min-h-control-sm items-center ml-auto shrink-0 text-xs font-medium text-primary-text hover:underline"
                   onClick={() => onOpenPublicPlayer(offer.player.membership_id)}
                 >
                   Voir la fiche publique

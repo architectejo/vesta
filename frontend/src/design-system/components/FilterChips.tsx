@@ -1,6 +1,8 @@
 /**
  * Puces de filtre sur une ligne qui défile horizontalement (spec B4 §1.1,
  * §4), « Toutes » en premier. Même rendu que les puces de `CountModal`.
+ * Remontée de `routes/logistics` dans le design system en B7 : c'est la
+ * source commune des puces de filtre, à 36 px de haut (`h-control-sm`).
  */
 export interface FilterChipsProps<T extends string> {
   label: string;

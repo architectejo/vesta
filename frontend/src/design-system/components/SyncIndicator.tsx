@@ -62,14 +62,14 @@ export function SyncIndicator({
       >
         <span aria-hidden="true" className={["h-1.5 w-1.5 shrink-0 rounded-full", dotClass].join(" ")} />
         {canOpenDetails ? (
-          <button type="button" className="font-medium text-text hover:underline" onClick={() => setDetailsOpen(true)}>
+          <button type="button" className="-my-2 py-2 font-medium text-text hover:underline" onClick={() => setDetailsOpen(true)}>
             {label}
           </button>
         ) : (
           <span>{label}</span>
         )}
         {isOnline && pendingCount > 0 && onRetry ? (
-          <button type="button" onClick={onRetry} className="font-medium text-primary-text hover:underline">
+          <button type="button" onClick={onRetry} className="-my-2 py-2 font-medium text-primary-text hover:underline">
             Réessayer
           </button>
         ) : null}

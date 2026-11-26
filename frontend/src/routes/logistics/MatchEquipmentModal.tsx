@@ -194,7 +194,7 @@ export function MatchEquipmentModal({
                     <button
                       type="button"
                       onClick={() => setHolderPickers((current) => ({ ...current, [line.article_id]: true }))}
-                      className="font-medium text-primary-text hover:underline"
+                      className="-my-2 py-2 font-medium text-primary-text hover:underline"
                     >
                       Changer
                     </button>

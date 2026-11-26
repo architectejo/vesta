@@ -106,7 +106,7 @@ export function ConsigneModal({ open, planId, placements, existing, initialPoint
         footer={
           <div className="flex w-full items-center justify-between gap-2">
             {existing ? (
-              <button type="button" onClick={() => setConfirmDelete(true)} className="text-sm text-status-danger-fg hover:underline">
+              <button type="button" onClick={() => setConfirmDelete(true)} className="inline-flex min-h-control-sm items-center text-sm text-status-danger-fg hover:underline">
                 Supprimer la consigne
               </button>
             ) : (

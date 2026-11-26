@@ -37,7 +37,7 @@ function UnjustifiedExpenseBanner({ canRead }: { canRead: boolean }) {
         firstBlockingId !== undefined ? (
           <button
             type="button"
-            className="shrink-0 font-medium underline"
+            className="-my-2 shrink-0 py-2 font-medium underline"
             onClick={() => navigate(`/tresorerie/depenses?depense=${firstBlockingId}`)}
           >
             Voir la dépense

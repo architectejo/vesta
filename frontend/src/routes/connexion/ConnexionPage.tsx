@@ -188,7 +188,7 @@ export function ConnexionPage() {
             <button
               type="button"
               onClick={() => setForgotOpen(true)}
-              className="text-sm font-medium text-primary-text hover:underline"
+              className="inline-flex min-h-control-sm items-center text-sm font-medium text-primary-text hover:underline"
             >
               Mot de passe oublié ?
             </button>

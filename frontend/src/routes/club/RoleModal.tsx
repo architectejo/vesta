@@ -205,7 +205,7 @@ export function RoleModal({
             <button
               type="button"
               onClick={() => setConfirmOpen(true)}
-              className="text-sm font-medium text-status-danger-fg hover:underline"
+              className="inline-flex min-h-control-sm items-center text-sm font-medium text-status-danger-fg hover:underline"
             >
               Révoquer {holderName}
             </button>

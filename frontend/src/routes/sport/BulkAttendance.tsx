@@ -130,9 +130,9 @@ export function BulkActionBar({
 
 function PlayersFold({ players }: { players: BulkPlayer[] }) {
   return (
-    <details className="mt-2 text-sm">
-      <summary className="cursor-pointer text-primary-text">Voir les joueurs</summary>
-      <ol className="mt-1 max-h-40 list-decimal space-y-0.5 overflow-y-auto pl-6 text-text">
+    <details className="text-sm">
+      <summary className="min-h-control-sm cursor-pointer py-2 text-primary-text">Voir les joueurs</summary>
+      <ol className="max-h-40 list-decimal space-y-0.5 overflow-y-auto pl-6 text-text">
         {players.map((p) => (
           <li key={p.id}>{p.name}</li>
         ))}

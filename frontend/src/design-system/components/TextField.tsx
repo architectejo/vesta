@@ -99,7 +99,7 @@ export function PasswordField(props: PasswordFieldProps) {
         <button
           type="button"
           onClick={() => setVisible((v) => !v)}
-          className="text-xs font-medium text-primary-text hover:underline"
+          className="inline-flex min-h-control-sm items-center text-xs font-medium text-primary-text hover:underline"
         >
           {visible ? "Masquer" : "Afficher"}
         </button>

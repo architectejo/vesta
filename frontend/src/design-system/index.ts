@@ -15,6 +15,7 @@ export * from "./components/ClubSearch";
 export * from "./components/ConfirmDialog";
 export * from "./components/DataTable";
 export * from "./components/EmptyState";
+export * from "./components/FilterChips";
 export * from "./components/Footer";
 export * from "./components/IconButton";
 export * from "./components/Loader";

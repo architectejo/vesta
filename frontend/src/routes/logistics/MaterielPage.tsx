@@ -36,6 +36,7 @@ import {
   IconPin,
   Loader,
   StatusBadge,
+  FilterChips,
   useToast,
   type DataTableColumn,
   type FilterChip,
@@ -47,7 +48,6 @@ import { DecommissionDetailModal } from "./DecommissionDetailModal";
 import { DecommissionFlagModal } from "./DecommissionFlagModal";
 import { DecommissionRows } from "./DecommissionList";
 import { DecommissionListModal } from "./DecommissionListModal";
-import { FilterChips } from "./FilterChips";
 import { formatDateFr } from "./format";
 import { HolderDetailModal } from "./HolderDetailModal";
 import { HolderFormModal } from "./HolderFormModal";
@@ -368,7 +368,7 @@ export function MaterielPage() {
           </p>
           <button
             type="button"
-            className="text-sm font-medium text-primary-text hover:underline"
+            className="inline-flex min-h-control-sm items-center text-sm font-medium text-primary-text hover:underline"
             onClick={() => setInventoryDetailId(overview.open_inventory!.id)}
           >
             Voir tout l'inventaire

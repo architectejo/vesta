@@ -258,7 +258,7 @@ export function DecommissionDetailModal({
                   <button
                     type="button"
                     onClick={() => setMovementId(decommission.exit_movement_id)}
-                    className="mt-1 font-medium text-primary-text hover:underline"
+                    className="inline-flex min-h-control-sm items-center font-medium text-primary-text hover:underline"
                   >
                     Voir le mouvement
                   </button>

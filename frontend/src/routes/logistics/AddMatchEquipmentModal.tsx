@@ -159,7 +159,7 @@ export function AddMatchEquipmentModal({
                     <button
                       type="button"
                       onClick={() => updateLine(line.key, { pickerOpen: true })}
-                      className="font-medium text-primary-text hover:underline"
+                      className="-my-2 py-2 font-medium text-primary-text hover:underline"
                     >
                       Changer
                     </button>

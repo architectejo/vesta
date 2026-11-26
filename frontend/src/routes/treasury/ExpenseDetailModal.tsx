@@ -285,7 +285,7 @@ export function ExpenseDetailModal({ expenseId, capabilities, onClose, onChanged
                   </span>
                   <button
                     type="button"
-                    className="shrink-0 font-medium text-primary-text hover:underline"
+                    className="inline-flex min-h-control-sm items-center shrink-0 font-medium text-primary-text hover:underline"
                     onClick={() => {
                       onClose();
                       navigate(`/materiel?mouvement=${movement.id}`);

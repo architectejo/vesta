@@ -206,7 +206,7 @@ export function PostDetailModal({
                 type="button"
                 aria-pressed={post.is_liked_by_me}
                 onClick={() => likeMutation.mutate()}
-                className={["flex items-center gap-1 text-sm", post.is_liked_by_me ? "text-primary-text" : "text-text-muted"].join(" ")}
+                className={["flex min-h-control-sm items-center gap-1 text-sm", post.is_liked_by_me ? "text-primary-text" : "text-text-muted"].join(" ")}
               >
                 J'aime{post.like_count > 0 ? ` · ${post.like_count}` : ""}
               </button>
@@ -222,7 +222,7 @@ export function PostDetailModal({
                   {commentsQuery.data.next_offset !== null ? (
                     <button
                       type="button"
-                      className="text-xs font-medium text-primary-text hover:underline"
+                      className="inline-flex min-h-control-sm items-center text-xs font-medium text-primary-text hover:underline"
                       onClick={() => setCommentLimit((n) => n + COMMENT_PAGE_SIZE)}
                     >
                       Commentaires précédents
@@ -251,7 +251,7 @@ export function PostDetailModal({
             </div>
           </div>
 
-          <div className="sticky bottom-0 -mx-4 -mb-4 mt-3 flex items-end gap-2 border-t border-border bg-surface px-4 py-3">
+          <div className="sticky -bottom-4 z-[5] -mx-4 -mb-4 mt-3 flex items-end gap-2 border-t border-border bg-surface px-4 py-3">
             <div className="flex-1">
               <TextArea
                 label="Écrire un commentaire…"

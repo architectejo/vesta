@@ -947,7 +947,7 @@ export function MatchPage() {
               <li key={goal.id}>
                 <button
                   type="button"
-                  className="text-left text-sm text-text hover:underline"
+                  className="inline-flex min-h-control-sm items-center text-left text-sm text-text hover:underline"
                   onClick={() => setGoalModal({ open: true, goal })}
                 >
                   {goal.minute != null ? `${goal.minute}' ` : ""}

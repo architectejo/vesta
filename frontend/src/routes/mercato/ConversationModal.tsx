@@ -86,7 +86,7 @@ export function ConversationModal({ thread, viewerClubId, onClose, onOpenOffer }
           <button
             type="button"
             onClick={() => onOpenOffer(thread.transfer_offer_id as number)}
-            className="mb-3 inline-flex w-fit rounded-full bg-surface-muted px-2 py-1 text-xs text-text-muted hover:underline"
+            className="relative mb-3 inline-flex w-fit rounded-full bg-surface-muted px-2 py-1 text-xs text-text-muted hover:underline before:absolute before:inset-x-0 before:-inset-y-2 before:content-['']"
           >
             Offre · voir le détail
           </button>
@@ -125,7 +125,7 @@ export function ConversationModal({ thread, viewerClubId, onClose, onOpenOffer }
                   ) : (
                     <p className="text-xs text-status-danger-fg">
                       Non envoyé.{" "}
-                      <button type="button" className="underline" onClick={() => void handleRetry(message)}>
+                      <button type="button" className="-my-2 py-2 underline" onClick={() => void handleRetry(message)}>
                         Réessayer
                       </button>
                     </p>

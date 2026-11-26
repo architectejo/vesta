@@ -78,7 +78,7 @@ function Boundary<T>({ query, children }: { query: UseQueryResult<T>; children: 
 function ModuleLink({ to, children }: { to: string; children: string }) {
   return (
     <p className="pt-2">
-      <Link to={to} className="text-sm font-medium text-primary-text hover:underline">
+      <Link to={to} className="inline-flex min-h-control-sm items-center text-sm font-medium text-primary-text hover:underline">
         {children}
       </Link>
     </p>

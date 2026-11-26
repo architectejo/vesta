@@ -82,7 +82,7 @@ export function QuorumThresholdModal({ onClose }: { onClose: () => void }) {
         {currentPercentage !== null && currentPercentage !== DEFAULT_PERCENTAGE ? (
           <button
             type="button"
-            className="text-xs font-medium text-primary-text hover:underline"
+            className="inline-flex min-h-control-sm items-center text-xs font-medium text-primary-text hover:underline"
             onClick={() => {
               setValue(String(DEFAULT_PERCENTAGE));
               setTouched(true);

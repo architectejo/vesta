@@ -217,7 +217,7 @@ export function DataTable<T>({
             <button
               type="button"
               onClick={onClearFilters}
-              className="text-xs font-medium text-primary-text hover:underline"
+              className="inline-flex min-h-control-sm items-center text-xs font-medium text-primary-text hover:underline"
             >
               Effacer les filtres
             </button>

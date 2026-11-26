@@ -506,7 +506,7 @@ function LockerRoomToday() {
         {refreshFailed ? (
           <p role="status" className="flex flex-wrap items-center gap-2 text-xs text-status-warning-fg">
             Mise à jour impossible · {new Date(query.errorUpdatedAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
-            <button type="button" className="font-medium text-primary-text hover:underline" onClick={() => void query.refetch()}>
+            <button type="button" className="-my-2 py-2 font-medium text-primary-text hover:underline" onClick={() => void query.refetch()}>
               Réessayer
             </button>
           </p>
@@ -531,7 +531,7 @@ function LockerRoomToday() {
 
       <RendezVousCard session={activeSession} match={activeMatch} />
       {activeSession?.instructions ? (
-        <button type="button" className="text-xs font-medium text-primary-text hover:underline" onClick={() => setConsignesOpen(true)}>
+        <button type="button" className="inline-flex min-h-control-sm items-center text-xs font-medium text-primary-text hover:underline" onClick={() => setConsignesOpen(true)}>
           Voir les consignes
         </button>
       ) : null}

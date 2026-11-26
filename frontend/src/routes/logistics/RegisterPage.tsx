@@ -22,6 +22,7 @@ import {
   IconMore,
   Loader,
   Skeleton,
+  FilterChips,
   useToast,
   type DataTableColumn,
 } from "../../design-system";
@@ -29,7 +30,6 @@ import { useClosingState } from "../../hooks/useClosingState";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { DecommissionDetailModal } from "./DecommissionDetailModal";
-import { FilterChips } from "./FilterChips";
 import { formatDateFr } from "./format";
 import { HolderSearch, type HolderSelection } from "./HolderSearch";
 import { getMaterialAccess } from "./materielAccess";
@@ -208,7 +208,7 @@ export function RegisterPage() {
   return (
     <div className="space-y-4">
       <header className="space-y-2">
-        <Link to="/materiel" className="inline-flex items-center gap-1 text-sm font-medium text-primary-text hover:underline">
+        <Link to="/materiel" className="inline-flex min-h-control-sm items-center gap-1 text-sm font-medium text-primary-text hover:underline">
           <IconChevronLeft aria-hidden="true" className="h-4 w-4" />
           Matériel
         </Link>

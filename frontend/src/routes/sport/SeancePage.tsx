@@ -257,7 +257,7 @@ function PointageTab({
             onClick={() => setFilter(chip.value)}
             aria-pressed={filter === chip.value}
             className={[
-              "h-8 rounded-full border px-3 text-xs font-medium",
+              "h-control-sm rounded-full border px-3 text-xs font-medium",
               filter === chip.value
                 ? "border-primary bg-primary text-on-primary"
                 : "border-border-strong bg-surface text-text",
@@ -941,7 +941,7 @@ export function SeancePage() {
           />
         ) : null}
         {session.instructions ? (
-          <button type="button" className="text-xs font-medium text-primary-text hover:underline" onClick={() => setInstructionsOpen(true)}>
+          <button type="button" className="inline-flex min-h-control-sm items-center text-xs font-medium text-primary-text hover:underline" onClick={() => setInstructionsOpen(true)}>
             Voir les consignes
           </button>
         ) : null}

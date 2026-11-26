@@ -227,7 +227,7 @@ export function MembersSection({ onOpen }: MembersSectionProps) {
             );
           })}
           {hasFilter ? (
-            <button type="button" onClick={clearFilters} className="text-xs font-medium text-primary-text hover:underline">
+            <button type="button" onClick={clearFilters} className="inline-flex min-h-control-sm items-center text-xs font-medium text-primary-text hover:underline">
               Effacer les filtres
             </button>
           ) : null}

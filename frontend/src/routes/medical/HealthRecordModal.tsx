@@ -150,7 +150,7 @@ export function HealthRecordModal({ open, membershipId, onClose, onChanged }: He
                         {record.emergency_contact_phone ? (
                           <>
                             {" · "}
-                            <a href={`tel:${record.emergency_contact_phone}`} className="text-primary-text hover:underline">
+                            <a href={`tel:${record.emergency_contact_phone}`} className="-my-2 py-2 text-primary-text hover:underline">
                               {record.emergency_contact_phone}
                             </a>
                           </>

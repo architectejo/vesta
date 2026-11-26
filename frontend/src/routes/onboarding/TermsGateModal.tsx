@@ -90,7 +90,7 @@ export function TermsGateModal({
               <button
                 type="button"
                 onClick={() => setShowText(true)}
-                className="font-medium text-primary-text hover:underline"
+                className="-my-2 py-2 font-medium text-primary-text hover:underline"
               >
                 Lire les conditions générales
               </button>

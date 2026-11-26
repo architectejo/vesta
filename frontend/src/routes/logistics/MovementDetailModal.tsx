@@ -143,7 +143,7 @@ export function MovementDetailModal({
             <button
               type="button"
               onClick={() => onOpenDecommission(movement.decommission_id as number)}
-              className="block text-sm font-medium text-primary-text hover:underline"
+              className="flex min-h-control-sm items-center text-sm font-medium text-primary-text hover:underline"
             >
               Voir le déclassement
             </button>
@@ -156,7 +156,7 @@ export function MovementDetailModal({
                 onClose();
                 onOpenMatch?.(movement.match_id as number);
               }}
-              className="text-sm font-medium text-primary-text hover:underline"
+              className="inline-flex min-h-control-sm items-center text-sm font-medium text-primary-text hover:underline"
             >
               Voir le match
             </button>
@@ -178,7 +178,7 @@ export function MovementDetailModal({
                         onClose();
                         onOpenExpense?.(movement.expense_id as number);
                       }}
-                      className="mt-1 font-medium text-primary-text hover:underline"
+                      className="inline-flex min-h-control-sm items-center font-medium text-primary-text hover:underline"
                     >
                       Voir la dépense
                     </button>

@@ -430,7 +430,7 @@ export function RecordMovementModal({ open, lockedArticle, level = 1, onClose, o
               <button
                 type="button"
                 onClick={() => setProvenanceExpanded(true)}
-                className="font-medium text-primary-text hover:underline"
+                className="-my-2 py-2 font-medium text-primary-text hover:underline"
               >
                 Modifier
               </button>

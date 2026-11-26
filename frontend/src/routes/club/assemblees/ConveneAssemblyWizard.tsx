@@ -244,7 +244,7 @@ export function ConveneAssemblyWizard({
         </div>
       ) : null}
 
-      <div className="sticky bottom-0 -mx-4 -mb-4 mt-6 flex items-center justify-between gap-2 border-t border-border bg-surface px-4 py-3">
+      <div className="sticky -bottom-4 z-20 -mx-4 -mb-4 mt-6 flex items-center justify-between gap-2 border-t border-border bg-surface px-4 py-3">
         <Button variant="secondary" onClick={onClose} disabled={submitting}>
           Annuler
         </Button>

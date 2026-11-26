@@ -502,7 +502,7 @@ export function TableauNoirPage() {
             aria-pressed={benchPositionFilter === value}
             onClick={() => setBenchPositionFilter(value)}
             className={[
-              "h-8 rounded-full border px-3 text-xs font-medium",
+              "h-control-sm rounded-full border px-3 text-xs font-medium",
               benchPositionFilter === value ? "border-primary bg-primary text-on-primary" : "border-border-strong bg-surface text-text",
             ].join(" ")}
           >
@@ -585,7 +585,7 @@ export function TableauNoirPage() {
           .filter((a) => a.annotation_type !== "note")
           .map((a) => (
             <li key={a.id}>
-              <button type="button" className="text-sm text-status-danger-fg hover:underline" onClick={() => void eraseAnnotation(a)}>
+              <button type="button" className="inline-flex min-h-control-sm items-center text-sm text-status-danger-fg hover:underline" onClick={() => void eraseAnnotation(a)}>
                 Effacer {a.annotation_type === "arrow" ? "la flèche" : "la zone"} n° {a.id}
               </button>
             </li>
@@ -610,7 +610,7 @@ export function TableauNoirPage() {
             <li key={note.id}>
               <button
                 type="button"
-                className="text-left text-sm text-text hover:underline"
+                className="inline-flex min-h-control-sm items-center text-left text-sm text-text hover:underline"
                 onClick={() => setConsigneModal({ open: true, existing: note })}
               >
                 {note.target_line ? `${note.target_line} : ` : note.target_membership_id ? "Joueur : " : ""}
