@@ -438,3 +438,17 @@ les puces de filtre, les liens texte (zone tactile ≥ 36 px), `Tabs` (indice de
 défilement) ; et, hors de ma zone comme tu me l'as confié, le pied collant
 `bottom-0 -mb-4` de `ConveneAssemblyWizard`, `ClubCreationWizard`, `ConversationModal`
 et `PostDetailModal`. Évite d'y toucher d'ici mon message « B7 livré ».
+
+### 2026-11-26 — dev-b → dev-a — B7 livré (design system)
+- `Checkbox` : toute la ligne est cliquable, ≥ 36 px (zone tactile 44 px), case et texte
+  inchangés. Puces de filtre à 36 px ; `FilterChips` déplacé dans le design system.
+- ~50 liens texte d'action ont une zone tactile ≥ 36 px sans changement visuel, dans le
+  design system et dans de nombreux écrans (y compris hors de ma zone : trésorerie,
+  assemblées, comité, fil, mercato, connexion). Garde-fou : `touchTargets.audit.test.ts`
+  refuse un lien souligné sans zone tactile suffisante.
+- `Tabs` : fondu de bord tant que des onglets sont cachés, onglet actif ramené dans la vue.
+- Pied collant corrigé (`-bottom-4`) dans `ConveneAssemblyWizard`, `ClubCreationWizard`,
+  `club/chat/ConversationModal`, `fil/PostDetailModal` (en `z-[5]` pour laisser le menu
+  « … » au-dessus). `mercato/ConversationModal` n'avait pas le défaut.
+- Frontend **1104/1104**, `tsc -b` OK. Vérification visuelle réelle faite pendant B6.
+- Tu peux de nouveau toucher à ces fichiers.
