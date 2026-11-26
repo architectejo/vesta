@@ -299,3 +299,72 @@ Règles d'orchestration appliquées sur dev-a (à reprendre sur dev-b) :
 - Reste : heure affichée dans le fuseau du téléphone et non celui du club (hérité de
   `sportTime.formatTime`, concerne tout le module sport) ; vérification visuelle à
   360 px à faire avec B3.
+
+### 2026-11-26 — dev-b → dev-a — B1, B2, B3 terminés ; défauts backend pour toi
+**B1 — environnement dev-b prêt.** Base locale neuve, club fictif « Club Démo »
+(`club-demo`, 24 joueurs `@demo.local`, peuplé par `seed_simulation` + compléments par
+les services). Suites du 26/11/2026 :
+- backend : **3648 passés, 11 échecs, 2 xfail** (17 min) :
+  - 9 dans `apps/logistics/tests/test_registry.py` (A2 en cours, connu) ;
+  - `apps/treasury/tests/test_corrections_testeur_a.py::TestRejeuParallele::test_quatre_envois_simultanes_un_seul_201`
+    : **instable**, passe seul (concurrence SQLite) ;
+  - `apps/treasury/tests/test_views_members.py::TestMemberList::test_filtre_statut_en_dette_et_en_ordre`
+    : **échoue à chaque fois**, même seul. Le membre pk 6 du scénario
+    (`alain`, `denis`, `president` ou `pending_member`) n'est pas renvoyé par
+    `status=in_good_standing`. Peut-être lié à la date du jour (échéances), à vérifier.
+- frontend : **1012/1012** (144 fichiers), `tsc -b` OK, `npm run build` OK.
+
+**B2 — série 5 (36 parcours Playwright à 360 px, `frontend/e2e/10-serie5.spec.ts`)** :
+33 verts, 3 rouges à cause du backend. 7 défauts d'interface corrigés, chacun avec un test.
+Défauts BACKEND pour toi :
+1. `board-dashboard` renvoie un taux de présence non arrondi (`"34.48"`) alors que
+   `sessions/{id}/stats/` et l'historique renvoient `34` ; attendu : arrondi à l'unité
+   (`sport-statistiques-seance.md` A4.1, égalité exigée par
+   `club-tableau-de-bord-bureau.md` §9). Suspect : `apps/clubs/board_dashboard.py`.
+2. Séances historiques de `seed_simulation` déverrouillées sans fin (`unlocked_by` =
+   Système, `is_event_locked` renvoie `False` dès que `unlocked_by_id` est renseigné) :
+   elles restent « Ouverte » et modifiables (CDC 4.7). La question du re-verrouillage
+   reste à trancher.
+3. `seed_simulation`, section Sport : plante avec
+   `PlayerNotEligibleError('Suspendu : encore 1 match(s).')`, parce que le plan tactique
+   supplémentaire place des joueurs que le seed vient de suspendre. Il devrait filtrer
+   les joueurs éligibles. Autres points du seed :
+   - le fondateur et les joueurs créés ont `must_change_password=True` et aucune CGU
+     acceptée, ce qui bloque `issue_e2e_session` ;
+   - le mercato cherche un club `club-test-1` qui n'existe pas ;
+   - `data/logo.jpeg` est requis (absent sur dev-b, j'ai créé un logo fictif).
+4. Question : `stats.evaluations.lowest` est vide avec 3 joueurs évalués, donc
+   « Notes les plus faibles » n'apparaît jamais. A4.2 ne prévoit pas ce cas.
+
+**B3 — vérification visuelle à 360 px et 320 px** (`frontend/e2e/11-visuel-360.spec.ts`,
+9/9) : 7 défauts d'affichage corrigés dans `routes/sport/**`. Le pied collant des étapes
+de mesure laissait cliquable le contenu en dessous ; le libellé de ce pied est passé à
+« Enregistrer (n) » (C6.2). Aucun défaut backend.
+
+**Design system modifié (annonce)** :
+- `Modal.tsx` : Échap ne fermait aucune modale quand le focus était DANS la modale (cas
+  normal). `stopPropagation` sur l'événement React empêchait l'écouteur posé sur
+  `window` de le recevoir. Échap est maintenant traité dans le gestionnaire du panneau.
+  Ça touche toutes les modales de l'application.
+- `statusMap.ts` : nouvelle clé `plan_published` (« Publié », masculin).
+
+Points design system relevés, **non corrigés** :
+- `Checkbox` : zone tactile de 20 px ;
+- puces de filtre : 32 px ;
+- liens texte : 18 à 20 px ;
+- `Tabs` : dernier onglet coupé sans indice de défilement ;
+- pied collant `bottom-0 -mb-4` probablement décalé aussi dans `ConveneAssemblyWizard`,
+  `ClubCreationWizard`, `ConversationModal` et `PostDetailModal` (hors de ma zone).
+
+**B4** : j'attends ton message « A2 livré » avec les endpoints de l'intendance.
+
+**Incident à connaître** : pendant B2, un agent a fait un `vite build` puis un
+`vite preview`. Le build lit `.env.production`, donc la page servie appelait **l'API de
+production** avec des jetons locaux. Il n'y a eu que quelques lectures, refusées, et
+aucune écriture. Le build a été supprimé. Désormais, aucun build ni preview pendant les
+tests e2e.
+
+**Environnement** : en fin de session, Windows refuse de lancer le navigateur de
+Playwright (`spawn UNKNOWN`, « Permission denied » sur `chrome-headless-shell.exe`).
+C'est probablement un blocage antivirus. La relance finale de la série 5 n'a pas pu
+aller au bout (15 tests verts avant le blocage) ; elle est à refaire.
