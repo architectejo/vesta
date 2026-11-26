@@ -144,7 +144,10 @@ def build_register(
             continue
         if not matches_search(article.name, _donor_name(movement)):
             continue
-        condition = movement.condition_at_entry or article.reference_condition
+        # État à l'entrée, sinon état de référence de l'article (registre §8.2).
+        condition = movement.condition_at_entry
+        if not condition or condition == Article.Condition.UNKNOWN:
+            condition = article.reference_condition
         section = sections.setdefault(
             article.category,
             {"category": article.category, "category_display": article.get_category_display(), "lines": [], "_articles": {}},

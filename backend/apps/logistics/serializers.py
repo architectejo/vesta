@@ -87,6 +87,11 @@ class ProvenanceInputSerializer(serializers.Serializer):
 _MANUAL_TYPE_CHOICES = [c for c in StockMovement.MovementType.choices if c[0] in StockMovement.MANUAL_TYPES]
 
 
+# Bornes de taille des saisies libres (audit sécurité A2).
+TEXT_MAX_LENGTH = 500
+MAX_EQUIPMENT_LINES = 50
+
+
 class MovementInputSerializer(serializers.Serializer):
     movement_type = serializers.ChoiceField(choices=_MANUAL_TYPE_CHOICES)
     article_id = serializers.IntegerField()
@@ -94,7 +99,13 @@ class MovementInputSerializer(serializers.Serializer):
     provenance = ProvenanceInputSerializer(required=False, allow_null=True)
     quantity = serializers.IntegerField(min_value=1)
     movement_date = serializers.DateField()
-    reason = serializers.CharField(required=False, allow_blank=True, default="")
+    reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=TEXT_MAX_LENGTH,
+        error_messages={"max_length": f"Le motif ne peut pas dépasser {TEXT_MAX_LENGTH} caractères."},
+    )
     membership_id = serializers.IntegerField(required=False, allow_null=True)
     match_id = serializers.IntegerField(required=False, allow_null=True)
     expense_id = serializers.IntegerField(required=False, allow_null=True)
@@ -106,8 +117,17 @@ class MatchEquipmentLineSerializer(serializers.Serializer):
     holder_id = serializers.IntegerField(required=False, allow_null=True)
 
 
+def _check_lines_count(lines):
+    if len(lines) > MAX_EQUIPMENT_LINES:
+        raise serializers.ValidationError(f"{MAX_EQUIPMENT_LINES} lignes au plus par enregistrement.")
+    return lines
+
+
 class MatchEquipmentOutSerializer(serializers.Serializer):
     lines = MatchEquipmentLineSerializer(many=True)
+
+    def validate_lines(self, lines):
+        return _check_lines_count(lines)
 
 
 class MatchEquipmentReturnLineSerializer(serializers.Serializer):
@@ -118,7 +138,16 @@ class MatchEquipmentReturnLineSerializer(serializers.Serializer):
 
 class MatchEquipmentReturnSerializer(serializers.Serializer):
     lines = MatchEquipmentReturnLineSerializer(many=True)
-    observation = serializers.CharField(required=False, allow_blank=True, default="")
+    observation = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=TEXT_MAX_LENGTH,
+        error_messages={"max_length": f"L'observation ne peut pas dépasser {TEXT_MAX_LENGTH} caractères."},
+    )
+
+    def validate_lines(self, lines):
+        return _check_lines_count(lines)
 
 
 class CountLineSerializer(serializers.Serializer):
@@ -198,7 +227,7 @@ def _stock_rows_json(rows: list[dict]) -> list[dict]:
 def serialize_article(
     article: Article,
     *,
-    loaned_for_match: int = 0,
+    loaned_for_match: int | None = None,
     holder_stocks: dict | None = None,
     holders_by_id: dict | None = None,
     pending_decommission: int | None = None,
@@ -210,6 +239,8 @@ def serialize_article(
         holders_by_id = services.club_holders_by_id()
     if pending_decommission is None:
         pending_decommission = services.pending_decommission_by_article().get(article.pk, 0)
+    if loaned_for_match is None:
+        loaned_for_match = services.loaned_for_match_by_article().get(article.pk, 0)
     rows = services.stock_rows_for(holder_stocks, holders_by_id)
     positive = [r for r in rows if r["quantity"] > 0]
     data = {

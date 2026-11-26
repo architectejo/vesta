@@ -33,6 +33,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from django.db import transaction
 from django.utils import timezone
 
+from apps.clubs.models import Membership
 from apps.core.services import log_action
 from apps.logistics.models import Article, Decommission, Holder, Inventory, InventoryLine, StockMovement
 
@@ -173,6 +174,26 @@ def _loaned_and_returned_for_match(match) -> dict[int, dict[str, int]]:
     return result
 
 
+def loaned_for_match_by_article() -> dict[int, int]:
+    """Par article du club actif : pièces sorties « Prêt pour un match » et pas
+    encore rendues. Le solde se calcule match par match : un retour d'un match
+    ne compense jamais la sortie d'un autre."""
+
+    per_match: dict[tuple[int, int], int] = {}
+    movements = StockMovement.objects.filter(
+        match__isnull=False,
+        movement_type__in=(StockMovement.MovementType.OUT_LOAN, StockMovement.MovementType.IN_RETURN),
+    ).values_list("article_id", "match_id", "movement_type", "quantity")
+    for article_id, match_id, movement_type, quantity in movements:
+        signed = quantity if movement_type == StockMovement.MovementType.OUT_LOAN else -quantity
+        per_match[(article_id, match_id)] = per_match.get((article_id, match_id), 0) + signed
+    result: dict[int, int] = {}
+    for (article_id, _match_id), remaining in per_match.items():
+        if remaining > 0:
+            result[article_id] = result.get(article_id, 0) + remaining
+    return result
+
+
 def match_equipment_summary(match) -> list[dict]:
     """Ligne par article prêté pour ``match`` (§4.6, §5.2 de la fiche d'écran)."""
 
@@ -231,6 +252,7 @@ def _ensure_article_name_available(*, club, name: str, exclude_pk=None) -> None:
         raise LogisticsError(DUPLICATE_ARTICLE_NAME_MESSAGE)
 
 
+@transaction.atomic
 def create_article(
     *, club, actor, name: str, category: str, unit: str = "pièce", reference_condition: str = Article.Condition.NEW
 ) -> Article:
@@ -250,6 +272,7 @@ def create_article(
     return article
 
 
+@transaction.atomic
 def update_article(*, article: Article, actor, **fields) -> Article:
     if fields.get("name") is not None:
         _ensure_article_name_available(club=article.club, name=fields["name"], exclude_pk=article.pk)
@@ -269,6 +292,7 @@ def update_article(*, article: Article, actor, **fields) -> Article:
     return article
 
 
+@transaction.atomic
 def archive_article(*, article: Article, actor, now: Optional[datetime.datetime] = None) -> Article:
     if article.status == Article.Status.ARCHIVED:
         return article
@@ -295,6 +319,7 @@ def archive_article(*, article: Article, actor, now: Optional[datetime.datetime]
     return article
 
 
+@transaction.atomic
 def reactivate_article(*, article: Article, actor) -> Article:
     if article.status == Article.Status.ACTIVE:
         return article
@@ -351,6 +376,16 @@ def _normalize_name(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", text or "")
     stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
     return " ".join(stripped.casefold().split())
+
+
+def filter_articles_by_search(articles: Iterable[Article], search: str) -> list[Article]:
+    """Recherche par nom, sans tenir compte de la casse ni des accents,
+    faite en Python (indépendante du moteur de base)."""
+
+    wanted = _normalize_name(search)
+    if not wanted:
+        return list(articles)
+    return [a for a in articles if wanted in _normalize_name(a.name)]
 
 
 def _lock_article(article: Article) -> None:
@@ -487,6 +522,10 @@ def _snapshot_holder(holder: Holder) -> dict:
     }
 
 
+# Adhésions pouvant détenir ou recevoir du matériel : en cours ou en attente.
+ACTIVE_MEMBERSHIP_STATUSES = (Membership.Status.ACTIVE, Membership.Status.PENDING)
+
+
 def _ensure_holder_key_free(*, club, key: str, kind: str, exclude_pk=None) -> None:
     queryset = Holder.all_objects.filter(club=club)
     if exclude_pk is not None:
@@ -504,6 +543,7 @@ def _clean_place_label(label: str) -> str:
     return label
 
 
+@transaction.atomic
 def create_holder(
     *, club, actor, kind: str, membership=None, label: str = "", now: Optional[datetime.datetime] = None
 ) -> Holder:
@@ -511,7 +551,7 @@ def create_holder(
     if kind == Holder.Kind.MEMBER:
         if membership is None:
             raise LogisticsError("Choisissez un joueur.")
-        if membership.club_id != club.id or membership.status not in ("active", "pending"):
+        if membership.club_id != club.id or membership.status not in ACTIVE_MEMBERSHIP_STATUSES:
             raise LogisticsError("Ce joueur n'appartient pas au club actif.")
         key = f"m{membership.pk}"
         label = ""
@@ -530,6 +570,7 @@ def create_holder(
     return holder
 
 
+@transaction.atomic
 def update_holder(*, holder: Holder, actor, label: str) -> Holder:
     if holder.kind != Holder.Kind.PLACE:
         raise LogisticsError("Seul le nom d'un lieu peut être modifié.")
@@ -551,9 +592,20 @@ def update_holder(*, holder: Holder, actor, label: str) -> Holder:
     return holder
 
 
+@transaction.atomic
 def archive_holder(*, holder: Holder, actor, now: Optional[datetime.datetime] = None) -> Holder:
+    # Verrou sur le détenteur : un transfert concurrent vers lui attend la fin
+    # de l'archivage (et le voit alors archivé), et inversement.
+    holder = Holder.all_objects.select_for_update().get(pk=holder.pk, club_id=holder.club_id)
     if holder.status == Holder.Status.ARCHIVED:
         return holder
+    if Decommission.all_objects.filter(
+        club_id=holder.club_id, holder=holder, status=Decommission.Status.PENDING
+    ).exists():
+        raise LogisticsError(
+            f"{holder.display_name} est concerné par un déclassement en attente : "
+            "exécutez-le ou annulez-le avant d'archiver."
+        )
     pieces = holder_pieces(holder)
     if pieces > 0:
         raise LogisticsError(
@@ -599,16 +651,158 @@ def _validate_movement_inputs(
             raise LogisticsError(f"Quantité supérieure au stock disponible ({available}).")
 
 
+def _current_holder_status(holder: Holder) -> str:
+    """Statut du détenteur relu en base et verrouillé : l'objet reçu peut être
+    périmé (archivé entre-temps par une autre requête). À appeler dans la
+    transaction de l'appelant (``select_for_update`` l'exige)."""
+
+    status = (
+        Holder.all_objects.select_for_update()
+        .filter(pk=holder.pk, club_id=holder.club_id)
+        .values_list("status", flat=True)
+        .first()
+    )
+    return status if status is not None else holder.status
+
+
+def articles_by_ids(*, club, article_ids: Iterable[int]) -> dict[int, Article]:
+    """Articles du club demandés par identifiant (archivés compris : le contrôle
+    « article actif » reste celui de chaque service)."""
+
+    return {a.pk: a for a in Article.all_objects.filter(club=club, pk__in=list(article_ids))}
+
+
+EXPENSE_NOT_RELEASED_MESSAGE = (
+    "Seule une dépense libérée peut être rattachée à un achat (pas une dépense en attente ni refusée)."
+)
+
+
+def _validate_expense(*, club, movement_type: str, expense) -> None:
+    """Rattachement d'un achat à une dépense (CDC 4.13 ; 10.2 n° 167 « dépenses
+    libérées seulement ») : achat uniquement, dépense du club, libérée,
+    justifiée ou non justifiée ; jamais en attente ni refusée. Le statut est
+    relu en base (lecture seule de la trésorerie)."""
+
+    if expense is None:
+        return
+    from apps.treasury.models import Expense
+
+    if expense.club_id != club.id:
+        raise LogisticsError("Cette dépense n'appartient pas au club actif.")
+    if movement_type != StockMovement.MovementType.IN_PURCHASE:
+        raise LogisticsError("Seul un achat peut être rattaché à une dépense.")
+    expense_status = (
+        Expense.all_objects.filter(pk=expense.pk, club_id=club.id).values_list("status", flat=True).first()
+    )
+    if expense_status not in Expense.RELEASED_STATUSES:
+        raise LogisticsError(EXPENSE_NOT_RELEASED_MESSAGE)
+
+
+LINKABLE_EXPENSES_LIMIT = 20
+
+
+def linkable_expenses(*, club, query: str = "", limit: int = LINKABLE_EXPENSES_LIMIT) -> list[dict]:
+    """Dépenses rattachables à un achat, pour la recherche de l'Intendant
+    (10.2 n° 167 « recherche sans bénéficiaire ni motif ») : dépenses libérées
+    du club seulement ; ne renvoie que la référence, la date, le montant, la
+    devise, la catégorie et le statut. Le filtre (catégorie, date AAAA-MM-JJ
+    ou JJ/MM/AAAA, montant) est fait en Python, indépendamment du moteur."""
+
+    from apps.treasury.models import Expense
+
+    wanted = _normalize_name(query or "")
+    rows = (
+        Expense.objects.filter(club=club, status__in=Expense.RELEASED_STATUSES)
+        .select_related("category")
+        .order_by("-expense_date", "-pk")
+    )
+    results = []
+    for expense in rows:
+        if wanted:
+            haystack = " ".join(
+                [
+                    expense.category.name,
+                    expense.expense_date.isoformat(),
+                    expense.expense_date.strftime("%d/%m/%Y"),
+                    format(expense.amount, "f"),
+                ]
+            )
+            if wanted not in _normalize_name(haystack):
+                continue
+        results.append(
+            {
+                "id": expense.pk,
+                "reference": f"D-{expense.pk}",
+                "expense_date": expense.expense_date,
+                "amount": expense.amount,
+                "currency": expense.currency,
+                "category": expense.category.name,
+                "status": expense.status,
+                "status_display": expense.get_status_display(),
+            }
+        )
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _validate_movement_membership(*, club, movement_type: str, membership) -> None:
+    """Joueur lié à un mouvement : du club actif ; pour une sortie (matériel
+    remis à un joueur), adhésion en cours ou en attente seulement, comme pour
+    un détenteur. Le donateur d'une provenance peut rester un ancien membre."""
+
+    if membership is None:
+        return
+    if membership.club_id != club.id:
+        raise LogisticsError("Ce joueur n'appartient pas au club actif.")
+    if movement_type in StockMovement.OUT_TYPES and membership.status not in ACTIVE_MEMBERSHIP_STATUSES:
+        raise LogisticsError("Ce joueur ne fait plus partie du club : choisissez un membre actif.")
+
+
+MEMBER_HOLDER_LEFT_MESSAGE = "Ce joueur ne fait plus partie du club : choisissez un détenteur actif."
+
+
+def _ensure_holder_can_receive(*, club, holder: Holder) -> None:
+    """Un détenteur ne reçoit du matériel (entrée, déplacement) que s'il est
+    actif et, pour un joueur, si son adhésion est en cours ou en attente."""
+
+    if _current_holder_status(holder) != Holder.Status.ACTIVE:
+        raise LogisticsError("Ce détenteur est archivé : choisissez un détenteur actif.")
+    if holder.kind == Holder.Kind.MEMBER and holder.membership_id:
+        membership_status = (
+            Membership.objects.filter(pk=holder.membership_id, club=club).values_list("status", flat=True).first()
+        )
+        if membership_status not in ACTIVE_MEMBERSHIP_STATUSES:
+            raise LogisticsError(MEMBER_HOLDER_LEFT_MESSAGE)
+
+
 def _validate_holder(*, club, article: Article, holder: Optional[Holder], movement_type: str, quantity: int) -> None:
     if holder is not None:
         if holder.club_id != club.id:
             raise LogisticsError("Ce détenteur n'appartient pas au club actif.")
-        if movement_type in StockMovement.IN_TYPES and holder.status != Holder.Status.ACTIVE:
-            raise LogisticsError("Ce détenteur est archivé : choisissez un détenteur actif.")
+        if movement_type in StockMovement.IN_TYPES:
+            _ensure_holder_can_receive(club=club, holder=holder)
     if movement_type in StockMovement.OUT_TYPES:
         available = holder_stock(article, holder)
         if quantity > available:
             raise LogisticsError(f"Quantité supérieure au stock de {_holder_name(holder)} ({available}).")
+
+
+def _parse_date(value) -> Optional[datetime.date]:
+    """Accepte une date, une date-heure ou une chaîne ISO « AAAA-MM-JJ »."""
+
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.date.fromisoformat(value.strip())
+        except ValueError:
+            pass
+    raise LogisticsError("Date invalide : utilisez le format AAAA-MM-JJ.")
 
 
 def _clean_provenance(*, club, movement_type: str, provenance, movement_date, donor_membership=None) -> dict:
@@ -629,6 +823,11 @@ def _clean_provenance(*, club, movement_type: str, provenance, movement_date, do
     donor_name = " ".join((provenance.get("donor_name") or "").split())
     if len(donor_name) > 120:
         raise LogisticsError("Le nom du donateur ne peut pas dépasser 120 caractères.")
+    donor_membership_id = provenance.get("donor_membership_id")
+    if donor_membership is None and donor_membership_id:
+        donor_membership = Membership.objects.filter(pk=donor_membership_id, club=club).first()
+        if donor_membership is None:
+            raise LogisticsError("Ce donateur n'appartient pas au club actif.")
     if origin == StockMovement.OriginKind.DONATION:
         if donor_membership is None and not donor_name:
             raise LogisticsError("Indiquez le donateur.")
@@ -638,7 +837,7 @@ def _clean_provenance(*, club, movement_type: str, provenance, movement_date, do
         raise LogisticsError("Le donateur ne s'applique qu'à un don.")
 
     unknown = bool(provenance.get("acquisition_date_unknown"))
-    acquisition_date = provenance.get("acquisition_date")
+    acquisition_date = _parse_date(provenance.get("acquisition_date"))
     note = " ".join((provenance.get("acquisition_date_note") or "").split())
     if len(note) > 60:
         raise LogisticsError("La précision sur la date ne peut pas dépasser 60 caractères.")
@@ -691,12 +890,15 @@ def record_movement(
 ) -> StockMovement:
     if movement_type not in StockMovement.MANUAL_TYPES:
         raise LogisticsError("Ce type de mouvement se saisit depuis son écran dédié (déplacement ou déclassement).")
+    movement_date = _parse_date(movement_date)
     now = now or timezone.now()
     with transaction.atomic():
         _lock_article(article)
         _validate_movement_inputs(
             club=club, article=article, movement_type=movement_type, quantity=quantity, movement_date=movement_date
         )
+        _validate_movement_membership(club=club, movement_type=movement_type, membership=membership)
+        _validate_expense(club=club, movement_type=movement_type, expense=expense)
         _validate_holder(club=club, article=article, holder=holder, movement_type=movement_type, quantity=quantity)
         provenance_fields = _clean_provenance(
             club=club,
@@ -748,16 +950,16 @@ def record_transfer(
 
     if destination is None:
         raise LogisticsError("Choisissez le nouveau détenteur.")
+    movement_date = _parse_date(movement_date)
     if source is not None and source.pk == destination.pk:
         raise LogisticsError("Le détenteur d'arrivée doit être différent du détenteur de départ.")
     for holder in (source, destination):
         if holder is not None and holder.club_id != club.id:
             raise LogisticsError("Ce détenteur n'appartient pas au club actif.")
-    if destination.status != Holder.Status.ACTIVE:
-        raise LogisticsError("Ce détenteur est archivé : choisissez un détenteur actif.")
     now = now or timezone.now()
     with transaction.atomic():
         _lock_article(article)
+        _ensure_holder_can_receive(club=club, holder=destination)
         _validate_movement_inputs(
             club=club,
             article=article,
@@ -1167,6 +1369,7 @@ def can_open_inventory(club) -> tuple[bool, str]:
     return True, ""
 
 
+@transaction.atomic
 def open_inventory(*, club, actor, now: Optional[datetime.datetime] = None) -> Inventory:
     ok, reason = can_open_inventory(club)
     if not ok:
@@ -1236,16 +1439,17 @@ def record_counts(
                     line.justified_at = None
             line.save()
             result.append(line)
-    log_action(
-        actor=actor,
-        club=inventory.club,
-        action_type="logistics.inventory.counted",
-        obj=inventory,
-        after={"lines_counted": len(result)},
-    )
+        log_action(
+            actor=actor,
+            club=inventory.club,
+            action_type="logistics.inventory.counted",
+            obj=inventory,
+            after={"lines_counted": len(result)},
+        )
     return result
 
 
+@transaction.atomic
 def justify_discrepancy(
     *, line: InventoryLine, actor, reason: str, now: Optional[datetime.datetime] = None
 ) -> InventoryLine:
@@ -1281,6 +1485,7 @@ def can_close_inventory(inventory: Inventory) -> tuple[bool, str]:
     return True, ""
 
 
+@transaction.atomic
 def close_inventory(*, inventory: Inventory, actor, now: Optional[datetime.datetime] = None) -> Inventory:
     ok, reason = can_close_inventory(inventory)
     if not ok:
