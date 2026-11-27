@@ -38,6 +38,7 @@ from collections import defaultdict
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
+from django.db.models import QuerySet
 from django.utils import timezone
 
 from apps.clubs.models import Membership, Season
@@ -136,7 +137,8 @@ def _expected_on(roster, day) -> list[Membership]:
 
 def _attendance_rows(club, event_ids) -> dict[int, dict[int, tuple]]:
     rows: dict[int, dict[int, tuple]] = defaultdict(dict)
-    queryset = Attendance.all_objects.filter(club=club, event_id__in=list(event_ids)).values_list(
+    ids = event_ids if isinstance(event_ids, QuerySet) else list(event_ids)
+    queryset = Attendance.all_objects.filter(club=club, event_id__in=ids).values_list(
         "event_id", "membership_id", "status", "arrived_at", "excused_reason"
     )
     for event_id, membership_id, status, arrived_at, reason in queryset:
@@ -448,6 +450,105 @@ def _build_evaluations_block(
 
 
 # ---------------------------------------------------------------------------
+# Moyenne de présence d'une période et assiduité : définition unique
+# ---------------------------------------------------------------------------
+
+_TOTAL_KEYS = ("expected", "present", "late", "excused", "absent", "counted_present")
+
+
+def attendance_rows(club, event_ids) -> dict[int, dict[int, tuple]]:
+    """Pointages des événements donnés, en une requête filtrée sur le club :
+    ``{event_id: {membership_id: (status, arrived_at, excused_reason)}}``.
+    ``event_ids`` peut être un ``QuerySet`` d'identifiants (sous-requête)."""
+
+    return _attendance_rows(club, event_ids)
+
+
+def aggregate_attendance(counts_list) -> dict:
+    """Agrège des compteurs par événement (ceux de ``summarize_attendance``)
+    selon la définition unique de la moyenne de présence (CDC 10.3 n° 185,
+    position provisoire à confirmer ; spec A4.1) : seuls les événements
+    pointés comptent ; taux = total des présents comptés ÷ total des attendus,
+    arrondi à l'unité une seule fois (``attendance_rate_percent``)."""
+
+    totals = {key: 0 for key in _TOTAL_KEYS}
+    events = 0
+    for counts in counts_list:
+        if not counts["marked"]:
+            continue  # non pointé : ni dans la moyenne ni dans la courbe (jamais 0 %)
+        events += 1
+        for key in _TOTAL_KEYS:
+            totals[key] += counts[key]
+    return {**totals, "events": events, "rate": _pct(totals["counted_present"], totals["expected"])}
+
+
+def summarize_attendance(club, events, *, roster=None, rows=None, counts_absent=None) -> dict:
+    """Présence d'une liste d'événements : **seule** fonction qui calcule la
+    moyenne de présence d'une période et l'assiduité par joueur. Appelée par la
+    page « Entraînements » (B2, assiduité) et par le tableau de bord du bureau
+    (``apps.clubs.board_dashboard``, cartes 1 et 12), qui doivent afficher les
+    mêmes chiffres (``club-tableau-de-bord-bureau.md`` §9).
+
+    ``events`` : objets ``Event`` (``pk``, ``event_date``). L'appelant choisit
+    la période et le type : la moyenne de présence ne porte que sur les
+    séances (CDC 10.3 n° 185) ; un appel séparé sur les matchs donne leur taux
+    propre. ``roster``, ``rows`` et ``counts_absent`` peuvent être fournis
+    pour ne pas répéter les requêtes ; sinon une requête chacun.
+
+    Règles (A4.1) : joueurs attendus = adhésion à la date (en attente exclus,
+    C-Q2) ; retard compté absent selon le club (10.2 n° 25) ; absence excusée
+    au dénominateur ; un événement sans aucun pointage a un taux ``None`` et
+    n'entre ni dans la moyenne ni dans l'assiduité.
+    """
+
+    events = list(events)
+    if counts_absent is None:
+        counts_absent = services._club_settings(club).late_arrival_counts_absent
+    if roster is None:
+        roster = _roster(club)
+    if rows is None:
+        rows = _attendance_rows(club, [e.pk for e in events])
+
+    per_event: dict[int, dict] = {}
+    players: dict[int, dict] = {}
+    for event in events:
+        rows_here = rows.get(event.pk, {})
+        expected = _expected_on(roster, event.event_date)
+        counts = _event_counts(expected, rows_here, counts_absent)
+        per_event[event.pk] = counts
+        if not counts["marked"]:
+            continue
+        for membership in expected:
+            entry = players.setdefault(
+                membership.pk,
+                {"membership": membership, "sessions": 0, "present": 0, "late": 0, "excused": 0, "absent": 0},
+            )
+            entry["sessions"] += 1
+            status = (rows_here.get(membership.pk) or (None,))[0]
+            if status == Attendance.Status.PRESENT:
+                entry["present"] += 1
+            elif status == Attendance.Status.LATE_ABSENT:
+                entry["late"] += 1
+            elif status == Attendance.Status.EXCUSED_ABSENT:
+                entry["excused"] += 1
+            else:
+                entry["absent"] += 1
+    for entry in players.values():
+        entry["attended"] = entry["present"] + (0 if counts_absent else entry["late"])
+        entry["rate"] = _pct(entry["attended"], entry["sessions"])
+
+    period = aggregate_attendance(per_event.values())
+    return {
+        "per_event": per_event,
+        "totals": {key: period[key] for key in _TOTAL_KEYS},
+        "sessions_counted": period["events"],
+        "average_rate": period["rate"],
+        "players": players,
+        "late_counts_absent": counts_absent,
+    }
+
+
+# ---------------------------------------------------------------------------
 # B : évolution d'une séance à l'autre, assiduité
 # ---------------------------------------------------------------------------
 
@@ -478,10 +579,8 @@ def get_stats_history(club, *, viewer, period: str) -> dict:
     roles = get_active_roles(viewer, club=club)
     sees_evaluations = _sees_evaluations(viewer, roles)
     viewer_membership = _viewer_membership(viewer, club)
-    counts_absent = services._club_settings(club).late_arrival_counts_absent
-    roster = _roster(club)
+    summary = summarize_attendance(club, events)
     event_ids = [e.pk for e in events]
-    rows = _attendance_rows(club, event_ids)
     retained = _retained_by_event(
         club,
         event_ids,
@@ -489,16 +588,14 @@ def get_stats_history(club, *, viewer, period: str) -> dict:
     )
     locations = dict(Session.all_objects.filter(club=club, event_id__in=event_ids).values_list("event_id", "location"))
 
-    results, rates, averages = [], [], []
+    results, averages = [], []
     for event in events:
-        counts = _event_counts(_expected_on(roster, event.event_date), rows.get(event.pk, {}), counts_absent)
+        counts = summary["per_event"][event.pk]
         by_member = retained.get(event.pk, {})
         average_rating = _event_average(by_member) if sees_evaluations else None
         my_rating = None
         if viewer_membership is not None and viewer_membership.pk in by_member:
             my_rating = by_member[viewer_membership.pk]["overall"]
-        if counts["rate"] is not None:
-            rates.append(counts["rate"])
         if average_rating is not None:
             averages.append(average_rating)
         results.append(
@@ -514,14 +611,13 @@ def get_stats_history(club, *, viewer, period: str) -> dict:
                 "locked": services.is_event_locked(event),
             }
         )
-    average_rate = None
-    if rates:
-        average_rate = int((Decimal(sum(rates)) / Decimal(len(rates))).quantize(_ONE, rounding=ROUND_HALF_UP))
     my_ratings = [Decimal(r["my_rating"]) for r in results if r["my_rating"] is not None]
     return {
         "period": period,
         "season": {"id": season.pk, "label": season.label} if season else None,
-        "average_attendance_rate": average_rate,
+        # Définition unique (CDC 10.3 n° 185) : total des présents comptés ÷
+        # total des attendus sur les séances pointées, arrondi une seule fois.
+        "average_attendance_rate": summary["average_rate"],
         "average_rating": str(_mean(averages, _TENTH)) if averages else None,
         "my_average_rating": str(_mean(my_ratings, _TENTH)) if my_ratings else None,
         "results": results,
@@ -530,35 +626,8 @@ def get_stats_history(club, *, viewer, period: str) -> dict:
 
 def _player_totals(club, period: str):
     events, season = _period_events(club, period)
-    counts_absent = services._club_settings(club).late_arrival_counts_absent
-    roster = _roster(club)
-    rows = _attendance_rows(club, [e.pk for e in events])
-    totals: dict[int, dict] = {}
-    sessions_counted = 0
-    for event in events:
-        rows_here = rows.get(event.pk, {})
-        if not rows_here:
-            continue  # séance sans aucun pointage : ignorée (jamais comptée comme 0 %)
-        sessions_counted += 1
-        for membership in _expected_on(roster, event.event_date):
-            entry = totals.setdefault(
-                membership.pk,
-                {"membership": membership, "sessions": 0, "present": 0, "late": 0, "excused": 0, "absent": 0},
-            )
-            entry["sessions"] += 1
-            status = (rows_here.get(membership.pk) or (None,))[0]
-            if status == Attendance.Status.PRESENT:
-                entry["present"] += 1
-            elif status == Attendance.Status.LATE_ABSENT:
-                entry["late"] += 1
-            elif status == Attendance.Status.EXCUSED_ABSENT:
-                entry["excused"] += 1
-            else:
-                entry["absent"] += 1
-    for entry in totals.values():
-        entry["attended"] = entry["present"] + (0 if counts_absent else entry["late"])
-        entry["rate"] = _pct(entry["attended"], entry["sessions"])
-    return totals, sessions_counted, counts_absent, season
+    summary = summarize_attendance(club, events)
+    return summary["players"], summary["sessions_counted"], summary["late_counts_absent"], season
 
 
 def get_attendance_ranking(club, *, period: str, request=None) -> dict:

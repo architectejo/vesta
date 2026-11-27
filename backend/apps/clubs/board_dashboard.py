@@ -289,98 +289,102 @@ _KIND_LABELS = {"session": "Séance", "match": "Match"}
 
 
 def _attendance_data(ctx: _Ctx) -> dict:
+    """Présences de la période : **aucun calcul propre**. La moyenne, les taux
+    par séance et l'assiduité viennent de
+    ``apps.sport.session_stats.summarize_attendance`` (définition unique,
+    CDC 10.3 n° 185, position provisoire) : séances seulement, séance non
+    pointée exclue (jamais 0 %), un seul arrondi. Les matchs sont résumés à
+    part par la même fonction (``by_kind["match"]``).
+
+    Requêtes : événements (1) + pointages (1) ; adhésions et réglages viennent
+    du contexte déjà mémoïsé (nombre de requêtes inchangé)."""
+
     def compute():
-        from apps.sport.models import Attendance, Event
+        from apps.sport.models import Event
+        from apps.sport.session_stats import attendance_rows, summarize_attendance
 
         counts_absent = ctx.club_settings().late_arrival_counts_absent
-        window_start = ctx.period.query_start
-        events = list(
-            Event.all_objects.for_club(ctx.club)
-            .filter(event_date__gte=window_start, event_date__lte=ctx.until)
-            .order_by("event_date", "pk")
-            .values("pk", "kind", "event_date")
+        window = Event.all_objects.for_club(ctx.club).filter(
+            event_date__gte=ctx.period.query_start, event_date__lte=ctx.until
         )
-        statuses: dict[int, dict[int, str]] = defaultdict(dict)
-        rows = (
-            Attendance.all_objects.for_club(ctx.club)
-            .filter(event__event_date__gte=window_start, event__event_date__lte=ctx.until)
-            .values_list("event_id", "membership_id", "status")
-        )
-        for event_id, membership_id, status in rows:
-            statuses[event_id][membership_id] = status
-        members = ctx.counted_members()
-        per_event = []
-        player_totals: dict[int, Counter] = defaultdict(Counter)
-        for event in events:
-            day = event["event_date"]
-            in_period = ctx.period.start <= day <= ctx.until
-            expected = [m for m in members if m.joined_on <= day and (m.left_on is None or m.left_on >= day)]
-            counter = Counter()
-            for m in expected:
-                status = statuses[event["pk"]].get(m.pk)
-                if status == Attendance.Status.PRESENT:
-                    key = "present"
-                elif status == Attendance.Status.LATE_ABSENT:
-                    key = "late"
-                elif status == Attendance.Status.EXCUSED_ABSENT:
-                    key = "excused"
-                else:
-                    key = "absent"
-                counter[key] += 1
-                if in_period:
-                    player_totals[m.pk][key] += 1
-                    player_totals[m.pk]["expected"] += 1
-            counter["expected"] = len(expected)
-            counter["counted_present"] = counter["present"] + (0 if counts_absent else counter["late"])
-            per_event.append({**event, "in_period": in_period, "counts": counter})
-        return {"events": per_event, "players": player_totals, "late_counts_absent": counts_absent}
+        events = list(window.order_by("event_date", "pk").only("pk", "kind", "event_date"))
+        # Sous-requête : une seule requête de pointages, même sans événement.
+        rows = attendance_rows(ctx.club, window.values("pk"))
+        roster = ctx.counted_members()
+
+        def summarize(selected):
+            return summarize_attendance(
+                ctx.club, selected, roster=roster, rows=rows, counts_absent=counts_absent
+            )
+
+        def in_period(event):
+            return ctx.period.start <= event.event_date <= ctx.until
+
+        sessions_window = [e for e in events if e.kind == Event.Kind.SESSION]
+        sessions = [e for e in sessions_window if in_period(e)]
+        matches = [e for e in events if e.kind == Event.Kind.MATCH and in_period(e)]
+        return {
+            "sessions": sessions,
+            "sessions_window": sessions_window,
+            "period": summarize(sessions),  # moyenne, courbe, assiduité
+            "window": summarize(sessions_window),  # série mensuelle (mois antérieurs compris)
+            "matches": summarize(matches),  # taux propre des matchs, présenté à part
+            "late_counts_absent": counts_absent,
+        }
 
     return ctx.memo("attendance_raw", compute)
 
 
-def _event_json(item: dict) -> dict:
-    c = item["counts"]
+def _event_json(event, counts: dict) -> dict:
+    rate = counts["rate"]
     return {
-        "event_id": item["pk"],
-        "kind": item["kind"],
-        "kind_label": _KIND_LABELS.get(item["kind"], item["kind"]),
-        "date": item["event_date"].isoformat(),
-        "expected": c["expected"],
-        "present": c["present"],
-        "late": c["late"],
-        "excused": c["excused"],
-        "absent": c["absent"],
-        "rate": _pct(c["counted_present"], c["expected"]),
+        "event_id": event.pk,
+        "kind": event.kind,
+        "kind_label": _KIND_LABELS.get(event.kind, event.kind),
+        "date": event.event_date.isoformat(),
+        "expected": counts["expected"],
+        "present": counts["present"],
+        "late": counts["late"],
+        "excused": counts["excused"],
+        "absent": counts["absent"],
+        "marked": counts["marked"],
+        "rate": None if rate is None else str(rate),
     }
+
+
+def _rate_str(rate: Optional[int]) -> Optional[str]:
+    return None if rate is None else str(rate)
 
 
 def _attendance(ctx: _Ctx) -> dict:
     def compute():
+        from apps.sport.session_stats import aggregate_attendance
+
         raw = _attendance_data(ctx)
-        events = [e for e in raw["events"] if e["in_period"]]
-        total = Counter()
-        by_kind: dict[str, Counter] = defaultdict(Counter)
-        for e in events:
-            total.update(e["counts"])
-            by_kind[e["kind"]].update(e["counts"])
-            by_kind[e["kind"]]["events"] += 1
-        monthly: dict[date, Counter] = defaultdict(Counter)
-        for e in raw["events"]:
-            monthly[svc._period_start(e["event_date"])].update(e["counts"])
-            monthly[svc._period_start(e["event_date"])]["events"] += 1
-        points = [_event_json(e) for e in events if e["counts"]["expected"] > 0][-POINTS_MAX:]
+        summary = raw["period"]
+        per_event = summary["per_event"]
+        points = [
+            _event_json(e, per_event[e.pk])
+            for e in raw["sessions"]
+            if per_event[e.pk]["marked"] and per_event[e.pk]["expected"] > 0
+        ][-POINTS_MAX:]
+        window_counts = raw["window"]["per_event"]
+        by_month: dict[date, list] = defaultdict(list)
+        for e in raw["sessions_window"]:
+            by_month[svc._period_start(e.event_date)].append(window_counts[e.pk])
+        monthly = {month: aggregate_attendance(by_month.get(month, [])) for month in ctx.period.months}
+        matches = raw["matches"]
         card = {
-            "events_count": len(events),
-            "average_rate": _pct(total["counted_present"], total["expected"]),
+            # Séances pointées de la période (celles qui entrent dans la moyenne).
+            "events_count": summary["sessions_counted"],
+            "unmarked_count": sum(1 for e in raw["sessions"] if not per_event[e.pk]["marked"]),
+            "average_rate": _rate_str(summary["average_rate"]),
             "last_rate": points[-1]["rate"] if points else None,
             "late_counts_absent": raw["late_counts_absent"],
-            "totals": {k: total[k] for k in ("expected", "present", "late", "excused", "absent")},
+            "totals": {k: summary["totals"][k] for k in ("expected", "present", "late", "excused", "absent")},
             "by_kind": {
-                kind: {
-                    "events": by_kind[kind]["events"],
-                    "average_rate": _pct(by_kind[kind]["counted_present"], by_kind[kind]["expected"]),
-                }
-                for kind in ("session", "match")
+                "session": {"events": summary["sessions_counted"], "average_rate": _rate_str(summary["average_rate"])},
+                "match": {"events": matches["sessions_counted"], "average_rate": _rate_str(matches["average_rate"])},
             },
             "points": points,
             "series": [
@@ -388,37 +392,39 @@ def _attendance(ctx: _Ctx) -> dict:
                     "month": fin._month_key(month),
                     "label": svc.french_month_label(month),
                     "events": monthly[month]["events"],
-                    "rate": _pct(monthly[month]["counted_present"], monthly[month]["expected"]),
+                    "rate": _rate_str(monthly[month]["rate"]),
                 }
                 for month in ctx.period.months
             ],
         }
-        sessions = [_event_json(e) for e in reversed(events)]
+        sessions = [_event_json(e, per_event[e.pk]) for e in reversed(raw["sessions"])]
         return {"card": card, "extras": {}, "lists": {"sessions": sessions}}
 
     return ctx.memo("attendance", compute)
 
 
 def _player_attendance_rows(ctx: _Ctx) -> list[dict]:
-    totals = _attendance_data(ctx)["players"]
+    """Assiduité par joueur : valeurs de ``summarize_attendance`` (séances
+    pointées de la période), joueurs encore au club seulement."""
+
+    players = _attendance_data(ctx)["period"]["players"]
     rows = []
     for m in ctx.counted_members():
         if m.status != Membership.Status.ACTIVE:
             continue
-        c = totals.get(m.pk)
-        if not c or not c["expected"]:
+        entry = players.get(m.pk)
+        if not entry or not entry["sessions"]:
             continue
-        counted = c["present"] + (0 if ctx.club_settings().late_arrival_counts_absent else c["late"])
         rows.append(
             {
                 **ctx.player(m.pk),
-                "expected": c["expected"],
-                "present": c["present"],
-                "late": c["late"],
-                "excused": c["excused"],
-                "absent": c["absent"],
-                "rate": _pct(counted, c["expected"]),
-                "_ratio": Decimal(counted) / Decimal(c["expected"]),
+                "expected": entry["sessions"],
+                "present": entry["present"],
+                "late": entry["late"],
+                "excused": entry["excused"],
+                "absent": entry["absent"],
+                "rate": _rate_str(entry["rate"]),
+                "_ratio": Decimal(entry["attended"]) / Decimal(entry["sessions"]),
                 "_key": _name_key(m),
             }
         )

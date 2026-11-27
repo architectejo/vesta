@@ -370,6 +370,29 @@ def test_history_skips_sessions_without_pointage_in_the_rate(ctx):
     assert [row["attendance_rate"] for row in results] == [13, None]  # 1 présent sur 8 = 12,5 -> 13 ; jamais 0
 
 
+def test_history_average_is_total_present_over_total_expected_rounded_once(ctx):
+    """CDC 10.3 n° 185 : moyenne = total des présents ÷ total des attendus,
+    arrondie une seule fois (et non moyenne des taux par séance arrondis)."""
+
+    backdate_members(ctx)
+    pointed_session(ctx, ctx.player, days_ago=3)  # 1 sur 8 = 12,5 -> 13
+    everyone = list(Membership.all_objects.filter(club=ctx.club, status=Membership.Status.ACTIVE))
+    assert len(everyone) == ROSTER_SIZE
+    pointed_session(ctx, *everyone, days_ago=2)  # 8 sur 8 = 100
+    make_session(ctx, days_ago=1)  # non pointée : exclue
+    make_session(ctx)  # séance du jour pas encore pointée : exclue
+    data = history(ctx.coach.user).data
+    assert [row["attendance_rate"] for row in data["results"]] == [13, 100, None, None]
+    # 9 / 16 = 56,25 -> 56 ; l'ancienne moyenne des taux arrondis aurait donné (13 + 100) / 2 = 56,5 -> 57.
+    assert data["average_attendance_rate"] == 56
+
+
+def test_history_average_is_null_when_nothing_is_marked(ctx):
+    backdate_members(ctx)
+    make_session(ctx)
+    assert history(ctx.coach.user).data["average_attendance_rate"] is None
+
+
 def test_history_last10_is_capped_and_season_covers_the_season(ctx):
     backdate_members(ctx)
     for days_ago in range(0, 12):

@@ -331,12 +331,60 @@ class TestAttendance:
         assert not {p["membership_id"] for p in card["top"]} & {p["membership_id"] for p in card["bottom"]}
 
     def test_joueur_arrive_apres_l_evenement_non_attendu(self, ctx):
-        make_session(ctx)
+        # Séance pointée : une séance sans aucun pointage n'est plus comptée (CDC 10.3 n° 185).
+        mark(ctx, make_session(ctx), ctx.player, Attendance.Status.PRESENT)
         newcomer = make_member(ctx.club)  # joined_on = aujourd'hui + 0 : attendu aujourd'hui
         Membership.all_objects.filter(pk=newcomer.pk).update(joined_on=timezone.now().date() + datetime.timedelta(days=5))
         card = get(ctx.president.user).data["attendance"]
         expected_members = Membership.all_objects.filter(club=ctx.club, status=Membership.Status.ACTIVE).count() - 1
         assert card["totals"]["expected"] == expected_members
+
+    def test_seance_du_jour_non_pointee_ni_moyenne_ni_courbe(self, ctx):
+        """Une séance sans aucun pointage (dont celle du jour, pas encore
+        pointée) n'entre ni dans la moyenne ni dans la courbe : taux ``null``,
+        jamais 0 % (CDC 10.3 n° 185)."""
+
+        today = sport_services.get_club_today(ctx.club)
+
+        pointed = make_session(ctx, day=today)
+        mark(ctx, pointed, ctx.player, Attendance.Status.PRESENT)
+        mark(ctx, pointed, ctx.captain, Attendance.Status.PRESENT)
+        rate_before = get(ctx.president.user).data["attendance"]["average_rate"]
+        unmarked = make_session(ctx, day=today)  # séance du jour, personne n'est encore pointé
+        card = get(ctx.president.user).data["attendance"]
+        assert card["average_rate"] == rate_before and card["average_rate"] not in (None, "0")
+        assert card["events_count"] == 1 and card["unmarked_count"] == 1
+        assert [p["event_id"] for p in card["points"]] == [pointed.pk]
+        assert card["last_rate"] == card["points"][-1]["rate"]
+        month = next(s for s in card["series"] if s["month"] == today.strftime("%Y-%m"))
+        assert month["events"] == 1 and month["rate"] == rate_before
+        sessions = get_section(ctx.president.user, "attendance").data["sessions"]["items"]
+        row = next(s for s in sessions if s["event_id"] == unmarked.pk)
+        assert row["rate"] is None and row["marked"] is False
+
+    def test_seule_seance_non_pointee_aucune_moyenne(self, ctx):
+        make_session(ctx, day=sport_services.get_club_today(ctx.club))
+        card = get(ctx.president.user).data["attendance"]
+        assert card["average_rate"] is None and card["last_rate"] is None
+        assert card["points"] == [] and card["events_count"] == 0 and card["unmarked_count"] == 1
+        assert get(ctx.president.user).data["attendance_ranking"]["players_count"] == 0
+
+    def test_matchs_hors_moyenne_avec_leur_propre_taux(self, ctx):
+        today = sport_services.get_club_today(ctx.club)
+        session = make_session(ctx, day=today)
+        for m in Membership.all_objects.filter(club=ctx.club, status=Membership.Status.ACTIVE):
+            mark(ctx, session, m, Attendance.Status.PRESENT)
+        match = make_match(ctx, day=today).event
+        mark(ctx, match, ctx.player, Attendance.Status.ABSENT)  # match pointé : personne présent
+        card = get(ctx.president.user).data["attendance"]
+        assert card["average_rate"] == "100"  # le match à 0 % n'entre pas dans la moyenne
+        assert card["by_kind"]["session"] == {"events": 1, "average_rate": "100"}
+        assert card["by_kind"]["match"] == {"events": 1, "average_rate": "0"}
+        assert all(p["kind"] == "session" for p in card["points"])
+        sessions = get_section(ctx.president.user, "attendance").data["sessions"]["items"]
+        assert {s["event_id"] for s in sessions} == {session.pk}
+        ranking = get_section(ctx.president.user, "attendance_ranking", limit=100).data["players"]["items"]
+        assert all(p["rate"] == "100" and p["expected"] == 1 for p in ranking)
 
     def test_pagination_du_detail(self, ctx):
         for _ in range(3):
@@ -345,6 +393,89 @@ class TestAttendance:
         assert len(data["sessions"]["items"]) == 2 and data["sessions"]["next_offset"] == 2
         page = get_section(ctx.president.user, "attendance", limit=2, offset=2, only="sessions").data
         assert len(page["sessions"]["items"]) == 1 and page["sessions"]["next_offset"] is None
+
+
+class TestAttendanceEqualsTrainingPage:
+    """Spec §9 : le taux de présence du tableau de bord est **égal** à celui de
+    la page « Entraînements » pour la même période (définition unique,
+    CDC 10.3 n° 185 : séances seulement, séance non pointée exclue, total des
+    présents ÷ total des attendus arrondi une seule fois)."""
+
+    @pytest.fixture
+    def season_data(self, ctx):
+        today = sport_services.get_club_today(ctx.club)
+
+        def day(days_ago):
+            return max(today - datetime.timedelta(days=days_ago), ctx.season.start_date)
+
+        active = list(Membership.all_objects.filter(club=ctx.club, status=Membership.Status.ACTIVE))
+        s1 = make_session(ctx, day=day(5))  # seul le joueur est présent
+        mark(ctx, s1, ctx.player, Attendance.Status.PRESENT)
+        s2 = make_session(ctx, day=day(4))  # tout le monde présent sauf un retard (compté absent par défaut)
+        for m in active:
+            mark(ctx, s2, m, Attendance.Status.LATE_ABSENT if m.pk == ctx.coach.pk else Attendance.Status.PRESENT)
+        match = make_match(ctx, day=day(3)).event  # match pointé : hors moyenne
+        mark(ctx, match, ctx.captain, Attendance.Status.PRESENT)
+        mark(ctx, match, ctx.player, Attendance.Status.ABSENT)
+        make_session(ctx, day=day(2))  # séance passée jamais pointée
+        make_session(ctx, day=today)  # séance du jour pas encore pointée
+        return {"n": len(active), "s1": s1, "s2": s2}
+
+    def test_moyenne_egale_a_la_page_entrainements(self, ctx, season_data):
+        n = season_data["n"]
+        board = get(ctx.president.user, period="season", season=ctx.season.pk).data["attendance"]
+        history = client_for(ctx.coach.user).get(reverse("sport:session-stats-history"), {"period": "season"}).data
+
+        expected = attendance_rate_percent(1 + (n - 1), 2 * n)
+        assert history["average_attendance_rate"] == expected
+        assert board["average_rate"] == str(expected)
+        # Le jeu de données distingue bien la nouvelle définition de l'ancienne
+        # (moyenne des taux par séance déjà arrondis).
+        old_mean = attendance_rate_percent(
+            attendance_rate_percent(1, n) + attendance_rate_percent(n - 1, n), 200
+        )
+        assert old_mean != expected, (n, old_mean, expected)
+
+        # Courbe : mêmes séances pointées, mêmes taux.
+        sport_rates = {r["session_id"]: r["attendance_rate"] for r in history["results"]}
+        board_points = {p["event_id"]: p["rate"] for p in board["points"]}
+        session_ids = {season_data["s1"].pk, season_data["s2"].pk}
+        assert set(board_points) == session_ids
+        assert {sid: str(rate) for sid, rate in sport_rates.items() if rate is not None} == board_points
+        assert sum(1 for rate in sport_rates.values() if rate is None) == 2 == board["unmarked_count"]
+        assert board["events_count"] == 2
+
+    def test_assiduite_egale_a_la_page_entrainements(self, ctx, season_data):
+        board = get_section(
+            ctx.president.user, "attendance_ranking", period="season", season=ctx.season.pk, limit=100
+        ).data["players"]["items"]
+        sport = client_for(ctx.coach.user).get(reverse("sport:attendance-ranking"), {"period": "season"}).data
+        assert sport["sessions_count"] == 2
+        sport_rates = {r["player"]["membership_id"]: (r["sessions"], r["rate"]) for r in sport["results"]}
+        assert board, "l'assiduité doit lister les joueurs"
+        for row in board:
+            sessions, rate = sport_rates[row["membership_id"]]
+            assert (row["expected"], row["rate"]) == (sessions, str(rate))
+        player = next(r for r in board if r["membership_id"] == ctx.player.pk)
+        assert (player["expected"], player["present"], player["rate"]) == (2, 2, "100")  # le match n'est pas compté
+        me = client_for(ctx.player.user).get(reverse("sport:attendance-me"), {"period": "season"}).data
+        assert str(me["rate"]) == player["rate"]
+
+    def test_retard_compte_present_egalite_conservee(self, ctx, season_data):
+        type(ctx.club.settings).objects.filter(club=ctx.club).update(late_arrival_counts_absent=False)
+        n = season_data["n"]
+        board = get(ctx.president.user, period="season", season=ctx.season.pk).data["attendance"]
+        history = client_for(ctx.coach.user).get(reverse("sport:session-stats-history"), {"period": "season"}).data
+        assert history["average_attendance_rate"] == attendance_rate_percent(1 + n, 2 * n)
+        assert board["average_rate"] == str(history["average_attendance_rate"])
+
+    def test_etancheite_autre_club_sans_effet(self, ctx, other_ctx, season_data):
+        before = get(ctx.president.user, period="season", season=ctx.season.pk).data["attendance"]
+        other = make_session(other_ctx, day=sport_services.get_club_today(other_ctx.club))
+        for m in Membership.all_objects.filter(club=other_ctx.club, status=Membership.Status.ACTIVE):
+            mark(other_ctx, other, m, Attendance.Status.ABSENT)
+        after = get(ctx.president.user, period="season", season=ctx.season.pk).data["attendance"]
+        assert after == before
 
 
 # ---------------------------------------------------------------------------
