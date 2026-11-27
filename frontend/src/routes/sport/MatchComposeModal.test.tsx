@@ -171,6 +171,18 @@ describe("MatchComposeModal — motif d'indisponibilité lu de l'API (§4.1 bis)
     expect(screen.getByRole("checkbox", { name: "Sélectionner Kevin Proto" })).toBeEnabled();
   });
 
+  it("texte de repli neutre : ne cite jamais la dette ni aucun motif (CDC 10.3 n° 188)", async () => {
+    mockRoster([player(13, "Aimé", "Leurre", true), player(12, "Kevin", "Proto")]);
+    vi.mocked(listEligibility).mockRejectedValue(new ApiError(403, { detail: "Accès refusé." }));
+    const user = userEvent.setup();
+    renderModal();
+
+    expect(await screen.findByText("Non sélectionnable pour l'instant")).toBeInTheDocument();
+    await user.click(screen.getByText("Aimé Leurre"));
+    const dialog = screen.getAllByRole("dialog")[0]!;
+    expect(dialog.textContent ?? "").not.toMatch(/dette|suspen|inapt|adhésion/i);
+  });
+
   it("erreur réseau : garde le comportement actuel (is_unavailable sans motif)", async () => {
     mockRoster([player(13, "Aimé", "Leurre", true)]);
     vi.mocked(listEligibility).mockRejectedValue(new ApiError(0, null));

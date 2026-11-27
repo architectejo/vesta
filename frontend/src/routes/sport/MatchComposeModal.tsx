@@ -40,8 +40,8 @@ const POSITION_OPTIONS = [
 export const COMPOSE_ROSTER_QUERY_KEY = ["clubs", "players", "compose-roster"] as const;
 
 /** Texte de repli quand l'API d'éligibilité n'a pas fourni de motif (403, réseau). */
-const GENERIC_REASON = "Non sélectionnable (dette, suspension, inaptitude ou adhésion en attente)";
-const GENERIC_REASON_INLINE = "dette, suspension, inaptitude ou adhésion en attente";
+const GENERIC_REASON = "Non sélectionnable pour l'instant";
+const GENERIC_REASON_INLINE = "motif non disponible pour l'instant";
 
 interface DraftRow {
   role: "starter" | "substitute";
