@@ -19,6 +19,8 @@
  * - tout type inconnu ou vide.
  */
 
+import { FINANCIAL_SITUATION_ROUTE } from "../routes/profil/profileLinks";
+
 export interface NotificationLinkInput {
   eventType: string;
   linkObjectType: string;
@@ -45,6 +47,9 @@ export function resolveNotificationRoute(
   { isPaymentRecorder, isCoach = false, isTreasuryViewer = false, isSuperuser = false }: NotificationLinkContext,
 ): string | null {
   const id = linkObjectId;
+  // Incitation du chat (CDC 10.3 n° 182, fil-public-communication.md C7.5) :
+  // sans objet lié ; « mène à leur solde », jamais au chat.
+  if (eventType === "chat_members_in_order_incentive") return FINANCIAL_SITUATION_ROUTE;
   switch (linkObjectType) {
     case "Match":
       return id === null ? null : `/matchs/${id}`;

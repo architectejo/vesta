@@ -4,6 +4,11 @@ export interface CheckboxProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
   label: ReactNode;
+  /**
+   * Aide affichée sous le libellé (13 px, `--color-text-muted`), liée à la
+   * case par `aria-describedby`.
+   */
+  description?: ReactNode;
   error?: string;
   disabled?: boolean;
   id?: string;
@@ -18,9 +23,10 @@ export interface CheckboxProps {
  * porte la zone tactile à 44 px sans agrandir ni la case ni le texte (§1.3 ;
  * vérification visuelle B7 : la zone ne faisait que 20 px).
  */
-export function Checkbox({ checked, onChange, label, error, disabled, id }: CheckboxProps) {
+export function Checkbox({ checked, onChange, label, description, error, disabled, id }: CheckboxProps) {
   const autoId = useId();
   const fieldId = id ?? autoId;
+  const descriptionId = description ? `${fieldId}-description` : undefined;
   return (
     <div>
       <label
@@ -38,10 +44,18 @@ export function Checkbox({ checked, onChange, label, error, disabled, id }: Chec
           disabled={disabled}
           onChange={(e) => onChange(e.target.checked)}
           aria-invalid={Boolean(error) || undefined}
+          aria-describedby={descriptionId}
           className="relative z-[1] mt-0.5 h-4 w-4 shrink-0 rounded-sm border-border-strong text-primary disabled:opacity-60"
         />
         <span>{label}</span>
       </label>
+      {description ? (
+        // Hors du libellé : le nom accessible de la case reste le libellé seul,
+        // l'aide est lue en description.
+        <p id={descriptionId} className="-mt-1.5 pb-1 pl-6 text-[13px] text-text-muted">
+          {description}
+        </p>
+      ) : null}
       {error ? <p className="mt-1 text-xs text-status-danger-fg">{error}</p> : null}
     </div>
   );

@@ -7,6 +7,12 @@ export interface BannerProps {
   children: ReactNode;
   action?: ReactNode;
   className?: string;
+  /**
+   * Rôle ARIA. Par défaut `alert` (danger) ou `status` (les autres, annoncés
+   * poliment). `note` : bandeau statique dont l'apparition n'est pas annoncée
+   * (ex. chat, fiche fil-public-communication.md C7.7).
+   */
+  role?: "alert" | "status" | "note";
 }
 
 const VARIANT_CLASSES: Record<BannerVariant, string> = {
@@ -22,10 +28,10 @@ const VARIANT_CLASSES: Record<BannerVariant, string> = {
  * Bandeau pleine largeur (docs/lot0/design-system.md §3.1) : `danger`,
  * `warning`, `info`, `readonly`, `support`.
  */
-export function Banner({ variant, children, action, className = "" }: BannerProps) {
+export function Banner({ variant, children, action, className = "", role }: BannerProps) {
   return (
     <div
-      role={variant === "danger" ? "alert" : "status"}
+      role={role ?? (variant === "danger" ? "alert" : "status")}
       className={[
         "flex flex-wrap items-center justify-between gap-2 rounded-md px-3 py-2 text-sm",
         VARIANT_CLASSES[variant],

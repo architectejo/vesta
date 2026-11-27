@@ -42,4 +42,15 @@ describe("Checkbox", () => {
     expect(screen.getByText("Obligatoire.")).toBeInTheDocument();
     expect(screen.getByRole("checkbox")).toHaveAttribute("aria-invalid", "true");
   });
+
+  it("lie l'aide à la case par aria-describedby, hors du nom accessible", () => {
+    render(<Checkbox checked={false} onChange={() => {}} label="J'accepte" description="Texte d'aide." />);
+    const box = screen.getByRole("checkbox", { name: "J'accepte" });
+    expect(box).toHaveAccessibleDescription("Texte d'aide.");
+  });
+
+  it("n'ajoute aucune description sans aide", () => {
+    render(<Checkbox checked={false} onChange={() => {}} label="J'accepte" />);
+    expect(screen.getByRole("checkbox")).not.toHaveAttribute("aria-describedby");
+  });
 });

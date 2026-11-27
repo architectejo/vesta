@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { getContributeInfo, getMyBalance, getMyPayments, getPaymentDeclarations } from "../../api/treasury";
 import { Button, EmptyState, Skeleton, StatusBadge } from "../../design-system";
 import { useDeepLink } from "../../hooks/useDeepLink";
@@ -8,6 +9,7 @@ import { formatAmount, formatDateFr } from "../treasury/money";
 import { MyPaymentDetailModal, type MyPaymentTarget } from "./MyPaymentDetailModal";
 import { MyContributionsSection } from "./MyContributionsSection";
 import { ReceiptDownloadButton } from "./ReceiptDownloadButton";
+import { FINANCIAL_SITUATION_ANCHOR } from "./profileLinks";
 
 /** CDC 4.1 / 3.3 : les 20 derniers paiements, puis « Voir plus » par tranche de 20. */
 const PAGE_SIZE = 20;
@@ -44,6 +46,19 @@ export function FinancialSituationCard() {
   const [detail, setDetail] = useState<MyPaymentTarget | null>(null);
   // Liens depuis une notification : paiement validé (`?paiement=<id>`) ou
   // déclaration « J'ai payé » refusée (`?declaration=<id>`).
+  const location = useLocation();
+  const sectionRef = useRef<HTMLElement | null>(null);
+
+  // Lien « /profil#situation-financiere » (chat, notification d'incitation,
+  // fil-public-communication.md C7.4 et C7.5) : positionne la page sur la carte.
+  useEffect(() => {
+    if (location.hash !== `#${FINANCIAL_SITUATION_ANCHOR}`) return;
+    const section = sectionRef.current;
+    if (!section) return;
+    if (typeof section.scrollIntoView === "function") section.scrollIntoView({ block: "start" });
+    section.focus({ preventScroll: true });
+  }, [location.hash, location.key]);
+
   useDeepLink("paiement", (id) => setDetail({ id, kind: "payment" }));
   useDeepLink("declaration", (id) => setDetail({ id, kind: "declaration" }));
 
@@ -97,7 +112,13 @@ export function FinancialSituationCard() {
   }
 
   return (
-    <section className="rounded-lg bg-surface p-3 shadow-card sm:p-4" aria-label="Situation financière">
+    <section
+      ref={sectionRef}
+      id={FINANCIAL_SITUATION_ANCHOR}
+      tabIndex={-1}
+      className="scroll-mt-4 rounded-lg bg-surface p-3 shadow-card outline-none sm:p-4"
+      aria-label="Situation financière"
+    >
       <h2 className="text-base font-semibold text-text">Situation financière</h2>
 
       {balanceQuery.isLoading ? (

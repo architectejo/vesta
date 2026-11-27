@@ -245,6 +245,8 @@ export interface ChatMessage {
   body: string;
   image_url: string | null;
   sent_at: string;
+  /** Message réservé aux membres en ordre (CDC 10.3 n° 182, fiche C7). Absent des réponses pour qui ne peut pas le lire. */
+  members_in_order_only: boolean;
 }
 
 export interface ChatChannel {
@@ -252,6 +254,10 @@ export interface ChatChannel {
   channel_type: ChatChannelType;
   unread_count: number;
   last_message: ChatMessage | null;
+  /** Vrai si l'utilisateur peut réserver un message de ce canal aux membres en ordre (C7.2). Jamais déduit des rôles. */
+  can_restrict_to_members_in_order: boolean;
+  /** Vrai si au moins un message réservé de ce canal n'est pas visible pour l'utilisateur (bandeau C7.4). */
+  has_hidden_reserved_messages: boolean;
 }
 
 export function listChatChannels() {
@@ -276,10 +282,14 @@ export function listChatMessages(
   return apiGet<ChatMessageListResponse>(`/social/chat/channels/${channelId}/messages/${suffix ? `?${suffix}` : ""}`);
 }
 
-export function sendChatMessage(channelId: number, input: { body: string; image?: File | null }) {
+export function sendChatMessage(
+  channelId: number,
+  input: { body: string; image?: File | null; membersInOrderOnly?: boolean },
+) {
   const form = new FormData();
   form.append("body", input.body);
   if (input.image) form.append("image", input.image);
+  if (input.membersInOrderOnly) form.append("members_in_order_only", "true");
   return apiPost<ChatMessage>(`/social/chat/channels/${channelId}/messages/`, form);
 }
 

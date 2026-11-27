@@ -27,6 +27,11 @@ describe("resolveNotificationRoute", () => {
     expect(route("Inventory", 3)).toBe("/materiel?inventaire=3");
   });
 
+  it("mène l'incitation du chat (sans objet lié) à la carte « Situation financière » du profil", () => {
+    expect(route("", null, "chat_members_in_order_incentive")).toBe("/profil#situation-financiere");
+    expect(route("", null, "chat_members_in_order_incentive", recorder)).toBe("/profil#situation-financiere");
+  });
+
   it("oriente un paiement selon le destinataire", () => {
     expect(route("Payment", 4, "payment_validated")).toBe("/profil?paiement=4");
     expect(route("Payment", 4, "i_paid_declared", recorder)).toBe("/tresorerie?paiement=4");

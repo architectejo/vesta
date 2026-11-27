@@ -45,6 +45,11 @@ export function ChatPage() {
     refetchInterval: () => (document.visibilityState === "hidden" ? false : 30_000),
   });
 
+  // Version à jour du canal ouvert (indicateurs C7 : case « réservé »,
+  // bandeau) ; à défaut, la version du clic.
+  const liveOpenChannel =
+    openChannel === null ? null : (query.data?.results.find((c) => c.id === openChannel.id) ?? openChannel);
+
   return (
     <div className="mx-auto max-w-[640px] space-y-4">
       <header>
@@ -80,7 +85,15 @@ export function ChatPage() {
                       <p className="text-sm font-semibold text-text">{meta.name}</p>
                       <p className="text-[13px] text-text-muted">{meta.description}</p>
                       {channel.last_message ? (
-                        <p className="truncate text-[13px] text-text-muted">{lastMessagePreview(channel)}</p>
+                        <p className="truncate text-[13px] text-text-muted">
+                          {channel.last_message.members_in_order_only ? (
+                            <>
+                              <IconLock aria-hidden="true" className="mr-1 inline h-3 w-3 align-[-1px]" strokeWidth={1.5} />
+                              <span className="sr-only">Réservé aux membres en ordre : </span>
+                            </>
+                          ) : null}
+                          {lastMessagePreview(channel)}
+                        </p>
                       ) : null}
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
@@ -101,7 +114,9 @@ export function ChatPage() {
         )}
       </section>
 
-      {openChannel !== null ? <ConversationModal channel={openChannel} onClose={() => setOpenChannel(null)} /> : null}
+      {liveOpenChannel !== null ? (
+        <ConversationModal channel={liveOpenChannel} onClose={() => setOpenChannel(null)} />
+      ) : null}
     </div>
   );
 }

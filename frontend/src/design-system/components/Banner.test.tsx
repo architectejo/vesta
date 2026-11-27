@@ -12,4 +12,10 @@ describe("Banner", () => {
     render(<Banner variant="info">Vous êtes hors connexion.</Banner>);
     expect(screen.getByRole("status")).toHaveTextContent("Vous êtes hors connexion.");
   });
+
+  it("accepte role=note pour un bandeau statique non annoncé", () => {
+    render(<Banner variant="info" role="note">Information discrète.</Banner>);
+    expect(screen.getByRole("note")).toHaveTextContent("Information discrète.");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
 });
