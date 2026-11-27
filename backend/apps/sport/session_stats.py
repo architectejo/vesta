@@ -22,8 +22,11 @@ Positions par défaut appliquées (questions de la spec, à valider) :
   fausse ni les moyennes ni les courbes.
 - « Meilleures » et « plus faibles » notes : au plus 3 rangs, ex æquo tous
   affichés (5 lignes au plus) ; un joueur déjà cité parmi les meilleures
-  n'est pas répété parmi les plus faibles. Moins de 2 joueurs évalués : pas
-  de classement.
+  n'est pas répété parmi les plus faibles. Sous 6 joueurs évalués, les deux
+  listes se partagent l'effectif (meilleures : moitié haute arrondie au-dessus,
+  plus faibles : le reste, ex. 3 évalués = 2 + 1) pour que « Notes les plus
+  faibles » ne soit jamais vide dès 2 notes distinctes (décision par défaut,
+  à confirmer). Moins de 2 joueurs évalués : pas de classement.
 - Écart avec la moyenne : calculé sur les 10 séances précédentes, absent
   (null) s'il y en a moins de 3 de comparables.
 """
@@ -87,10 +90,20 @@ def parse_period(value) -> str:
     return value
 
 
-def _pct(numerator: int, denominator: int) -> Optional[int]:
+def attendance_rate_percent(numerator: int, denominator: int) -> Optional[int]:
+    """Taux de présence en pourcentage, arrondi à l'unité (demi vers le haut).
+
+    Règle unique d'arrondi des taux de présence (spec A4.1) : réutilisée par le
+    tableau de bord du bureau, qui doit afficher le même chiffre
+    (``club-tableau-de-bord-bureau.md`` §9). Dénominateur nul : ``None``.
+    """
+
     if not denominator:
         return None
     return int((Decimal(numerator * 100) / Decimal(denominator)).quantize(_ONE, rounding=ROUND_HALF_UP))
+
+
+_pct = attendance_rate_percent
 
 
 def _name(membership: Membership) -> str:
@@ -213,6 +226,19 @@ def _ranked(items, *, reverse: bool):
             previous = note
         ranked.append((rank, membership, note))
     return ranked
+
+
+def _ranking_caps(evaluated_count: int) -> tuple[int, int]:
+    """Nombre de rangs des listes « Meilleures notes » et « Notes les plus
+    faibles » (décision par défaut, à confirmer : la spec A4.2 ne règle pas
+    le cas d'un petit effectif). 3 rangs chacune ; sous 6 joueurs évalués,
+    moitié haute arrondie au-dessus pour les meilleures, moitié basse pour les
+    plus faibles. Aucun joueur n'est cité dans les deux listes."""
+
+    return (
+        min(RANKING_MAX_RANK, math.ceil(evaluated_count / 2)),
+        min(RANKING_MAX_RANK, evaluated_count // 2),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -355,11 +381,15 @@ def _build_evaluations_block(
     ranking_available = len(evaluated_members) >= 2
     best, lowest = [], []
     if ranking_available:
-        top_ranked = [r for r in _ranked(evaluated_members, reverse=True) if r[0] <= RANKING_MAX_RANK]
+        # Moins de 6 joueurs évalués : les deux listes se partagent l'effectif
+        # (meilleures = moitié haute, plus faibles = moitié basse) pour que
+        # « Notes les plus faibles » apparaisse dès 2 joueurs évalués.
+        best_max_rank, lowest_max_rank = _ranking_caps(len(evaluated_members))
+        top_ranked = [r for r in _ranked(evaluated_members, reverse=True) if r[0] <= best_max_rank]
         best_ranked = top_ranked[:RANKING_MAX_LINES]
-        best_ids = {m.pk for _rank, m, _note in top_ranked}
+        best_ids = {m.pk for _rank, m, _note in top_ranked}  # ex æquo au-delà de 5 lignes : jamais « plus faibles »
         remaining = [(m, note) for m, note in evaluated_members if m.pk not in best_ids]
-        lowest_ranked = [r for r in _ranked(remaining, reverse=False) if r[0] <= RANKING_MAX_RANK][
+        lowest_ranked = [r for r in _ranked(remaining, reverse=False) if r[0] <= lowest_max_rank][
             :RANKING_MAX_LINES
         ]
         best = [{"rank": rank, "player": brief(m), "note": str(note)} for rank, m, note in best_ranked]

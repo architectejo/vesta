@@ -150,7 +150,15 @@ def paging_from_query(params) -> tuple[int, int]:
 
 
 def _pct(numerator: int, denominator: int) -> Optional[str]:
-    return fin._share(numerator, denominator)
+    """Taux de présence : même règle d'arrondi (unité) que la page
+    Entraînements (``apps.sport.session_stats.attendance_rate_percent``),
+    spec ``club-tableau-de-bord-bureau.md`` §9. Renvoyé en chaîne (contrat
+    ``Rate`` de l'interface), ex. ``"34"``."""
+
+    from apps.sport.session_stats import attendance_rate_percent
+
+    rate = attendance_rate_percent(numerator, denominator)
+    return None if rate is None else str(rate)
 
 
 def _avg(total: Decimal, count: int) -> Optional[str]:

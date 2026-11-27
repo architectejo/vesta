@@ -661,3 +661,84 @@ Conséquences sur le cadrage :
 
 Si tu ne valides pas l'idée, explique pourquoi au client (coût, technique, hébergement) avant
 toute modification du CDC.
+Ne lance ni `vite build` ni `vite preview` pendant les e2e (incident `.env.production`).
+
+### 2026-11-27 — dev-a → dev-b — Passation : dev-a s'arrête, tu reprends toutes les tâches
+Sur ordre du propriétaire, dev-a s'arrête après ce push. **Tu reprends tout**, backend et
+cahier des charges compris (la répartition de la section 2 ne s'applique plus). Continue
+avec les sous-agents de `.claude/agents/` (`backend-dev`, `finance-engine` pour tout ce
+qui touche la trésorerie, `data-import`, `test-engineer`, `security-auditor`,
+`cdc-reviewer`) et le flux de `CLAUDE.md` §8.
+
+**Autorisation** : le propriétaire autorise l'accès au navigateur (outils Claude in Chrome)
+sur dev-a et dev-b, pour l'application locale. Nouvel onglet, pas ceux du propriétaire.
+
+**Livré dans ce push** (commit `96dd5f8`) : tes défauts backend n° 1 à 4 de la série 5.
+- Taux de présence du tableau de bord arrondi à l'unité (`attendance_rate_percent` dans
+  `apps/sport/session_stats.py`, utilisé par `board_dashboard.py`) : `"34"` au lieu de
+  `"34.48"` (toujours une chaîne).
+- « Notes les plus faibles » : rangs partagés sous 6 joueurs évalués (2 → 1/1, 3 → 2/1,
+  4 → 2/2, 5 → 3/2, 6+ → 3/3), ex æquo du côté des meilleures. **Position par défaut à
+  faire confirmer et à inscrire au CDC.**
+- `seed_simulation` : joueurs éligibles seulement dans le plan tactique, séances et matchs
+  passés re-verrouillés (section 9, répare aussi ta base), club du mercato non figé, logo
+  facultatif, nom de club écrit en dur retiré. Les comptes e2e (mot de passe initial levé,
+  CGU acceptées, domaines fictifs seulement) ne sont préparés **qu'avec l'option
+  `--prepare-e2e-accounts`** : un compte du club pilote a une adresse provisoire, la levée
+  par défaut aurait été dangereuse.
+- Tests : `test_board_dashboard.py` 87/87 ; `test_session_stats.py`, `test_seed_simulation.py`,
+  `test_prod_settings.py` verts. **Audits `security-auditor` et `cdc-reviewer` de ces
+  corrections non faits : à faire.**
+→ Tu peux lancer **B9** (série 5, objectif 45/45).
+
+**Tâches restantes de dev-a, à toi désormais** (dans cet ordre conseillé) :
+1. **Audits** des corrections ci-dessus (sécurité, conformité), puis suite backend complète.
+2. **Tes demandes backend** :
+   - `club.timezone` dans `GET /clubs/profile/me/` (`apps/clubs/profile_services.py::get_my_profile`) ;
+   - carte joueur : `membership_status` « En attente » visible du **Trésorier** (le
+     masquage du 10.2 n° 16 vise les coéquipiers) ;
+   - motif d'indisponibilité pour le Coach (`sport-feuille-de-match.md` §4.1 bis :
+     « En dette : 30 $ », « Suspendu : encore 1 match ») : point d'accès d'éligibilité groupée ;
+   - registre de l'intendance : `include_exits` transmis au PDF et au CSV ; libellé du total
+     (stock actuel) face aux lignes (entrées) ; « Don de … » dans la colonne `origine` du CSV
+     (comparer au format d'import §9.1) ; accords « pièce(s) », « sortie(s) ».
+3. **Chat réservé aux membres en ordre** (décision du client du 27/11, circuit 9.4) : inscrire
+   au CDC (§4.16, §2.4, 10.3 n° 182), puis backend (filtrage serveur à la lecture : liste,
+   `after=`, images, non-lus ; notification d'incitation au plus une par jour ; journal sans
+   texte), puis interface. Questions encore ouvertes : canal du bureau, joueur en attente,
+   badge, regroupement journalier.
+4. **Assistant IA de rédaction** (circuit 9.4, à étudier, **rien à coder avant validation**) :
+   fiche CDC (10.3 n° 183) avec mon avis technique et financier. Inclus dans toutes les
+   licences, API Claude. Chiffrer avec la **grille tarifaire officielle à jour**
+   d'Anthropic (ne pas l'écrire de mémoire), comparer `claude-haiku-5-5` et
+   `claude-sonnet-5-5`, proposer quota et grille de licences. Appel synchrone avec délai
+   maximal (pas de processus permanent), `ANTHROPIC_API_KEY` en variable d'environnement,
+   aucune donnée personnelle, financière ou médicale envoyée, mention dans les CGU, texte
+   toujours relu et envoyé par l'humain, jamais « IMARA TECH Group » dans les textes générés.
+5. **CDC à mettre à jour** :
+   - tes positions du chrono (48 h, page de la séance seulement) ;
+   - le partage des rangs des notes (ci-dessus) ;
+   - définition unique de la **moyenne de présence** : le tableau de bord fait total des
+     présents ÷ total des attendus, l'historique sport fait la moyenne des taux par séance
+     (écart possible de 1 point, contraire à `club-tableau-de-bord-bureau.md` §9) ;
+   - **club sans type « adhésion »** : le joueur reste « En attente » sans fin (question au
+     client) ;
+   - Q20 et Q22 de l'intendance : si l'accès est restreint, c'est l'API qui filtre.
+6. **Questions au propriétaire déjà inscrites au CDC** :
+   - n° 181 : filtre « Détenteur » du registre, logo du PDF sur chaque page, mention
+     d'auteur d'un document de Superuser, réactivation d'un détenteur archivé ;
+   - n° 100 : frais d'adhésion dus sans délai, pas de frais pour les membres historiques,
+     paiement partiel devenu crédit.
+7. **Défaut connu de `seed_simulation`** : la séance d'évaluation est datée dans la saison
+   « 2026 », figée. À partir de 2027, cette partie échouera.
+8. **Reprise des données réelles du club pilote** (A4) : **seulement sur ordre du
+   propriétaire**. Ce jour-là, lancer d'abord `rebalance_membership_fee_dues --club <id>`
+   **en simulation** (sans `--apply`), puis l'import des 3 classeurs de `data/Nouveaux/`
+   (14 noms à rapprocher, 8 nouveaux joueurs sans adresse e-mail).
+9. `remarques.md` : les lignes 83 à 95 sont livrées ; coche-les quand la série 5 sera à
+   45/45. La ligne 77 (série complète jusqu'à zéro défaut) correspond à ta série 6 + B9.
+
+**Rappels de sécurité** (inchangés) : aucun agent ne lance `migrate`, `shell`, `flush` ou
+une commande de données sur une base réelle sans sauvegarde et sans ordre du propriétaire ;
+pas de `--force` ; jamais de `*.sqlite3`, `data/`, `.env` ou `*.zip` dans un commit ;
+`main` n'est fusionné qu'à la demande du propriétaire.

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 
 import pytest
 from django.db import connection
@@ -29,6 +30,7 @@ from apps.logistics.models import Article, StockMovement
 from apps.medical.models import HealthRecord
 from apps.sport import services as sport_services
 from apps.sport.models import Attendance, Evaluation, Incident, MatchGoal, MatchSheet
+from apps.sport.session_stats import attendance_rate_percent
 from apps.sport.tests.conftest import build_sport_club_context, client_for, make_member
 from apps.sport.tests.factories import EventFactory, MatchFactory, SessionFactory
 
@@ -294,15 +296,28 @@ class TestAttendance:
         assert card["totals"]["expected"] == 2 * n
         assert card["totals"]["late"] == 1 and card["totals"]["excused"] == 1
         # retard compté absent (défaut du club) : (n-2) + n présents sur 2n
-        assert card["average_rate"] == f"{(2 * n - 2) * 100 / (2 * n):.2f}"
-        assert len(card["points"]) == 2 and card["points"][0]["rate"] == f"{(n - 2) * 100 / n:.2f}"
+        assert card["average_rate"] == str(attendance_rate_percent(2 * n - 2, 2 * n))
+        assert len(card["points"]) == 2 and card["points"][0]["rate"] == str(attendance_rate_percent(n - 2, n))
         assert card["by_kind"]["session"]["events"] == 2 and card["by_kind"]["match"]["events"] == 0
+
+    def test_taux_arrondi_a_l_unite_comme_la_page_entrainements(self, ctx, trained):
+        """Spec §9 : le taux affiché ici est égal à celui de
+        ``GET /sport/sessions/{id}/stats/`` (arrondi à l'unité, A4.1)."""
+
+        assert board_dashboard._pct(10, 29) == "34"  # 34,48 % -> 34
+        assert board_dashboard._pct(1, 8) == "13"  # 12,5 % -> 13 (demi vers le haut)
+        assert board_dashboard._pct(0, 0) is None
+        points = {p["event_id"]: p["rate"] for p in get(ctx.president.user).data["attendance"]["points"]}
+        for event in (trained["s1"], trained["s2"]):
+            url = reverse("sport:session-stats", args=[event.session.pk])
+            sport_rate = client_for(ctx.coach.user).get(url).data["attendance"]["rate"]
+            assert points[event.pk] == str(sport_rate)
 
     def test_retard_compte_present_selon_le_club(self, ctx, trained):
         type(ctx.club.settings).objects.filter(club=ctx.club).update(late_arrival_counts_absent=False)
         card = get(ctx.president.user).data["attendance"]
         n = trained["n"]
-        assert card["average_rate"] == f"{(2 * n - 1) * 100 / (2 * n):.2f}"
+        assert card["average_rate"] == str(attendance_rate_percent(2 * n - 1, 2 * n))
 
     def test_detail_seances_et_ranking(self, ctx, trained):
         data = get_section(ctx.president.user, "attendance").data
@@ -310,9 +325,9 @@ class TestAttendance:
         assert {"present", "late", "excused", "absent", "rate", "date"} <= set(data["sessions"]["items"][0])
         ranking = get_section(ctx.president.user, "attendance_ranking").data
         names = [p["player_name"] for p in ranking["players"]["items"]]
-        assert len(names) == trained["n"] and ranking["players"]["items"][-1]["rate"] in ("50.00", "100.00")
+        assert len(names) == trained["n"] and ranking["players"]["items"][-1]["rate"] in ("50", "100")
         card = get(ctx.president.user).data["attendance_ranking"]
-        assert len(card["top"]) == 5 and card["top"][0]["rate"] == "100.00"
+        assert len(card["top"]) == 5 and card["top"][0]["rate"] == "100"
         assert not {p["membership_id"] for p in card["top"]} & {p["membership_id"] for p in card["bottom"]}
 
     def test_joueur_arrive_apres_l_evenement_non_attendu(self, ctx):
@@ -623,12 +638,20 @@ class TestTenantIsolation:
         assert data["squad_status"]["suspended"]["count"] == 0
         blob = json.dumps(data, default=str) + json.dumps(get_section(ctx.president.user, "results").data, default=str)
         assert "AdversaireSecret" not in blob
-        other_names = {m.user.last_name for m in Membership.all_objects.filter(club=other_ctx.club) if m.user.last_name}
+        # Noms complets et limites de mot : les noms Faker de l'autre club ne
+        # doivent pas donner de faux positif (« Chan » contenu dans « Chandler »).
+        def full_names(club):
+            return {
+                f"{m.user.first_name} {m.user.last_name}".strip()
+                for m in Membership.all_objects.filter(club=club).select_related("user")
+                if m.user.last_name
+            }
+
+        other_names = full_names(other_ctx.club) - full_names(ctx.club)
         for section in ("newcomers", "attendance_ranking", "discipline", "fitness", "squad_status"):
             text = json.dumps(get_section(ctx.president.user, section, limit=100).data, default=str)
-            own = {m.user.last_name for m in Membership.all_objects.filter(club=ctx.club)}
-            for name in other_names - own:
-                assert name not in text
+            for name in other_names:
+                assert not re.search(rf"\b{re.escape(name)}\b", text), f"{name} (autre club) dans la section {section}"
 
     def test_le_president_d_un_autre_club_ne_voit_que_son_club(self, ctx, other_ctx):
         make_match(other_ctx, score=(2, 2))
