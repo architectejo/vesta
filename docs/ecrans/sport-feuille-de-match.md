@@ -56,7 +56,7 @@ Footer.
 - **Liste de tous les joueurs du club** (pas de limite, 4.8). Ligne :
   - case à cocher (zone 44 px), avatar 40, nom, poste habituel ;
   - si cochée, la ligne se déplie : SegmentedControl « Titulaire » / « Remplaçant » (défaut : Titulaire), « Poste du jour » (Select de postes, défaut : poste habituel), « N° du jour » (NumberField, défaut : numéro de maillot) ;
-  - **joueur non sélectionnable** : ligne grisée, case désactivée, raison de l'API sous le nom : « En dette : {montant} », « Suspendu : encore {n} match(s) », « Inapte (avis médical) », « En attente d'adhésion ». Pour le Trésorier ou l'adjoint connecté, lien « Encaisser » (ouvre la Caisse Terrain Express au niveau 2, joueur prérempli).
+  - **joueur non sélectionnable** : ligne grisée, case désactivée, raison de l'API sous le nom : « En dette : {montant} », « Suspendu : encore {n} match(s) », « Inapte · retour prévu le {date} » ou « Inapte · date de retour non fixée » (aptitude et date de retour seulement, jamais de diagnostic, CLAUDE.md règle 11), « En attente d'adhésion ». Pour le Trésorier ou l'adjoint connecté, lien « Encaisser » (ouvre la Caisse Terrain Express au niveau 2, joueur prérempli).
 - **Régularisation sur place** (4.8) : l'éligibilité est rafraîchie toutes les 15 s tant que la modale est ouverte ; un joueur régularisé devient cochable, avec toast « {nom} est désormais sélectionnable. »
 - Tri : sélectionnables d'abord (par poste puis nom), non sélectionnables ensuite.
 - Erreurs : « Le numéro {n} est déjà attribué à {nom} pour ce match. » ; si un joueur devient non sélectionnable entre-temps, l'API refuse et la ligne affiche « {nom} n'est plus sélectionnable : {raison}. »
@@ -76,7 +76,7 @@ Le service de composition fait le contrôle réel : il refuse un joueur en dette
 | Enregistrement malgré tout (course entre deux requêtes) | L'API refuse ce joueur. L'erreur s'affiche sur sa ligne et la modale reste ouverte. |
 | Hors connexion | « Composer l'équipe » et « Publier la composition » exigent une connexion : la composition n'est pas dans la liste du 6.6. Bouton désactivé avec l'aide « Cette action nécessite une connexion. » |
 
-**Raison affichée dans la modale** : seul le Coach ouvre cette modale (matrice 2.4, « Feuille de match et composition » : É pour le Coach uniquement). Il voit les raisons complètes prévues au 4.8 : « En dette : {montant} », « Suspendu : encore {n} match(s) », « Inapte (avis médical) », « En attente d'adhésion ». Il ne voit jamais de diagnostic (4.12).
+**Raison affichée dans la modale** : seul le Coach ouvre cette modale (matrice 2.4, « Feuille de match et composition » : É pour le Coach uniquement). Il voit les raisons complètes prévues au 4.8 : « En dette : {montant} », « Suspendu : encore {n} match(s) », « Inapte · retour prévu le {date} » ou « Inapte · date de retour non fixée » (aptitude et date de retour seulement, jamais de diagnostic, CLAUDE.md règle 11), « En attente d'adhésion ». Il ne voit jamais de diagnostic (4.12). Le montant de « En dette : {montant} » est affiché au format monétaire du club (voir CDC 10.3 n° 188).
 
 **Régularisation sur place** (critère du Lot 3 : « il devient sélectionnable dès son paiement en caisse ») : dès que l'API renvoie le joueur comme sélectionnable, la ligne se dégrise sans fermer la modale et le toast « {nom} est désormais sélectionnable. » s'affiche. Le délai maximal est celui de l'interrogation (15 s). Si la modale est ouverte sur le même téléphone que la Caisse Terrain Express, l'éligibilité est rechargée immédiatement après l'encaissement.
 

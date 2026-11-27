@@ -231,7 +231,7 @@ Aide : « Les pièces restent dans le stock jusqu'à leur sortie. » Pied : « A
 
 - Lecture : article, quantité, détenteur, motif, date du constat, « Signalé par {nom} » ; si déclassé : « Sorti le {date} · {destination} · par {nom} » ; si annulé : « Annulé le {date} par {nom} : {motif} ».
 - Pied (Intendant, en attente) : « Fermer » / « Sortir du stock ». Menu « … » : « Annuler le signalement ».
-- **« Sortir du stock »** → sous-modale `sm` : « Date de sortie » (DateField, obligatoire, pas dans le futur, pas avant le constat) ; « Destination (facultatif) » (TextField 120, ex. « Donné à l'école du quartier ») ; puis `ConfirmDialog` « Sortir {n} {unité} de {article} du stock ? » — « Cette sortie est définitive : elle ne pourra pas être supprimée. » — « Annuler » / « Sortir du stock ». Succès : « {n} {unité} sortis du stock. Stock de {article} : {m} {unité}. »
+- **« Sortir du stock »** → sous-modale `sm` : « Date de sortie » (DateField, obligatoire, pas dans le futur, pas avant le constat) ; « Destination (facultatif) » (TextField 120, ex. « Donné à l'école du quartier ») ; puis `ConfirmDialog` « Sortir {n} {unité} de {article} du stock ? » — « Cette sortie est définitive : elle ne pourra pas être supprimée. » — « Annuler » / « Sortir du stock ». Succès : « Sortie du stock : {n} {unités}. Stock de {article} : {m} {unités}. » (quantités accordées : « 1 pièce », « 3 pièces »)
 - **« Annuler le signalement »** → `ConfirmDialog` avec champ « Motif » obligatoire — « Annuler » / « Annuler le signalement ». Succès : « Signalement annulé. »
 
 ---
@@ -311,6 +311,8 @@ Ligne d'étape 13 px : « Étape 1 sur 3 · Fichier » / « Étape 2 sur 3 · Ap
 ---
 
 ## 10. Registre de l'intendance (consultation, PDF, CSV) [NOUVEAU] — constat (h)
+
+> **Accord des quantités.** Toute quantité affichée « {n} {unité} » dans ce document est accordée en nombre (0 et 1 au singulier, pluriel dès 2 ; unités abrégées invariables : kg, l, m…). L'API fournit `quantity_label` ; l'unité stockée et la colonne `unite` du CSV restent inchangées.
 
 ### 10.1 Accès
 
