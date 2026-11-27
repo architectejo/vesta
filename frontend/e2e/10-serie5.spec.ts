@@ -8,6 +8,9 @@ import {
   PUBLISHED_PLAN_NAME,
   TODAY_SESSION_ID,
   UNAVAILABLE_PLAYERS,
+  escapeRegExp,
+  todayLongLabel,
+  todayShortLabel,
 } from "./support/demo";
 
 /**
@@ -29,6 +32,10 @@ import {
  */
 // Ordre d'exécution : celui du fichier (workers: 1, fullyParallel: false),
 // sans mode « serial » pour qu'un échec n'empêche pas les parcours suivants.
+
+// Navigateur Chromium complet si le shell headless est mis en quarantaine par
+// Windows Defender (MESSAGES.md 26/11) : `PW_CHANNEL=chromium`.
+if (process.env.PW_CHANNEL) test.use({ channel: process.env.PW_CHANNEL, video: "off" });
 
 const SESSION_URL = `/seances/${TODAY_SESSION_ID}`;
 
@@ -353,13 +360,13 @@ test.describe("Statistiques de séance", () => {
   test("trainings_page_session_row_opens_read_only_session_statistics", async ({ page }) => {
     await loginAs(page, DEMO.coach);
     await page.goto("/entrainements");
-    await page.getByRole("button", { name: /^jeu\. 26 nov\./i }).click();
+    await page.getByRole("button", { name: new RegExp(`^${escapeRegExp(todayShortLabel())}`, "i") }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
     // L'écran « Entraînements » ouvre une modale « Séance du … » consacrée
     // aux statistiques (l'Espace coach et son onglet « Statistiques » n'ont
     // pas d'entrée de menu) ; le chemin vers la page passe par « Ouvrir la séance ».
-    await expect(dialog.getByRole("heading", { name: /Séance du jeudi 26 novembre/ })).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: new RegExp(`Séance du ${escapeRegExp(todayLongLabel())}`) })).toBeVisible();
     await expect(dialog.getByText("Taux de présence").first()).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Ouvrir la séance" })).toBeVisible();
     // A5.1 : lecture seule, aucun bouton « Évaluer » ni « Mesurer ».
@@ -558,7 +565,7 @@ test.describe("Vestiaire et plans", () => {
     // sport-vestiaire.md §3 : contexte « {nom du club} · {jeudi 26 novembre} ».
     await loginAs(page, DEMO.player);
     await page.goto("/vestiaire");
-    await expect(page.getByText(/Club Démo · jeudi 26 novembre/)).toBeVisible();
+    await expect(page.getByText(new RegExp(`Club Démo · ${escapeRegExp(todayLongLabel())}`))).toBeVisible();
   });
 
   test("coach_plans_tab_lists_published_and_draft_plans_with_actions", async ({ page }) => {

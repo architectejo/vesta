@@ -77,20 +77,20 @@ Voici le contexte technique actuel :
 Peux-tu analyser les causes possibles de ce blocage après une réponse 200 sur le front-end React lors du traitement du token JWT ou de la soumission du formulaire, et m'aider à corriger le code ?
 
 
-[] à la fin, lance une série des tests avec les tes agents testeurs pour tester toutes les fonctionnalités de la plateforme, si ils trouvent une erreurs relance les agents developpeurs pour la corrections puis relance les testeurs jusqu'à ce qu'il n'y est plus d'erreurs.
+[x] à la fin, lance une série des tests avec les tes agents testeurs pour tester toutes les fonctionnalités de la plateforme, si ils trouvent une erreurs relance les agents developpeurs pour la corrections puis relance les testeurs jusqu'à ce qu'il n'y est plus d'erreurs.
 
 
-[] Pointage des présences : ajouter le bouton de la sélection multiple des joueurs pour permettre de selectioner plusieur et un bouton "Tout cochet" pour tout selectionner.
+[x] Pointage des présences : ajouter le bouton de la sélection multiple des joueurs pour permettre de selectioner plusieur et un bouton "Tout cochet" pour tout selectionner.
 
-[] Afficher les statistiques des entraînements de chaque jour des séances d'entraînements noter par le coach.
-
-
-[] Pour le président et le vice president ajouter une page dashboard avec des graphiques (sur les presences, les cotisations, nouveaux venus du mois etc... (propose des graphique pour une vue globale de l'équipe)), chaque graphique doit donnéer le détail lorsqu'on clique dessus dans une boite nodal, le président et le vice president doivent arriver directement sur cette page lors de la connexion
-
-[] Avoir une page pour voir les cartes des joueurs et leurs statistiques à côté de la carte
-
-[] Vestiaire du jour, composition de la formation : ajouter les photos des joueurs sur la composition des équipes A et B.
+[x] Afficher les statistiques des entraînements de chaque jour des séances d'entraînements noter par le coach.
 
 
-[] On va prendre tout ce qui est dans "Plans tactiques" qui ne sont pas dans "Vestiaire du jour" et les ajouter, puis supprimer l'option "Plans tactiques" dans la sidebar
+[x] Pour le président et le vice president ajouter une page dashboard avec des graphiques (sur les presences, les cotisations, nouveaux venus du mois etc... (propose des graphique pour une vue globale de l'équipe)), chaque graphique doit donnéer le détail lorsqu'on clique dessus dans une boite nodal, le président et le vice president doivent arriver directement sur cette page lors de la connexion
+
+[x] Avoir une page pour voir les cartes des joueurs et leurs statistiques à côté de la carte
+
+[x] Vestiaire du jour, composition de la formation : ajouter les photos des joueurs sur la composition des équipes A et B.
+
+
+[x] On va prendre tout ce qui est dans "Plans tactiques" qui ne sont pas dans "Vestiaire du jour" et les ajouter, puis supprimer l'option "Plans tactiques" dans la sidebar
    > Fait (16/11), à valider visuellement.

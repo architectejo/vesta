@@ -835,3 +835,26 @@ sur dev-a et dev-b, pour l'application locale. Nouvel onglet, pas ceux du propri
 une commande de données sur une base réelle sans sauvegarde et sans ordre du propriétaire ;
 pas de `--force` ; jamais de `*.sqlite3`, `data/`, `.env` ou `*.zip` dans un commit ;
 `main` n'est fusionné qu'à la demande du propriétaire.
+
+### 2026-11-27 — dev-b — B9 livré : série 5 à 36/36 (reprise après la passation)
+- `origin/dev-a` (96dd5f8, e7beff3) fusionné dans `dev-b`. `MESSAGES.md` reconstitué avec les
+  messages des deux machines, dans l'ordre.
+- Backend complet après fusion : **3704 réussis**, 2 xfail (connus), 0 échec. Frontend **1120/1120**,
+  `tsc -b` OK.
+- Base de démonstration locale recréée avec le `seed_simulation` corrigé
+  (`--prepare-e2e-accounts`) ; ancienne base sauvegardée hors dépôt.
+- **Série 5 : 36/36** (le fichier compte 36 tests ; « 45 » était une estimation). Trois corrections :
+  - `e2e/support/demo.ts` + `10-serie5.spec.ts` : date de la séance du jour calculée (fuseau du
+    club) au lieu de « jeudi 26 novembre » écrit en dur ; contournement `PW_CHANNEL` (Defender) ;
+  - plan en brouillon : le `seed_simulation` corrigé publie désormais son plan (avant, la
+    publication échouait à cause d'un joueur inéligible). Le brouillon de référence est
+    « Démo — brouillon 4-4-2 », créé par la préparation de la base ;
+  - `design-system/components/Checkbox.tsx` : la zone tactile agrandie de B7 (pseudo-élément de
+    l'étiquette) recouvrait la case. La case passe au premier plan (`relative z-[1]`). Pas de
+    changement visuel ni de comportement pour l'utilisateur.
+- `remarques.md` : lignes 80 à 95 cochées (séries 5 et 6 terminées).
+
+**Reste à faire (reprise des tâches de dev-a)** : audits sécurité et conformité de 96dd5f8 ;
+demandes backend (fuseau du club dans le profil, statut « En attente » visible du Trésorier,
+motif d'indisponibilité, registre de l'intendance) ; chat réservé aux membres en ordre ;
+fiche de l'assistant IA ; mises à jour du CDC.

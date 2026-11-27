@@ -38,7 +38,7 @@ export function Checkbox({ checked, onChange, label, error, disabled, id }: Chec
           disabled={disabled}
           onChange={(e) => onChange(e.target.checked)}
           aria-invalid={Boolean(error) || undefined}
-          className="mt-0.5 h-4 w-4 shrink-0 rounded-sm border-border-strong text-primary disabled:opacity-60"
+          className="relative z-[1] mt-0.5 h-4 w-4 shrink-0 rounded-sm border-border-strong text-primary disabled:opacity-60"
         />
         <span>{label}</span>
       </label>
