@@ -52,8 +52,29 @@ describe("useEligibility (GET /sport/eligibility/, §4.1 bis)", () => {
 
     // Sans la règle « pas de nouvel essai sur 403 », la requête resterait en
     // cours (nouvel essai après 1 s) au lieu de passer tout de suite en erreur.
-    await waitFor(() => expect(client.getQueryState(ELIGIBILITY_QUERY_KEY)?.status).toBe("error"), { timeout: 500 });
+    await waitFor(() => expect(client.getQueryState([...ELIGIBILITY_QUERY_KEY, null])?.status).toBe("error"), { timeout: 500 });
     expect(listEligibility).toHaveBeenCalledTimes(1);
     expect(result.current.size).toBe(0);
+  });
+  it("révocation du rôle : un 403 à l'actualisation efface les motifs déjà reçus", async () => {
+    vi.mocked(listEligibility).mockResolvedValueOnce({
+      count: 1,
+      results: [{ membership_id: 13, eligible: false, reason_code: "debt", reason: "En dette : 10.00 USD." }],
+    });
+    const { result } = renderHook(() => useEligibility(true), { wrapper });
+    await waitFor(() => expect(result.current.get(13)?.reason).toBe("En dette : 10.00 USD."));
+
+    vi.mocked(listEligibility).mockRejectedValueOnce(new ApiError(403, { detail: "Accès refusé." }));
+    await client.refetchQueries({ queryKey: ELIGIBILITY_QUERY_KEY });
+
+    await waitFor(() => expect(result.current.size).toBe(0));
+  });
+
+  it("la clé du cache porte le club actif : un autre club ne réutilise jamais les motifs", async () => {
+    client.setQueryData(["profile", "me"], { club: { id: 7 } });
+    vi.mocked(listEligibility).mockResolvedValue({ count: 0, results: [] });
+    renderHook(() => useEligibility(true), { wrapper });
+    await waitFor(() => expect(client.getQueryState([...ELIGIBILITY_QUERY_KEY, 7])?.status).toBe("success"));
+    expect(client.getQueryState([...ELIGIBILITY_QUERY_KEY, null])).toBeUndefined();
   });
 });
