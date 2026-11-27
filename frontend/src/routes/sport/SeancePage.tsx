@@ -60,6 +60,7 @@ import { SessionEditModal } from "./SessionEditModal";
 import { getSportAccess } from "./sportAccess";
 import { formatTime, useClubTimeZone } from "./sportTime";
 import { TeamsBoard } from "./TeamsBoard";
+import { UnplacedPlayersPanel } from "./UnplacedPlayersPanel";
 import { useTeamFieldActions } from "./useTeamFieldActions";
 
 type PointageFilter = "not_marked" | "all" | "present" | "late" | "excused";
@@ -470,28 +471,11 @@ function EquipesTab({
               <p className="mb-2 text-xs text-text-muted">
                 Arrivés après l'heure limite : ils ne sont pas répartis automatiquement.
               </p>
-              <div className="grid grid-cols-4 gap-2">
-                {unassigned.to_place_manually.map((player) => (
-                  <PitchPin
-                    key={player.membership_id}
-                    vertical
-                    standalone
-                    draggable={canAssign && canPlaceLate}
-                    dragKind="unassigned-player"
-                    pin={{
-                      id: String(player.membership_id),
-                      membershipId: player.membership_id,
-                      label: shortLabel(player.name),
-                      number: player.jersey_number,
-                      photoUrl: player.photo,
-                      fullName: player.name,
-                      x: 50,
-                      y: 50,
-                    }}
-                    onTap={() => openUnassignedMenu(player.membership_id, player.name)}
-                  />
-                ))}
-              </div>
+              <UnplacedPlayersPanel
+                players={unassigned.to_place_manually}
+                draggable={canAssign && canPlaceLate}
+                onTapPlayer={openUnassignedMenu}
+              />
             </div>
           ) : null}
 

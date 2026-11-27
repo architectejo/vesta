@@ -359,3 +359,160 @@ describe("MatchComposeModal — états de la liste (charte, CLAUDE.md règle 17)
     expect(screen.getByText("Aucun joueur ne correspond à « zzz ».")).toBeInTheDocument();
   });
 });
+
+describe("MatchComposeModal — puces de poste et tri (§4.1, demande du client remarques.md)", () => {
+  beforeEach(() => {
+    vi.mocked(listEligibility).mockResolvedValue({ count: 0, results: [] });
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function at(
+    id: number,
+    first: string,
+    last: string,
+    position: ClubPlayerListItem["position"] | "",
+    label: string,
+    unavailable = false,
+  ): ClubPlayerListItem {
+    // Le poste est facultatif côté API (import historique) : "" possible.
+    return {
+      ...player(id, first, last, unavailable),
+      position: position as ClubPlayerListItem["position"],
+      position_label: label,
+    };
+  }
+
+  const roster = () => [
+    at(1, "Zoé", "Attaque", "forward", "Attaquant"),
+    at(2, "Bruno", "Milieu", "midfielder", "Milieu"),
+    at(3, "Albert", "Défense", "defender", "Défenseur"),
+    at(4, "Yves", "Gardien", "goalkeeper", "Gardien"),
+    at(5, "Abel", "Gardien", "goalkeeper", "Gardien"),
+    at(6, "Sans", "Poste", "", ""),
+    at(7, "Aaron", "Bloqué", "goalkeeper", "Gardien", true),
+    at(8, "Victor", "Ailier", "forward", "Attaquant"),
+  ];
+
+  function checkboxNames(): string[] {
+    return screen.getAllByRole("checkbox").map((box) => box.getAttribute("aria-label") ?? "");
+  }
+
+  it("joueur sans poste : « Choisir un poste » affiché, enregistrement refusé tant qu'aucun poste n'est choisi", async () => {
+    mockRoster(roster());
+    vi.mocked(addToComposition).mockResolvedValue({} as Awaited<ReturnType<typeof addToComposition>>);
+    const user = userEvent.setup();
+    const { onSaved } = renderModal();
+
+    await user.click(await screen.findByRole("checkbox", { name: "Sélectionner Sans Poste" }));
+    const select = screen.getByRole("combobox", { name: /Poste du jour/ });
+    expect(select).toHaveDisplayValue("Choisir un poste");
+
+    await user.click(screen.getByRole("button", { name: "Enregistrer" }));
+    expect(await screen.findByText("Choisissez le poste du jour.")).toBeInTheDocument();
+    expect(addToComposition).not.toHaveBeenCalled();
+
+    await user.selectOptions(select, "goalkeeper");
+    await user.click(screen.getByRole("button", { name: "Enregistrer" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(addToComposition).toHaveBeenCalledWith(6, expect.objectContaining({ membership_id: 6, position: "goalkeeper" }));
+  });
+
+  it("affiche les puces de la spec, « Tous » actif par défaut", async () => {
+    mockRoster(roster());
+    renderModal();
+    const group = await screen.findByRole("group", { name: "Filtrer par poste" });
+    expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Tous",
+      "Gardiens",
+      "Défenseurs",
+      "Milieux",
+      "Attaquants",
+    ]);
+    expect(within(group).getByRole("button", { name: "Tous" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("trie par poste puis nom, sans poste en dernier, non sélectionnables toujours en fin", async () => {
+    mockRoster(roster());
+    renderModal();
+    await screen.findByRole("checkbox", { name: "Sélectionner Abel Gardien" });
+    expect(checkboxNames()).toEqual([
+      "Sélectionner Abel Gardien",
+      "Sélectionner Yves Gardien",
+      "Sélectionner Albert Défense",
+      "Sélectionner Bruno Milieu",
+      "Sélectionner Victor Ailier",
+      "Sélectionner Zoé Attaque",
+      "Sélectionner Sans Poste",
+      "Sélectionner Aaron Bloqué",
+    ]);
+  });
+
+  it("sous « Tous » : intertitres par poste avec le nombre de lignes visibles, dont « Sans poste »", async () => {
+    mockRoster(roster());
+    renderModal();
+    await screen.findByRole("checkbox", { name: "Sélectionner Abel Gardien" });
+    expect(screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual([
+      "Gardiens (2)",
+      "Défenseurs (1)",
+      "Milieux (1)",
+      "Attaquants (2)",
+      "Sans poste (1)",
+      "Ne peuvent pas être composés (1)",
+    ]);
+  });
+
+  it("une puce ne garde que son poste (non sélectionnables en fin) ; le joueur sans poste n'apparaît que sous « Tous »", async () => {
+    mockRoster(roster());
+    const user = userEvent.setup();
+    renderModal();
+    await screen.findByRole("checkbox", { name: "Sélectionner Abel Gardien" });
+    const group = screen.getByRole("group", { name: "Filtrer par poste" });
+
+    await user.click(within(group).getByRole("button", { name: "Gardiens" }));
+    expect(checkboxNames()).toEqual([
+      "Sélectionner Abel Gardien",
+      "Sélectionner Yves Gardien",
+      "Sélectionner Aaron Bloqué",
+    ]);
+    expect(screen.queryByRole("heading", { level: 3 })).not.toBeInTheDocument();
+
+    for (const chip of ["Défenseurs", "Milieux", "Attaquants"]) {
+      await user.click(within(group).getByRole("button", { name: chip }));
+      expect(screen.queryByRole("checkbox", { name: "Sélectionner Sans Poste" })).not.toBeInTheDocument();
+    }
+
+    await user.click(within(group).getByRole("button", { name: "Tous" }));
+    expect(screen.getByRole("checkbox", { name: "Sélectionner Sans Poste" })).toBeInTheDocument();
+  });
+
+  it("le filtre se combine avec la recherche ; état vide explicite", async () => {
+    mockRoster(roster());
+    const user = userEvent.setup();
+    renderModal();
+    await screen.findByRole("checkbox", { name: "Sélectionner Abel Gardien" });
+    const search = screen.getByRole("textbox", { name: "Nom ou numéro" });
+
+    await user.click(within(screen.getByRole("group", { name: "Filtrer par poste" })).getByRole("button", { name: "Attaquants" }));
+    await user.type(search, "zoé");
+    expect(checkboxNames()).toEqual(["Sélectionner Zoé Attaque"]);
+
+    await user.clear(search);
+    await user.type(search, "abel");
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+    expect(screen.getByText("Aucun joueur ne correspond à « abel » dans « Attaquants ».")).toBeInTheDocument();
+  });
+
+  it("une sélection masquée par une puce reste dans le récapitulatif et reste cochée", async () => {
+    mockRoster(roster());
+    const user = userEvent.setup();
+    renderModal();
+    await user.click(await screen.findByRole("checkbox", { name: "Sélectionner Abel Gardien" }));
+    const group = screen.getByRole("group", { name: "Filtrer par poste" });
+    await user.click(within(group).getByRole("button", { name: "Attaquants" }));
+    expect(screen.getByText("1 titulaires · 0 remplaçants")).toBeInTheDocument();
+    await user.click(within(group).getByRole("button", { name: "Gardiens" }));
+    expect(screen.getByRole("checkbox", { name: "Sélectionner Abel Gardien" })).toBeChecked();
+  });
+});

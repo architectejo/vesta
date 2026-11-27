@@ -9,6 +9,7 @@ import {
   Banner,
   Button,
   EmptyState,
+  FilterChips,
   Loader,
   Modal,
   NumberField,
@@ -19,6 +20,14 @@ import {
 import { OFFLINE_ACTION_MESSAGE, useOnlineStatus } from "../logistics/useOnlineStatus";
 import { CashRegisterFlow } from "../treasury/CashRegisterModal";
 import { ELIGIBILITY_POLL_MS, useEligibility, visiblePollInterval } from "./useEligibility";
+import {
+  ALL_POSITIONS_LABEL,
+  POSITION_FILTER_OPTIONS,
+  compareByPositionThenName,
+  groupByPosition,
+  matchesPositionFilter,
+  type PositionFilter,
+} from "./positionGroups";
 
 const POSITION_OPTIONS = [
   { value: "goalkeeper", label: "Gardien" },
@@ -86,6 +95,7 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
   const { showToast } = useToast();
   const online = useOnlineStatus();
   const [search, setSearch] = useState("");
+  const [positionFilter, setPositionFilter] = useState<PositionFilter>("");
   const [drafts, setDrafts] = useState<Record<number, DraftRow>>({});
   const [rowErrors, setRowErrors] = useState<Record<number, string>>({});
   const [removedNotices, setRemovedNotices] = useState<Record<number, string>>({});
@@ -186,15 +196,27 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
     }
   }, [open]);
 
-  // Sélectionnables d'abord, non sélectionnables ensuite (§4.1).
+  // §4.1 : sélectionnables d'abord (par poste puis nom), non sélectionnables
+  // ensuite (eux aussi par poste puis nom). Un joueur déjà composé n'est pas
+  // grisé : il reste parmi les sélectionnables, comme à l'affichage.
+  const isBlockedRow = (p: ClubPlayerListItem): boolean =>
+    blockedIds.has(p.membership_id) && !alreadyComposed.has(p.membership_id);
   const sorted = [...(roster ?? [])].sort(
-    (a, b) => Number(blockedIds.has(a.membership_id)) - Number(blockedIds.has(b.membership_id)),
+    (a, b) =>
+      Number(isBlockedRow(a)) - Number(isBlockedRow(b)) ||
+      compareByPositionThenName({ position: a.position, name: fullName(a) }, { position: b.position, name: fullName(b) }),
   );
+  // La puce de poste et la recherche se combinent ; les intertitres ne
+  // comptent que les lignes visibles.
   const query = search.trim().toLowerCase();
   const filtered = sorted.filter((player) => {
+    if (!matchesPositionFilter(player.position, positionFilter)) return false;
     if (!query) return true;
     return fullName(player).toLowerCase().includes(query) || String(player.jersey_number ?? "").includes(query);
   });
+  const visibleSelectable = filtered.filter((p) => !isBlockedRow(p));
+  const visibleBlocked = filtered.filter(isBlockedRow);
+  const positionLabel = POSITION_FILTER_OPTIONS.find((o) => o.value === positionFilter)?.label;
   const noneSelectable =
     (roster ?? []).length > 0 &&
     (roster ?? []).every((p) => blockedIds.has(p.membership_id) || alreadyComposed.has(p.membership_id));
@@ -226,6 +248,10 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
       const membershipId = Number(idStr);
       if (alreadyComposed.has(membershipId)) continue;
       if (blockedIds.has(membershipId)) continue;
+      if (draft.position === "") {
+        errors[membershipId] = "Choisissez le poste du jour.";
+        continue;
+      }
       if (draft.jerseyNumber == null) {
         errors[membershipId] = "Indiquez un numéro du jour.";
         continue;
@@ -271,127 +297,158 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
       return <EmptyState message="Aucun joueur dans l'effectif." />;
     }
     if (filtered.length === 0) {
-      return <EmptyState variant="no-results" message={`Aucun joueur ne correspond à « ${search.trim()} ».`} />;
+      const message = query
+        ? positionLabel
+          ? `Aucun joueur ne correspond à « ${search.trim()} » dans « ${positionLabel} ».`
+          : `Aucun joueur ne correspond à « ${search.trim()} ».`
+        : `Aucun joueur dans « ${positionLabel ?? ALL_POSITIONS_LABEL} ».`;
+      return <EmptyState variant="no-results" message={message} />;
+    }
+    // Sous « Tous » : un intertitre par poste (demande du client, remarques.md),
+    // puis les non sélectionnables à la fin (§4.1). Sous une puce : liste
+    // simple, non sélectionnables toujours en fin.
+    const showHeadings = positionFilter === "";
+    const sections: Array<{ key: string; label: string | null; items: ClubPlayerListItem[] }> = showHeadings
+      ? groupByPosition(visibleSelectable, (p) => p.position).map((g) => ({ key: g.key, label: g.label, items: g.items }))
+      : [{ key: "selectable", label: null, items: visibleSelectable }];
+    if (visibleBlocked.length > 0) {
+      sections.push({ key: "blocked", label: showHeadings ? "Ne peuvent pas être composés" : null, items: visibleBlocked });
     }
     return (
-      <ul className="divide-y divide-border">
-        {filtered.map((player) => {
-          const composed = alreadyComposed.has(player.membership_id);
-          // §4.1 bis : un joueur en dette, suspendu, inapte ou en attente
-          // n'est jamais cochable (CLAUDE.md règle 5). Le motif est le texte
-          // de l'API ; le service de composition reste le contrôle réel.
-          const blocked = blockedIds.has(player.membership_id) && !composed;
-          const reason = reasonOf(player.membership_id);
-          const draft = drafts[player.membership_id];
-          const error = rowErrors[player.membership_id];
-          const infoOpen = blocked && infoId === player.membership_id;
-          const name = fullName(player);
-          const identity = (
-            <>
-              <Avatar name={name} photoUrl={player.photo} size={40} />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm text-text">
-                  {name}
-                  {composed ? " (déjà composé)" : ""}
-                </span>
-                <span className="block truncate text-xs text-text-muted">{player.position_label}</span>
-                {blocked ? (
-                  // 14 px : information critique (§4.1 bis, 10.2 n° 31).
-                  <span className="block text-sm text-status-danger-fg">{reason || GENERIC_REASON}</span>
+      <div className="space-y-2">
+        {sections.map((section) => (
+          <section key={section.key} aria-label={section.label ?? undefined}>
+            {section.label ? (
+              <h3 className="border-b border-border pb-1 pt-1 text-[13px] font-semibold text-text-muted">
+                {section.label} ({section.items.length})
+              </h3>
+            ) : null}
+            <ul className="divide-y divide-border">{section.items.map(renderRow)}</ul>
+          </section>
+        ))}
+      </div>
+    );
+  }
+
+  function renderRow(player: ClubPlayerListItem) {
+    const composed = alreadyComposed.has(player.membership_id);
+    // §4.1 bis : un joueur en dette, suspendu, inapte ou en attente
+    // n'est jamais cochable (CLAUDE.md règle 5). Le motif est le texte
+    // de l'API ; le service de composition reste le contrôle réel.
+    const blocked = blockedIds.has(player.membership_id) && !composed;
+    const reason = reasonOf(player.membership_id);
+    const draft = drafts[player.membership_id];
+    const error = rowErrors[player.membership_id];
+    const infoOpen = blocked && infoId === player.membership_id;
+    const name = fullName(player);
+    const identity = (
+      <>
+        <Avatar name={name} photoUrl={player.photo} size={40} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm text-text">
+            {name}
+            {composed ? " (déjà composé)" : ""}
+          </span>
+          <span className="block truncate text-xs text-text-muted">{player.position_label}</span>
+          {blocked ? (
+            // 14 px : information critique (§4.1 bis, 10.2 n° 31).
+            <span className="block text-sm text-status-danger-fg">{reason || GENERIC_REASON}</span>
+          ) : null}
+        </span>
+      </>
+    );
+    return (
+      <li key={player.membership_id} className="py-2">
+        <div className="flex items-center gap-3">
+          {/* Zone tactile de 44 px autour de la case (§4.1, B7). */}
+          <label
+            className={[
+              "flex h-11 w-11 shrink-0 items-center justify-center",
+              blocked ? "opacity-60" : "cursor-pointer",
+            ].join(" ")}
+          >
+            <input
+              type="checkbox"
+              className="h-5 w-5 shrink-0"
+              checked={(Boolean(draft) || composed) && !blocked}
+              disabled={composed || blocked}
+              aria-disabled={composed || blocked}
+              onChange={() => toggle(player)}
+              aria-label={`Sélectionner ${name}`}
+            />
+          </label>
+          {blocked ? (
+            // Toucher le reste de la ligne : panneau d'information seul
+            // (§4.1 bis), jamais « Titulaire » ni « Remplaçant ».
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-3 text-left opacity-60"
+              aria-expanded={infoOpen}
+              aria-label={`Pourquoi ${name} n'est pas sélectionnable`}
+              onClick={() => setInfoId(infoOpen ? null : player.membership_id)}
+            >
+              {identity}
+            </button>
+          ) : (
+            <div className="flex min-w-0 flex-1 items-center gap-3">{identity}</div>
+          )}
+        </div>
+        {infoOpen ? (
+          <div
+            role="note"
+            className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-muted px-3 py-2 text-sm text-text"
+          >
+            <span>
+              {name} ne peut pas être sélectionné : {reason ? inlineReason(reason) : GENERIC_REASON_INLINE}
+            </span>
+            {canCollect ? (
+              <Button size="sm" variant="secondary" onClick={() => setCashPlayer(toPlayerSearchResult(player))}>
+                Encaisser
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+        {draft && !composed && !blocked ? (
+          <div className="mt-2 flex flex-wrap items-end gap-3 pl-7">
+            <SegmentedControl
+              label="Rôle"
+              value={draft.role}
+              onChange={(v) => updateDraft(player.membership_id, { role: v })}
+              options={[
+                { value: "starter", label: "Titulaire" },
+                { value: "substitute", label: "Remplaçant" },
+              ]}
+            />
+            <label className="block text-sm font-medium text-text">
+              Poste du jour
+              <select
+                className="mt-1 h-control-md rounded-sm border border-border-strong bg-surface px-2 text-base"
+                value={draft.position}
+                onChange={(e) => updateDraft(player.membership_id, { position: e.target.value })}
+              >
+                {draft.position === "" ? (
+                  <option value="" disabled>
+                    Choisir un poste
+                  </option>
                 ) : null}
-              </span>
-            </>
-          );
-          return (
-            <li key={player.membership_id} className="py-2">
-              <div className="flex items-center gap-3">
-                {/* Zone tactile de 44 px autour de la case (§4.1, B7). */}
-                <label
-                  className={[
-                    "flex h-11 w-11 shrink-0 items-center justify-center",
-                    blocked ? "opacity-60" : "cursor-pointer",
-                  ].join(" ")}
-                >
-                  <input
-                    type="checkbox"
-                    className="h-5 w-5 shrink-0"
-                    checked={(Boolean(draft) || composed) && !blocked}
-                    disabled={composed || blocked}
-                    aria-disabled={composed || blocked}
-                    onChange={() => toggle(player)}
-                    aria-label={`Sélectionner ${name}`}
-                  />
-                </label>
-                {blocked ? (
-                  // Toucher le reste de la ligne : panneau d'information seul
-                  // (§4.1 bis), jamais « Titulaire » ni « Remplaçant ».
-                  <button
-                    type="button"
-                    className="flex min-w-0 flex-1 items-center gap-3 text-left opacity-60"
-                    aria-expanded={infoOpen}
-                    aria-label={`Pourquoi ${name} n'est pas sélectionnable`}
-                    onClick={() => setInfoId(infoOpen ? null : player.membership_id)}
-                  >
-                    {identity}
-                  </button>
-                ) : (
-                  <div className="flex min-w-0 flex-1 items-center gap-3">{identity}</div>
-                )}
-              </div>
-              {infoOpen ? (
-                <div
-                  role="note"
-                  className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-muted px-3 py-2 text-sm text-text"
-                >
-                  <span>
-                    {name} ne peut pas être sélectionné : {reason ? inlineReason(reason) : GENERIC_REASON_INLINE}
-                  </span>
-                  {canCollect ? (
-                    <Button size="sm" variant="secondary" onClick={() => setCashPlayer(toPlayerSearchResult(player))}>
-                      Encaisser
-                    </Button>
-                  ) : null}
-                </div>
-              ) : null}
-              {draft && !composed && !blocked ? (
-                <div className="mt-2 flex flex-wrap items-end gap-3 pl-7">
-                  <SegmentedControl
-                    label="Rôle"
-                    value={draft.role}
-                    onChange={(v) => updateDraft(player.membership_id, { role: v })}
-                    options={[
-                      { value: "starter", label: "Titulaire" },
-                      { value: "substitute", label: "Remplaçant" },
-                    ]}
-                  />
-                  <label className="block text-sm font-medium text-text">
-                    Poste du jour
-                    <select
-                      className="mt-1 h-control-md rounded-sm border border-border-strong bg-surface px-2 text-base"
-                      value={draft.position}
-                      onChange={(e) => updateDraft(player.membership_id, { position: e.target.value })}
-                    >
-                      {POSITION_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <NumberField
-                    label="N° du jour"
-                    value={draft.jerseyNumber}
-                    onChange={(v) => updateDraft(player.membership_id, { jerseyNumber: v })}
-                    min={1}
-                    max={99}
-                  />
-                </div>
-              ) : null}
-              {error ? <p className="mt-1 pl-7 text-xs text-status-danger-fg">{error}</p> : null}
-            </li>
-          );
-        })}
-      </ul>
+                {POSITION_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <NumberField
+              label="N° du jour"
+              value={draft.jerseyNumber}
+              onChange={(v) => updateDraft(player.membership_id, { jerseyNumber: v })}
+              min={1}
+              max={99}
+            />
+          </div>
+        ) : null}
+        {error ? <p className="mt-1 pl-7 text-xs text-status-danger-fg">{error}</p> : null}
+      </li>
     );
   }
 
@@ -421,6 +478,14 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="h-9 w-full rounded-sm border border-border-strong bg-surface px-3 text-base text-text placeholder:text-text-muted"
+          />
+          {/* Puces de poste (§4.1) : défilent horizontalement à 360 px. */}
+          <FilterChips
+            label="Filtrer par poste"
+            value={positionFilter}
+            onChange={setPositionFilter}
+            options={POSITION_FILTER_OPTIONS}
+            allLabel={ALL_POSITIONS_LABEL}
           />
           <p className="text-xs text-text-muted">
             {starterCount} titulaires · {selectedCount - starterCount} remplaçants
