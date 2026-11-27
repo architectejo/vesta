@@ -538,3 +538,50 @@ membres en ordre ».
 - compteur de non-lus ;
 - image d'un message réservé (404 pour un joueur non en ordre) ;
 - étanchéité entre clubs.
+
+### 2026-11-27 — dev-b → dev-a — Complément du client : chat réservé aux membres en ordre
+Le client a validé la demande précédente et précise les notifications :
+- **D (validé)** : la notification d'un message réservé n'est envoyée qu'aux membres en ordre.
+- **Nouveau** : les joueurs **non en ordre** reçoivent une notification d'incitation, par exemple :
+  « Un message réservé aux membres en ordre a été publié dans le chat. Régularisez votre
+  cotisation pour voir toutes les informations et tous les messages du groupe. » Le clic mène
+  à la grille des cotisations ou à son propre solde.
+- **A (maintenu)** : le message réservé reste absent du chat du joueur non en ordre ;
+  la notification l'informe qu'il existe.
+- **Point à trancher (proposition par défaut)** : pour éviter le harcèlement, au plus **une**
+  notification d'incitation par joueur et par jour, quel que soit le nombre de messages
+  réservés. Elle n'est pas envoyée par email s'il a désactivé les emails (4.17). Le texte de
+  la notification ne reprend pas le contenu du message réservé.
+- Tests en plus : incitation reçue par le joueur en dette, non reçue par le joueur en ordre,
+  regroupement journalier.
+
+### 2026-11-27 — dev-b → dev-a — Nouvelle demande du client (circuit 9.4, à étudier) : assistant IA de rédaction
+Le client souhaite une **IA qui aide les membres de l'administration à rédiger les messages
+officiels du club** : communiqués, messages du chat, convocations, etc. Il demande d'étudier la
+faisabilité avant tout développement. Merci de proposer une fiche (CDC, chiffrage, risques) au client.
+
+**Proposition de cadrage** (à valider)
+1. **Usage** : un bouton « Aide à la rédaction » dans les modales de rédaction (communiqué,
+   message du chat, convocation d'AG). L'utilisateur indique le sujet et le ton (« rappel de
+   cotisation, ton cordial »). L'IA propose un texte en français, que l'utilisateur **relit,
+   modifie et envoie lui-même**. Rien n'est jamais publié automatiquement.
+2. **Qui** : les rôles de l'administration seulement (Président, VP, DS, Trésorier, adjoint,
+   Intendant, Secrétaire).
+3. **Technique, compatible cPanel** (pas de processus permanent) :
+   - appel HTTPS synchrone depuis Django vers une API de modèle de langage hébergée, par exemple
+     l'API Claude d'Anthropic, avec un modèle rapide et économique comme `claude-haiku-5-5` ;
+   - clé API en variable d'environnement (règle 12) ;
+   - un service dans `services.py`, avec un délai maximal et un message d'erreur clair en
+     français si l'IA est indisponible.
+4. **Confidentialité** :
+   - envoyer seulement le sujet saisi et le nom du club (marque blanche, règle 18) ;
+   - **aucune** donnée personnelle, financière ou médicale des joueurs ;
+   - à préciser dans les CGU.
+5. **Coûts et abus** : un quota par club (nombre de demandes par jour), et la possibilité pour
+   le Superuser d'activer ou désactiver l'option par club (option de licence ?).
+6. **Journal** (règle 6) : chaque utilisation est notée (auteur, type de message), sans le texte.
+
+**Questions pour le client** :
+- l'IA est-elle incluse dans toutes les licences ou payante en option ?
+- quel quota par club ?
+- quels types de messages en premier : communiqués seuls, ou aussi le chat et les AG ?
