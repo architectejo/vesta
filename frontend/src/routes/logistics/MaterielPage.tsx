@@ -59,6 +59,7 @@ import {
   ARTICLE_CATEGORY_OPTIONS,
   ARTICLE_CONDITION_OPTIONS,
   articlesLabel,
+  formatQuantity,
   piecesLabel,
 } from "./materielLabels";
 import { listOutstandingMatchEquipment, type OutstandingEquipmentRow } from "./matchEquipmentAggregate";
@@ -291,7 +292,7 @@ export function MaterielPage() {
       key: "in_stock",
       header: "En stock",
       align: "right",
-      render: (row) => <span className="tabular-nums">{`${row.in_stock} ${row.unit}`}</span>,
+      render: (row) => <span className="tabular-nums">{formatQuantity(row.in_stock, row.unit)}</span>,
     },
     { key: "holders", header: "Chez", render: (row) => holderSummary(row.stock_by_holder) },
     {
@@ -831,7 +832,9 @@ export function MaterielPage() {
             </Button>
           }
         >
-          {unlocatedTotal} pièce(s) ne sont rattachées à aucun détenteur.
+          {Math.abs(unlocatedTotal) >= 2
+            ? `${piecesLabel(unlocatedTotal)} ne sont rattachées à aucun détenteur.`
+            : `${piecesLabel(unlocatedTotal)} n'est rattachée à aucun détenteur.`}
         </Banner>
       ) : null}
 
@@ -852,7 +855,7 @@ export function MaterielPage() {
                 ) : undefined
               }
             >
-              {holder.name} a quitté le club et détient encore {holder.stock_total} pièce(s).
+              {holder.name} a quitté le club et détient encore {piecesLabel(holder.stock_total)}.
             </Banner>
           ))
         : null}

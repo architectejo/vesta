@@ -9,6 +9,11 @@ import type {
   Holder,
   HolderList,
   MovementPage,
+  Register,
+  RegisterDecommission,
+  RegisterExit,
+  RegisterLine,
+  RegisterSection,
   StockMovement,
   StockRow,
 } from "../../api/logistics";
@@ -139,6 +144,102 @@ export function makeDecommission(over: Partial<Decommission> = {}): Decommission
     cancelled_by: null,
     cancel_reason: "",
     created_at: "2026-11-01T10:00:00Z",
+    ...over,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Registre de l'intendance (`GET /logistics/register/`) : libellés accordés
+// fournis par l'API (`quantity_label`, `stock_total_label`).
+// ---------------------------------------------------------------------------
+
+export function makeRegisterLine(over: Partial<RegisterLine> = {}): RegisterLine {
+  return {
+    movement_id: 31,
+    article_id: 11,
+    designation: "Ballon match",
+    category: "balls",
+    category_display: "Ballons",
+    unit: "pièce",
+    quantity: 2,
+    quantity_label: "2 pièces",
+    movement_type: "in_donation",
+    origin_kind: "donation",
+    donor_name: "Papa Wemba",
+    origin: "Don de Papa Wemba",
+    acquisition_date: "2025-06-22",
+    acquisition_date_unknown: false,
+    acquisition_date_note: "",
+    acquisition_label: "22/06/2025",
+    recorded_on: "2026-10-01",
+    holder_id: 1,
+    location: "Local du club",
+    condition: "good",
+    condition_display: "Bon état",
+    ...over,
+  };
+}
+
+export function makeRegisterSection(over: Partial<RegisterSection> = {}): RegisterSection {
+  return {
+    category: "balls",
+    category_display: "Ballons",
+    lines: [makeRegisterLine()],
+    stock_total_by_unit: [
+      { unit: "pièce", quantity: 22 },
+      { unit: "paire", quantity: 23 },
+    ],
+    stock_total_label: "Stock actuel : 22 pièces · 23 paires",
+    current_distribution: [{ holder_id: 1, holder_name: "Local du club", quantity: 14 }],
+    ...over,
+  };
+}
+
+export function makeRegisterDecommission(over: Partial<RegisterDecommission> = {}): RegisterDecommission {
+  return {
+    id: 7,
+    article_id: 10,
+    designation: "Maillot domicile",
+    unit: "pièce",
+    quantity: 1,
+    quantity_label: "1 pièce",
+    reason: "worn",
+    reason_display: "Usé",
+    reason_note: "",
+    holder_id: 1,
+    location: "Local du club",
+    noted_on: "2026-11-01",
+    ...over,
+  };
+}
+
+export function makeRegisterExit(over: Partial<RegisterExit> = {}): RegisterExit {
+  return {
+    movement_id: 40,
+    designation: "Chasuble",
+    unit: "pièce",
+    quantity: 26,
+    quantity_label: "26 pièces",
+    movement_type: "out_decommission",
+    movement_type_display: "Déclassement",
+    movement_date: "2026-11-10",
+    location: "Local du club",
+    reason: "",
+    ...over,
+  };
+}
+
+export function makeRegister(over: Partial<Register> = {}): Register {
+  return {
+    club: { id: 1, name: "Club de l'API" },
+    as_of: "2026-11-26",
+    filters: { search: "", category: "", holder: null, include_exits: false },
+    filters_label: "",
+    include_exits: false,
+    sections: [makeRegisterSection()],
+    decommissions: [],
+    exits: [],
+    is_empty: false,
     ...over,
   };
 }

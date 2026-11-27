@@ -625,6 +625,25 @@ export function addToComposition(matchId: number, input: CompositionInput) {
   return apiPost<CompositionEntry>(`/sport/matches/${matchId}/composition/`, input);
 }
 
+/**
+ * Éligibilité groupée des joueurs du club actif (`GET /sport/eligibility/`,
+ * sport-feuille-de-match.md §4.1 bis). Réservée au Coach et à l'Assistant du
+ * Coach (403 pour les autres rôles). `reason` est le texte lisible fourni par
+ * l'API (« En dette : 10.00 USD. ») : l'interface ne le recompose jamais.
+ */
+export type EligibilityReasonCode = "debt" | "suspension" | "unfit" | "pending_membership" | "";
+
+export interface EligibilityItem {
+  membership_id: number;
+  eligible: boolean;
+  reason_code: EligibilityReasonCode;
+  reason: string;
+}
+
+export function listEligibility() {
+  return apiGet<{ count: number; results: EligibilityItem[] }>("/sport/eligibility/");
+}
+
 export function removeFromComposition(matchId: number, membershipId: number) {
   return apiDelete<void>(`/sport/matches/${matchId}/composition/${membershipId}/`);
 }

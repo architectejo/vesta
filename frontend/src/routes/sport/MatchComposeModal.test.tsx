@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../../api/client";
 import type { ClubPlayerListItem } from "../../api/clubs";
 import { MatchComposeModal } from "./MatchComposeModal";
 
@@ -11,11 +12,11 @@ vi.mock("../../api/clubs", async () => {
 });
 vi.mock("../../api/sport", async () => {
   const actual = await vi.importActual<typeof import("../../api/sport")>("../../api/sport");
-  return { ...actual, addToComposition: vi.fn() };
+  return { ...actual, addToComposition: vi.fn(), listEligibility: vi.fn() };
 });
 
 import { listClubPlayers } from "../../api/clubs";
-import { addToComposition } from "../../api/sport";
+import { addToComposition, listEligibility } from "../../api/sport";
 
 function player(id: number, first: string, last: string, unavailable = false): ClubPlayerListItem {
   return {
@@ -46,6 +47,10 @@ function renderModal() {
 }
 
 describe("MatchComposeModal — joueurs non sélectionnables (§4.1 bis, CLAUDE.md règle 5, série 6)", () => {
+  beforeEach(() => {
+    vi.mocked(listEligibility).mockResolvedValue({ count: 0, results: [] });
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -88,5 +93,64 @@ describe("MatchComposeModal — joueurs non sélectionnables (§4.1 bis, CLAUDE.
     renderModal();
     const box = await screen.findByRole("checkbox", { name: "Sélectionner Kevin Proto" });
     expect(box.closest("label")?.className).toContain("h-11");
+  });
+});
+
+describe("MatchComposeModal — motif d'indisponibilité lu de l'API (§4.1 bis)", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("affiche sous le nom le motif fourni par GET /sport/eligibility/, sans le recomposer", async () => {
+    vi.mocked(listClubPlayers).mockResolvedValue([player(13, "Aimé", "Leurre", true), player(12, "Kevin", "Proto")]);
+    vi.mocked(listEligibility).mockResolvedValue({
+      count: 2,
+      results: [
+        { membership_id: 13, eligible: false, reason_code: "debt", reason: "En dette : 10.00 USD." },
+        { membership_id: 12, eligible: true, reason_code: "", reason: "" },
+      ],
+    });
+    renderModal();
+
+    expect(await screen.findByText("En dette : 10.00 USD.")).toBeInTheDocument();
+    expect(screen.queryByText(/Non sélectionnable/)).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Sélectionner Aimé Leurre" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "Sélectionner Kevin Proto" })).toBeEnabled();
+  });
+
+  it("un joueur déclaré non éligible par l'API est désactivé et rangé en fin de liste même sans is_unavailable", async () => {
+    vi.mocked(listClubPlayers).mockResolvedValue([player(13, "Aimé", "Leurre"), player(12, "Kevin", "Proto")]);
+    vi.mocked(listEligibility).mockResolvedValue({
+      count: 1,
+      results: [{ membership_id: 13, eligible: false, reason_code: "suspension", reason: "Suspendu : encore 1 match." }],
+    });
+    renderModal();
+
+    expect(await screen.findByText("Suspendu : encore 1 match.")).toBeInTheDocument();
+    const boxes = screen.getAllByRole("checkbox");
+    expect(boxes[0]).toHaveAccessibleName("Sélectionner Kevin Proto");
+    expect(boxes[1]).toHaveAccessibleName("Sélectionner Aimé Leurre");
+    expect(boxes[1]).toBeDisabled();
+  });
+
+  it("403 : garde le texte générique, sans message d'erreur bloquant", async () => {
+    vi.mocked(listClubPlayers).mockResolvedValue([player(13, "Aimé", "Leurre", true), player(12, "Kevin", "Proto")]);
+    vi.mocked(listEligibility).mockRejectedValue(new ApiError(403, { detail: "Accès refusé." }));
+    renderModal();
+
+    expect(await screen.findByText(/Non sélectionnable/)).toBeInTheDocument();
+    await waitFor(() => expect(listEligibility).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Accès refusé.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Sélectionner Kevin Proto" })).toBeEnabled();
+  });
+
+  it("erreur réseau : garde le comportement actuel (is_unavailable sans motif)", async () => {
+    vi.mocked(listClubPlayers).mockResolvedValue([player(13, "Aimé", "Leurre", true)]);
+    vi.mocked(listEligibility).mockRejectedValue(new ApiError(0, null));
+    renderModal();
+
+    expect(await screen.findByText(/Non sélectionnable/)).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Sélectionner Aimé Leurre" })).toBeDisabled();
   });
 });

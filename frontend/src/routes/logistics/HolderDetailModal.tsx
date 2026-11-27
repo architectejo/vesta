@@ -15,6 +15,7 @@ import { useClosingState } from "../../hooks/useClosingState";
 import { ArticleDetailModal } from "./ArticleDetailModal";
 import { formatDateFr } from "./format";
 import { TransferModal } from "./TransferModal";
+import { formatQuantity } from "./materielLabels";
 
 function apiErrorMessage(error: unknown): string {
   return error instanceof ApiError ? error.detail : "Une erreur est survenue de notre côté. Réessayez.";
@@ -213,7 +214,7 @@ export function HolderDetailModal({
                           </span>
                           <span className="shrink-0 text-right">
                             <span className="block tabular-nums text-sm text-text">
-                              {row.quantity} {row.unit}
+                              {formatQuantity(row.quantity, row.unit)}
                             </span>
                             {row.pending_decommission > 0 ? (
                               <span className="block text-sm text-status-warning-fg">

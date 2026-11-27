@@ -4,6 +4,7 @@ import { ApiError } from "../../api/client";
 import { listClubPlayers, type ClubPlayerListItem } from "../../api/clubs";
 import { addToComposition, type CompositionEntry } from "../../api/sport";
 import { Avatar, Modal, NumberField, SegmentedControl } from "../../design-system";
+import { useEligibility } from "./useEligibility";
 
 const POSITION_OPTIONS = [
   { value: "goalkeeper", label: "Gardien" },
@@ -30,11 +31,13 @@ export interface MatchComposeModalProps {
  * « Composer l'équipe » (docs/ecrans/sport-feuille-de-match.md §4.1).
  *
  * Pré-grisage (§4.1 bis, série 6) : la liste de l'effectif porte
- * désormais `is_unavailable` ; un joueur en dette, suspendu, inapte ou en
- * attente d'adhésion a sa case désactivée et n'est jamais envoyé. **Écart
- * restant** : la liste ne donne pas le motif détaillé (« En dette : 30 $ »,
- * « Suspendu : encore 1 match »…) ni de rafraîchissement d'éligibilité ;
- * le contrôle réel (CLAUDE.md règle n° 5) reste fait par le service
+ * `is_unavailable` ; un joueur en dette, suspendu, inapte ou en attente
+ * d'adhésion a sa case désactivée et n'est jamais envoyé. Le motif lisible
+ * (« En dette : 10.00 USD. »…) est lu tel quel dans `GET /sport/eligibility/`
+ * (`useEligibility`) et affiché sous le nom ; il n'est jamais recalculé ici.
+ * Si cet appel échoue (403, réseau), la ligne garde le texte générique.
+ * **Écart restant** : pas de rafraîchissement périodique de 15 s ni de
+ * bandeau « n'est plus sélectionnable » pendant la saisie ; le contrôle réel (CLAUDE.md règle n° 5) reste fait par le service
  * `add_to_composition`, dont l'erreur s'affiche sur la ligne.
  */
 export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }: MatchComposeModalProps) {
@@ -49,15 +52,24 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
     enabled: open,
   });
 
+  const eligibility = useEligibility(open);
+
   const alreadyComposed = useMemo(() => new Set(existing.map((e) => e.membership_id)), [existing]);
+  // Non sélectionnable si l'effectif OU l'éligibilité groupée le disent :
+  // deux réponses de l'API, aucune règle évaluée ici.
   const blockedIds = useMemo(
-    () => new Set((rosterQuery.data ?? []).filter((p) => p.is_unavailable).map((p) => p.membership_id)),
-    [rosterQuery.data],
+    () =>
+      new Set(
+        (rosterQuery.data ?? [])
+          .filter((p) => p.is_unavailable || eligibility.get(p.membership_id)?.eligible === false)
+          .map((p) => p.membership_id),
+      ),
+    [rosterQuery.data, eligibility],
   );
 
   // Sélectionnables d'abord, non sélectionnables ensuite (§4.1).
   const sorted = [...(rosterQuery.data ?? [])].sort(
-    (a, b) => Number(Boolean(a.is_unavailable)) - Number(Boolean(b.is_unavailable)),
+    (a, b) => Number(blockedIds.has(a.membership_id)) - Number(blockedIds.has(b.membership_id)),
   );
   const filtered = sorted.filter((player) => {
     if (!search.trim()) return true;
@@ -151,10 +163,11 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
             {filtered.map((player) => {
               const composed = alreadyComposed.has(player.membership_id);
               // §4.1 bis : un joueur en dette, suspendu, inapte ou en attente
-              // n'est jamais cochable (CLAUDE.md règle 5). La liste de l'effectif
-              // ne donne que l'indicateur `is_unavailable`, sans le motif :
-              // le service de composition reste le contrôle réel.
-              const blocked = Boolean(player.is_unavailable) && !composed;
+              // n'est jamais cochable (CLAUDE.md règle 5). Le motif est le texte
+              // de l'API ; le service de composition reste le contrôle réel.
+              const blocked = blockedIds.has(player.membership_id) && !composed;
+              const eligibilityItem = eligibility.get(player.membership_id);
+              const reason = eligibilityItem && !eligibilityItem.eligible ? eligibilityItem.reason.trim() : "";
               const draft = drafts[player.membership_id];
               const error = rowErrors[player.membership_id];
               return (
@@ -180,7 +193,10 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
                       </p>
                       <p className="truncate text-xs text-text-muted">{player.position_label}</p>
                       {blocked ? (
-                        <p className="text-sm text-status-danger-fg">Non sélectionnable (dette, suspension, inaptitude ou adhésion en attente)</p>
+                        // 14 px : information critique (§4.1 bis, 10.2 n° 31).
+                        <p className="text-sm text-status-danger-fg">
+                          {reason || "Non sélectionnable (dette, suspension, inaptitude ou adhésion en attente)"}
+                        </p>
                       ) : null}
                     </div>
                   </div>

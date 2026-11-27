@@ -33,7 +33,7 @@ import { DecommissionDetailModal } from "./DecommissionDetailModal";
 import { formatDateFr } from "./format";
 import { HolderSearch, type HolderSelection } from "./HolderSearch";
 import { getMaterialAccess } from "./materielAccess";
-import { ARTICLE_CATEGORY_OPTIONS } from "./materielLabels";
+import { ARTICLE_CATEGORY_OPTIONS, formatQuantity, quantityLabelOf } from "./materielLabels";
 import { MovementDetailModal } from "./MovementDetailModal";
 import { OFFLINE_ACTION_MESSAGE, useOnlineStatus } from "./useOnlineStatus";
 
@@ -45,7 +45,7 @@ const REGISTER_COLUMNS: Array<DataTableColumn<RegisterLine>> = [
     key: "quantity",
     header: "Quantité",
     align: "right",
-    render: (line) => <span className="tabular-nums">{`${line.quantity} ${line.unit}`}</span>,
+    render: (line) => <span className="tabular-nums">{quantityLabelOf(line)}</span>,
   },
   { key: "origin", header: "Origine", render: (line) => line.origin },
   { key: "acquisition", header: "Date d'acquisition", render: (line) => line.acquisition_label },
@@ -87,9 +87,7 @@ function SectionCard({
               >
                 <span className="block text-sm text-text">
                   {line.designation} ·{" "}
-                  <span className="tabular-nums">
-                    {line.quantity} {line.unit}
-                  </span>
+                  <span className="tabular-nums">{quantityLabelOf(line)}</span>
                 </span>
                 <span className="block text-[13px] text-text-muted">
                   {line.origin} · {line.acquisition_label}
@@ -110,12 +108,19 @@ function SectionCard({
         </div>
       ) : null}
       <div className="mt-3 space-y-1 border-t border-border pt-2 text-sm text-text">
-        <p>
-          Total :{" "}
-          <span className="tabular-nums">
-            {section.stock_total_by_unit.map((total) => `${total.quantity} ${total.unit}`).join(" · ") || "0"}
-          </span>
-        </p>
+        {/* Libellé fourni par l'API (« Stock actuel : 19 pièces ») : c'est le
+            stock actuel, pas la somme des lignes d'entrée. Repli sur
+            l'ancien affichage si une réponse plus ancienne ne le porte pas. */}
+        {section.stock_total_label?.trim() ? (
+          <p className="tabular-nums">{section.stock_total_label}</p>
+        ) : (
+          <p>
+            Total :{" "}
+            <span className="tabular-nums">
+              {section.stock_total_by_unit.map((total) => formatQuantity(total.quantity, total.unit)).join(" · ") || "0"}
+            </span>
+          </p>
+        )}
         {section.current_distribution.length > 0 ? (
           <p>
             Répartition actuelle :{" "}
@@ -343,9 +348,7 @@ export function RegisterPage() {
                       >
                         <span className="block text-sm text-text">
                           {exit.movement_type_display} · {exit.designation} ·{" "}
-                          <span className="tabular-nums">
-                            {exit.quantity} {exit.unit}
-                          </span>
+                          <span className="tabular-nums">{quantityLabelOf(exit)}</span>
                         </span>
                         <span className="block text-[13px] text-text-muted">
                           {formatDateFr(exit.movement_date)} · chez {exit.location}
@@ -373,9 +376,7 @@ export function RegisterPage() {
                     >
                       <span className="block text-sm text-text">
                         {dec.designation} :{" "}
-                        <span className="tabular-nums">
-                          {dec.quantity} {dec.unit}
-                        </span>
+                        <span className="tabular-nums">{quantityLabelOf(dec)}</span>
                       </span>
                       <span className="block text-[13px] text-text-muted">
                         {dec.reason_display}

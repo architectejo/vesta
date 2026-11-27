@@ -80,7 +80,7 @@ describe("DecommissionFlagModal", () => {
       reason: "unusable",
     });
     expect(vi.mocked(flagDecommission).mock.calls[0]![0].noted_on).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(onSaved).toHaveBeenCalledWith("2 pièce de Maillot domicile à déclasser.");
+    expect(onSaved).toHaveBeenCalledWith("2 pièces de Maillot domicile à déclasser.");
   });
 });
 
@@ -101,14 +101,14 @@ describe("DecommissionDetailModal", () => {
     await user.click(await screen.findByRole("button", { name: "Sortir du stock" }));
     await user.type(screen.getByRole("textbox", { name: /Destination/ }), "École du quartier");
     await user.click(screen.getByRole("button", { name: "Continuer" }));
-    expect(await screen.findByText("Sortir 3 pièce de Maillot domicile du stock ?")).toBeInTheDocument();
+    expect(await screen.findByText("Sortir 3 pièces de Maillot domicile du stock ?")).toBeInTheDocument();
     expect(screen.getByText("Cette sortie est définitive : elle ne pourra pas être supprimée.")).toBeInTheDocument();
     expect(executeDecommission).not.toHaveBeenCalled();
     const buttons = screen.getAllByRole("button", { name: "Sortir du stock" });
     await user.click(buttons[buttons.length - 1]!);
     await waitFor(() => expect(executeDecommission).toHaveBeenCalled());
     expect(vi.mocked(executeDecommission).mock.calls[0]![1]).toMatchObject({ destination: "École du quartier" });
-    expect(onChanged).toHaveBeenCalledWith("3 pièce sortis du stock. Stock de Maillot domicile : 9 pièce.");
+    expect(onChanged).toHaveBeenCalledWith("Sortie du stock : 3 pièces. Stock de Maillot domicile : 9 pièces.");
   });
 
   it("annulation : motif obligatoire puis appel cancel/", async () => {

@@ -125,7 +125,36 @@ export function normalizeText(value: string): string {
 
 /** « 3 pièces » / « 1 pièce » : formulation constante, le chiffre vient de l'API. */
 export function piecesLabel(count: number): string {
-  return `${count} ${count > 1 ? "pièces" : "pièce"}`;
+  return `${count} ${Math.abs(count) >= 2 ? "pièces" : "pièce"}`;
+}
+
+// Unités abrégées, invariables (« 2 kg », jamais « 2 kgs »).
+const INVARIABLE_UNITS = new Set(["kg", "g", "mg", "l", "cl", "ml", "m", "cm", "mm", "km"]);
+
+function pluralUnit(unit: string): string {
+  const word = unit.trim();
+  if (!word || !/^\p{L}+$/u.test(word) || INVARIABLE_UNITS.has(word.toLowerCase())) return unit;
+  const lower = word.toLowerCase();
+  if (/[sxz]$/.test(lower)) return word;
+  if (/(au|eu)$/.test(lower)) return `${word}x`;
+  return `${word}s`;
+}
+
+/**
+ * « 1 pièce », « 26 pièces », « 2 jeux », « 3 kg » : accord en nombre d'une
+ * quantité et de son unité libre (0 et 1 au singulier). Pur accord
+ * grammatical, aucune règle métier : même règle que
+ * `apps.logistics.register.format_quantity`. Quand l'API fournit déjà
+ * `quantity_label`, c'est ce texte qui s'affiche (`quantityLabelOf`).
+ */
+export function formatQuantity(quantity: number, unit: string): string {
+  const shown = Math.abs(quantity) >= 2 ? pluralUnit(unit ?? "") : (unit ?? "");
+  return `${quantity} ${shown}`.trim();
+}
+
+/** Libellé accordé fourni par l'API, sinon repli sur la quantité et l'unité. */
+export function quantityLabelOf(item: { quantity: number; unit: string; quantity_label?: string | null }): string {
+  return item.quantity_label?.trim() || formatQuantity(item.quantity, item.unit);
 }
 
 /** « 1 article », « 2 articles » (carte « Où est le matériel », spec §3.2). */

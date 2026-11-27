@@ -38,6 +38,7 @@ import {
   MOVEMENT_TYPES_WITH_MEMBERSHIP,
   ORIGIN_KIND_OPTIONS,
   OUT_MOVEMENT_TYPE_OPTIONS,
+  formatQuantity,
 } from "./materielLabels";
 import { SearchCombobox } from "./SearchCombobox";
 import { searchExpensesForMovement, searchHolderCandidates, searchMatchesForMovement } from "./movementSearches";
@@ -239,7 +240,7 @@ export function RecordMovementModal({ open, lockedArticle, level = 1, onClose, o
     setSubmitting(true);
     try {
       const result = await recordMovement(input);
-      onSaved(`Mouvement enregistré. Stock de ${article.name} : ${result.in_stock} ${article.unit}.`);
+      onSaved(`Mouvement enregistré. Stock de ${article.name} : ${formatQuantity(result.in_stock, article.unit)}.`);
     } catch (error) {
       const message = apiErrorMessage(error);
       if (/donateur/i.test(message)) {

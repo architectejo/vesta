@@ -4,6 +4,7 @@ import { getExpense } from "../../api/treasury";
 import { Avatar, Modal } from "../../design-system";
 import { formatDateFr, formatDateTimeFr } from "./format";
 import { UNLOCATED_LABEL } from "./HolderSearch";
+import { formatQuantity } from "./materielLabels";
 
 export interface MovementDetailModalProps {
   movementId: number | null;
@@ -69,7 +70,7 @@ export function MovementDetailModal({
               <span className="text-text-muted">Quantité</span>
               <span className="tabular-nums text-text">
                 {movement.signed_quantity > 0 ? "+" : ""}
-                {movement.signed_quantity} {movement.article.unit}
+                {formatQuantity(movement.signed_quantity, movement.article.unit)}
               </span>
             </div>
             <div className="flex items-center justify-between gap-2">

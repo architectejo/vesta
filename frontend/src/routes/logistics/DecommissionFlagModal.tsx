@@ -11,7 +11,7 @@ import {
 } from "../../design-system";
 import { todayIsoDate } from "./format";
 import { HolderPicker } from "./HolderPicker";
-import { DECOMMISSION_REASON_OPTIONS } from "./materielLabels";
+import { DECOMMISSION_REASON_OPTIONS, formatQuantity } from "./materielLabels";
 import { OFFLINE_ACTION_MESSAGE, useOnlineStatus } from "./useOnlineStatus";
 
 function apiErrorMessage(error: unknown): string {
@@ -78,7 +78,7 @@ export function DecommissionFlagModal({ open, level = 1, lockedArticle, onClose,
         reason_note: note.trim() || undefined,
         noted_on: notedOn,
       });
-      onSaved(`${quantity} ${article.unit} de ${article.name} à déclasser.`);
+      onSaved(`${formatQuantity(quantity, article.unit)} de ${article.name} à déclasser.`);
     } catch (error) {
       const message = apiErrorMessage(error);
       if (/article/i.test(message)) setErrors({ article: message });

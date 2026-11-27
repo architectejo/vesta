@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { listArticles, listMovements } from "../../api/logistics";
 import { Button, Loader, Modal } from "../../design-system";
 import { formatDateFr } from "./format";
+import { formatQuantity } from "./materielLabels";
 
 export interface UnlocatedModalProps {
   open: boolean;
@@ -72,7 +73,7 @@ export function UnlocatedModal({ open, canManage, onClose, onLocate }: Unlocated
                     <span className="block text-[13px] text-text-muted">{article.category_display}</span>
                   </span>
                   <span className="shrink-0 tabular-nums text-sm text-text">
-                    {row!.quantity} {article.unit}
+                    {formatQuantity(row!.quantity, article.unit)}
                   </span>
                 </li>
               ))}

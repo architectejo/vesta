@@ -9,6 +9,9 @@ import {
   normalizeText,
   inventoryLineStatusKey,
   inventoryStatusKey,
+  formatQuantity,
+  piecesLabel,
+  quantityLabelOf,
 } from "./materielLabels";
 
 describe("equipmentLineStatusKey", () => {
@@ -79,5 +82,34 @@ describe("articlesLabel", () => {
     expect(articlesLabel(0)).toBe("0 article");
     expect(articlesLabel(1)).toBe("1 article");
     expect(articlesLabel(2)).toBe("2 articles");
+  });
+});
+
+describe("formatQuantity (accord en nombre, même règle que l'API)", () => {
+  it("singulier pour 0 et 1, pluriel à partir de 2", () => {
+    expect(formatQuantity(0, "pièce")).toBe("0 pièce");
+    expect(formatQuantity(1, "pièce")).toBe("1 pièce");
+    expect(formatQuantity(26, "pièce")).toBe("26 pièces");
+    expect(formatQuantity(-3, "pièce")).toBe("-3 pièces");
+  });
+
+  it("pluriels en x, unités invariables et formes déjà au pluriel", () => {
+    expect(formatQuantity(2, "jeu")).toBe("2 jeux");
+    expect(formatQuantity(4, "seau")).toBe("4 seaux");
+    expect(formatQuantity(3, "kg")).toBe("3 kg");
+    expect(formatQuantity(5, "pièces")).toBe("5 pièces");
+    expect(formatQuantity(2, "boîte de 6")).toBe("2 boîte de 6");
+    expect(formatQuantity(2, "")).toBe("2");
+  });
+
+  it("piecesLabel : « 1 pièce », « 3 pièces »", () => {
+    expect(piecesLabel(1)).toBe("1 pièce");
+    expect(piecesLabel(3)).toBe("3 pièces");
+  });
+
+  it("quantityLabelOf : libellé de l'API d'abord, repli accordé sinon", () => {
+    expect(quantityLabelOf({ quantity: 26, unit: "pièce", quantity_label: "26 pièces" })).toBe("26 pièces");
+    expect(quantityLabelOf({ quantity: 26, unit: "pièce" })).toBe("26 pièces");
+    expect(quantityLabelOf({ quantity: 1, unit: "pièce", quantity_label: "" })).toBe("1 pièce");
   });
 });

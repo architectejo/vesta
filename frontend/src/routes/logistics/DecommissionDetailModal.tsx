@@ -19,7 +19,7 @@ import {
 } from "../../design-system";
 import { useClosingState } from "../../hooks/useClosingState";
 import { formatDateFr, formatDateTimeFr, todayIsoDate } from "./format";
-import { decommissionStatusKey } from "./materielLabels";
+import { decommissionStatusKey, formatQuantity } from "./materielLabels";
 import { MovementDetailModal } from "./MovementDetailModal";
 import { UNLOCATED_LABEL } from "./HolderSearch";
 import { OFFLINE_ACTION_MESSAGE, useOnlineStatus } from "./useOnlineStatus";
@@ -124,7 +124,7 @@ export function DecommissionDetailModal({
       void query.refetch();
       const { article } = decommission;
       onChanged(
-        `${decommission.quantity} ${article.unit} sortis du stock. Stock de ${article.name} : ${result.in_stock} ${article.unit}.`,
+        `Sortie du stock : ${formatQuantity(decommission.quantity, article.unit)}. Stock de ${article.name} : ${formatQuantity(result.in_stock, article.unit)}.`,
       );
     } catch (error) {
       setExecuteError(apiErrorMessage(error));
@@ -231,7 +231,7 @@ export function DecommissionDetailModal({
               <DetailRow label="Article">{decommission.article.name}</DetailRow>
               <DetailRow label="Quantité">
                 <span className="tabular-nums">
-                  {decommission.quantity} {unit}
+                  {formatQuantity(decommission.quantity, unit)}
                 </span>
               </DetailRow>
               <DetailRow label="Chez">{decommission.holder?.name ?? UNLOCATED_LABEL}</DetailRow>
@@ -316,7 +316,7 @@ export function DecommissionDetailModal({
 
       <ConfirmDialog
         open={confirmExit}
-        title={decommission ? `Sortir ${decommission.quantity} ${unit} de ${decommission.article.name} du stock ?` : ""}
+        title={decommission ? `Sortir ${formatQuantity(decommission.quantity, unit)} de ${decommission.article.name} du stock ?` : ""}
         description={
           <>
             <span className="block">Cette sortie est définitive : elle ne pourra pas être supprimée.</span>

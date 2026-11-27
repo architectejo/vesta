@@ -20,6 +20,7 @@ import { UNLOCATED_LABEL } from "./HolderSearch";
 import { MovementDetailModal } from "./MovementDetailModal";
 import { RecordMovementModal } from "./RecordMovementModal";
 import { TransferModal } from "./TransferModal";
+import { formatQuantity } from "./materielLabels";
 
 export interface ArticleDetailModalProps {
   article: Article | null;
@@ -234,7 +235,7 @@ export function ArticleDetailModal({
             <div className="rounded-md border border-border p-2">
               <p className="text-xs text-text-muted">En stock</p>
               <p className="tabular-nums text-base font-semibold text-text">
-                {article.in_stock} {article.unit}
+                {formatQuantity(article.in_stock, article.unit)}
               </p>
             </div>
             <div className="rounded-md border border-border p-2">
@@ -291,7 +292,7 @@ export function ArticleDetailModal({
                       >
                         <span className="block text-sm text-text">
                           <span className="tabular-nums">
-                            {provenance.quantity} {article.unit}
+                            {formatQuantity(provenance.quantity, article.unit)}
                           </span>{" "}
                           · {provenanceOriginLabel(provenance)}
                         </span>

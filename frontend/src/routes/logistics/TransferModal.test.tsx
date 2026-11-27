@@ -76,7 +76,7 @@ describe("TransferModal", () => {
       to_holder_id: 2,
       quantity: 3,
     });
-    expect(onSaved).toHaveBeenCalledWith("Matériel déplacé : 3 pièce de Maillot domicile chez Éric Mbala.");
+    expect(onSaved).toHaveBeenCalledWith("Matériel déplacé : 3 pièces de Maillot domicile chez Éric Mbala.");
   });
 
   // Remplace l'ancien test « la quantité est bornée au stock de la source »,

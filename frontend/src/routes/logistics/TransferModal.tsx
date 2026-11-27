@@ -6,6 +6,7 @@ import { todayIsoDate } from "./format";
 import { HolderPicker } from "./HolderPicker";
 import { HolderSearch, UNLOCATED_LABEL, type HolderSelection } from "./HolderSearch";
 import { OFFLINE_ACTION_MESSAGE, useOnlineStatus } from "./useOnlineStatus";
+import { formatQuantity } from "./materielLabels";
 
 function apiErrorMessage(error: unknown): string {
   return error instanceof ApiError ? error.detail : "Une erreur est survenue de notre côté. Réessayez.";
@@ -82,7 +83,7 @@ export function TransferModal({ open, level = 1, lockedArticle, initialFrom, ini
         movement_date: date,
         reason: reason.trim() || undefined,
       });
-      onSaved(`Matériel déplacé : ${quantity} ${article.unit} de ${article.name} chez ${to.name}.`);
+      onSaved(`Matériel déplacé : ${formatQuantity(quantity, article.unit)} de ${article.name} chez ${to.name}.`);
     } catch (error) {
       const message = apiErrorMessage(error);
       // Routage des erreurs de l'API vers le champ concerné (spec §1.4).

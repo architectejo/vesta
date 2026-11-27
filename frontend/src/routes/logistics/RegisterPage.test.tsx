@@ -3,9 +3,18 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../api/client";
 import type { MyProfile } from "../../api/clubs";
-import type { Register, RegisterParams } from "../../api/logistics";
+import type { Register, RegisterExit, RegisterLine, RegisterParams, RegisterSection } from "../../api/logistics";
 import { RegisterPage } from "./RegisterPage";
-import { makeHolder, makeHolderList, renderWithProviders } from "./testFixtures";
+import {
+  makeHolder,
+  makeHolderList,
+  makeRegister,
+  makeRegisterDecommission,
+  makeRegisterExit,
+  makeRegisterLine,
+  makeRegisterSection,
+  renderWithProviders,
+} from "./testFixtures";
 
 vi.mock("../../api/clubs", async () => {
   const actual = await vi.importActual<typeof import("../../api/clubs")>("../../api/clubs");
@@ -26,52 +35,7 @@ import { getMyProfile } from "../../api/clubs";
 import { downloadRegisterCsv, downloadRegisterPdf, getRegister, listHolders } from "../../api/logistics";
 
 function register(over: Partial<Register> = {}): Register {
-  return {
-    club: { id: 1, name: "Club de l'API" },
-    as_of: "2026-11-26",
-    filters: {},
-    filters_label: "",
-    include_exits: false,
-    sections: [
-      {
-        category: "balls",
-        category_display: "Ballons",
-        lines: [
-          {
-            movement_id: 31,
-            article_id: 11,
-            designation: "Ballon match",
-            category: "balls",
-            category_display: "Ballons",
-            unit: "pièce",
-            quantity: 2,
-            movement_type: "in_donation",
-            origin_kind: "donation",
-            donor_name: "Papa Wemba",
-            origin: "Don de Papa Wemba",
-            acquisition_date: "2025-06-22",
-            acquisition_date_unknown: false,
-            acquisition_date_note: "",
-            acquisition_label: "22/06/2025",
-            recorded_on: "2026-10-01",
-            holder_id: 1,
-            location: "Local du club",
-            condition: "good",
-            condition_display: "Bon état",
-          },
-        ],
-        stock_total_by_unit: [
-          { unit: "pièces", quantity: 22 },
-          { unit: "paires", quantity: 23 },
-        ],
-        current_distribution: [{ holder_id: 1, holder_name: "Local du club", quantity: 14 }],
-      },
-    ],
-    decommissions: [],
-    exits: [],
-    is_empty: false,
-    ...over,
-  };
+  return makeRegister(over);
 }
 
 describe("RegisterPage", () => {
@@ -89,7 +53,9 @@ describe("RegisterPage", () => {
     expect(await screen.findByText("Club de l'API · arrêté au 26/11/2026")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Ballons" })).toBeInTheDocument();
     expect(screen.getByText("Don de Papa Wemba · 22/06/2025")).toBeInTheDocument();
-    expect(screen.getByText("22 pièces · 23 paires")).toBeInTheDocument();
+    expect(screen.getByText("Stock actuel : 22 pièces · 23 paires")).toBeInTheDocument();
+    expect(screen.queryByText(/^Total :/)).not.toBeInTheDocument();
+    expect(screen.getByText("2 pièces")).toBeInTheDocument();
     expect(screen.getByText("Répartition actuelle : Chez Local du club 14")).toBeInTheDocument();
     expect(screen.getByText("Aucun élément à déclasser.")).toBeInTheDocument();
   });
@@ -163,5 +129,49 @@ describe("RegisterPage", () => {
     renderWithProviders(<RegisterPage />);
     expect(await screen.findByText("Vous n'avez pas accès à cette page.")).toBeInTheDocument();
     expect(getRegister).not.toHaveBeenCalled();
+  });
+
+  it("affiche les libellés accordés de l'API pour les lignes, les sorties et les éléments à déclasser", async () => {
+    vi.mocked(getRegister).mockResolvedValue(
+      register({
+        include_exits: true,
+        filters: { search: "", category: "", holder: null, include_exits: true },
+        sections: [
+          makeRegisterSection({
+            lines: [makeRegisterLine({ quantity: 1, quantity_label: "1 pièce" })],
+            stock_total_by_unit: [{ unit: "pièce", quantity: 19 }],
+            stock_total_label: "Stock actuel : 19 pièces",
+          }),
+        ],
+        exits: [makeRegisterExit({ quantity: 26, quantity_label: "26 pièces" })],
+        decommissions: [makeRegisterDecommission({ quantity: 2, unit: "jeu", quantity_label: "2 jeux" })],
+      }),
+    );
+    renderWithProviders(<RegisterPage />);
+
+    expect(await screen.findByText("Stock actuel : 19 pièces")).toBeInTheDocument();
+    expect(screen.getByText("1 pièce")).toBeInTheDocument();
+    expect(screen.getByText("26 pièces")).toBeInTheDocument();
+    expect(screen.getByText("2 jeux")).toBeInTheDocument();
+    expect(screen.queryByText("26 pièce")).not.toBeInTheDocument();
+  });
+
+  it("repli si l'API ne fournit pas encore les libellés : ancien affichage, accordé", async () => {
+    const legacyLine = { ...makeRegisterLine({ quantity: 26 }), quantity_label: undefined } as unknown as RegisterLine;
+    const legacySection = {
+      ...makeRegisterSection({
+        lines: [legacyLine],
+        stock_total_by_unit: [{ unit: "pièce", quantity: 1 }],
+      }),
+      stock_total_label: undefined,
+    } as unknown as RegisterSection;
+    const legacyExit = { ...makeRegisterExit({ quantity: 1 }), quantity_label: undefined } as unknown as RegisterExit;
+    vi.mocked(getRegister).mockResolvedValue(register({ include_exits: true, sections: [legacySection], exits: [legacyExit] }));
+    renderWithProviders(<RegisterPage />);
+
+    expect(await screen.findByText("Total :", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("26 pièces")).toBeInTheDocument();
+    // Pied de section et sortie : « 1 pièce », jamais « 1 pièces ».
+    expect(screen.getAllByText("1 pièce")).toHaveLength(2);
   });
 });

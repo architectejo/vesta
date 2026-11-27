@@ -2,7 +2,7 @@ import type { Decommission } from "../../api/logistics";
 import { StatusBadge } from "../../design-system";
 import { formatDateFr } from "./format";
 import { UNLOCATED_LABEL } from "./HolderSearch";
-import { decommissionStatusKey } from "./materielLabels";
+import { decommissionStatusKey, formatQuantity } from "./materielLabels";
 
 /** Lignes de déclassement (carte « À déclasser » et sa liste complète, spec B4 §3.1). */
 export function DecommissionRows({
@@ -25,7 +25,7 @@ export function DecommissionRows({
               <span className="block text-sm text-text">
                 {row.article.name} ·{" "}
                 <span className="tabular-nums">
-                  {row.quantity} {row.article.unit}
+                  {formatQuantity(row.quantity, row.article.unit)}
                 </span>
               </span>
               <span className="block text-[13px] text-text-muted">

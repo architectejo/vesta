@@ -103,8 +103,10 @@ export interface MyProfile {
     logo: string | null;
     primary_color: string;
     secondary_color: string;
-    /** Fuseau IANA du club (ex. « Africa/Kinshasa ») ; demandé à dev-a, absent tant que l'API ne l'envoie pas. */
-    timezone?: string;
+    /** Fuseau IANA du club (ex. « Africa/Kinshasa »). `null` tant que les
+     * paramètres du club ne sont pas configurés : l'interface garde alors le
+     * fuseau du téléphone. Optionnel pour tolérer une réponse plus ancienne. */
+    timezone?: string | null;
   };
   identity: {
     first_name: string;

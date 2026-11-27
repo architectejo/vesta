@@ -137,9 +137,9 @@ describe("MaterielPage", () => {
   it("Président : alerte de départ sans bouton « Déplacer », pas de bandeau « non localisé »", async () => {
     setup("president");
     renderWithProviders(<MaterielPage />);
-    expect(await screen.findByText("Jean Parti a quitté le club et détient encore 3 pièce(s).")).toBeInTheDocument();
+    expect(await screen.findByText("Jean Parti a quitté le club et détient encore 3 pièces.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Déplacer" })).not.toBeInTheDocument();
-    expect(screen.queryByText("5 pièce(s) ne sont rattachées à aucun détenteur.")).not.toBeInTheDocument();
+    expect(screen.queryByText("5 pièces ne sont rattachées à aucun détenteur.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Registre de l'intendance" })).toBeInTheDocument();
   });
 
@@ -157,9 +157,25 @@ describe("MaterielPage", () => {
   it("Intendant : bandeau « non localisé » avec « Localiser » et alerte avec « Déplacer »", async () => {
     setup("steward");
     renderWithProviders(<MaterielPage />);
-    expect(await screen.findByText("5 pièce(s) ne sont rattachées à aucun détenteur.")).toBeInTheDocument();
+    expect(await screen.findByText("5 pièces ne sont rattachées à aucun détenteur.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Localiser" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Déplacer" })).toBeInTheDocument();
+  });
+
+  it("accords au singulier : « 1 pièce n'est rattachée », « détient encore 1 pièce »", async () => {
+    setup("steward");
+    vi.mocked(listHolders).mockResolvedValue(
+      makeHolderList(
+        [
+          makeHolder({ id: 1, name: "Local du club", stock_total: 8 }),
+          makeHolder({ id: 2, kind: "member", name: "Jean Parti", membership_id: 41, has_left_club: true, stock_total: 1 }),
+        ],
+        1,
+      ),
+    );
+    renderWithProviders(<MaterielPage />);
+    expect(await screen.findByText("1 pièce n'est rattachée à aucun détenteur.")).toBeInTheDocument();
+    expect(screen.getByText("Jean Parti a quitté le club et détient encore 1 pièce.")).toBeInTheDocument();
   });
 
   it("carte « À déclasser » masquée sans signalement, affichée sinon", async () => {

@@ -570,6 +570,8 @@ export interface RegisterLine {
   category_display: string;
   unit: string;
   quantity: number;
+  /** « 1 pièce », « 26 pièces » : quantité et unité accordées par l'API. */
+  quantity_label: string;
   movement_type: MovementType;
   origin_kind: OriginKind | "";
   donor_name: string;
@@ -590,6 +592,8 @@ export interface RegisterSection {
   category_display: string;
   lines: RegisterLine[];
   stock_total_by_unit: Array<{ unit: string; quantity: number }>;
+  /** « Stock actuel : 19 pièces » (stock après sorties, pas la somme des lignes). */
+  stock_total_label: string;
   current_distribution: Array<{ holder_id: number | null; holder_name: string; quantity: number }>;
 }
 
@@ -599,6 +603,8 @@ export interface RegisterDecommission {
   designation: string;
   unit: string;
   quantity: number;
+  /** « 1 pièce », « 26 pièces » : quantité et unité accordées par l'API. */
+  quantity_label: string;
   reason: DecommissionReason;
   reason_display: string;
   reason_note: string;
@@ -612,6 +618,8 @@ export interface RegisterExit {
   designation: string;
   unit: string;
   quantity: number;
+  /** « 1 pièce », « 26 pièces » : quantité et unité accordées par l'API. */
+  quantity_label: string;
   movement_type: MovementType;
   movement_type_display: string;
   movement_date: string;
@@ -619,10 +627,18 @@ export interface RegisterExit {
   reason: string;
 }
 
+export interface RegisterFilters {
+  search: string;
+  category: ArticleCategory | "";
+  holder: number | "none" | null;
+  include_exits: boolean;
+}
+
 export interface Register {
   club: { id: number; name: string };
   as_of: string;
-  filters: Record<string, unknown>;
+  /** Filtres appliqués, tels que relus par l'API (aussi écrits au journal). */
+  filters: RegisterFilters;
   filters_label: string;
   include_exits: boolean;
   sections: RegisterSection[];
