@@ -110,6 +110,9 @@ export function AttendanceDetail({ period }: DetailProps) {
           />
           <p className="text-sm text-text-muted">
             Moyenne {rateText(d.summary.average_rate)} sur {plural(d.summary.events_count, "séance", "séances")}.
+            {(d.summary.unmarked_count ?? 0) > 0
+              ? ` ${plural(d.summary.unmarked_count, "séance non pointée", "séances non pointées")}, hors moyenne.`
+              : ""}
             {d.summary.late_counts_absent ? " Un retard compte comme une absence." : ""}
           </p>
           <PagedSection
@@ -125,8 +128,14 @@ export function AttendanceDetail({ period }: DetailProps) {
               <Row
                 key={s.event_id}
                 title={`${dateLabel(s.date)} · ${s.kind_label}`}
-                sub={`Présents ${s.present}/${s.expected} · retards ${s.late} · excusés ${s.excused} · absents ${s.absent}`}
-                right={rateText(s.rate)}
+                // Séance sans aucun pointage : libellé unique, sans compteurs
+                // ni taux (club-tableau-de-bord-bureau.md, « Non pointée »).
+                sub={
+                  s.marked === false
+                    ? "Non pointée"
+                    : `Présents ${s.present}/${s.expected} · retards ${s.late} · excusés ${s.excused} · absents ${s.absent}`
+                }
+                right={s.marked === false ? undefined : rateText(s.rate)}
               />
             )}
           />

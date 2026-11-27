@@ -257,7 +257,7 @@ describe("EntrainementsPage — refus et états", () => {
     expect((await screen.findAllByText("Il faut au moins 2 séances pour afficher une évolution.")).length).toBeGreaterThan(0);
   });
 
-  it("séance sans pointage dans la liste : « Personne pointé », taux null jamais « 0 % »", async () => {
+  it("séance sans pointage dans la liste : « Non pointée », taux null jamais « 0 % »", async () => {
     vi.mocked(getMyProfile).mockResolvedValue(profile("coach"));
     vi.mocked(getSessionStatsHistory).mockResolvedValue(
       history([session(1, "2026-11-01", { attendance_rate: null, present: 0 }), session(2, "2026-11-08")]),
@@ -265,7 +265,7 @@ describe("EntrainementsPage — refus et états", () => {
     vi.mocked(getAttendanceRanking).mockResolvedValue(ranking(2));
     renderPage();
     const list = await screen.findByRole("region", { name: "Séances" });
-    expect(within(list).getByText("Personne pointé")).toBeInTheDocument();
+    expect(within(list).getByText("Non pointée")).toBeInTheDocument();
     expect(screen.queryByText(/\b0 %/)).not.toBeInTheDocument();
   });
 

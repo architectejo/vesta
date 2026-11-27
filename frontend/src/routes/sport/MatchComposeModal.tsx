@@ -1,10 +1,24 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError } from "../../api/client";
-import { listClubPlayers, type ClubPlayerListItem } from "../../api/clubs";
+import { listClubPlayers, toPlayerSearchResult, type ClubPlayerListItem } from "../../api/clubs";
 import { addToComposition, type CompositionEntry } from "../../api/sport";
-import { Avatar, Modal, NumberField, SegmentedControl } from "../../design-system";
-import { useEligibility } from "./useEligibility";
+import { getTreasuryCapabilities } from "../../api/treasury";
+import {
+  Avatar,
+  Banner,
+  Button,
+  EmptyState,
+  Loader,
+  Modal,
+  NumberField,
+  SegmentedControl,
+  useToast,
+  type PlayerSearchResult,
+} from "../../design-system";
+import { OFFLINE_ACTION_MESSAGE, useOnlineStatus } from "../logistics/useOnlineStatus";
+import { CashRegisterFlow } from "../treasury/CashRegisterModal";
+import { ELIGIBILITY_POLL_MS, useEligibility, visiblePollInterval } from "./useEligibility";
 
 const POSITION_OPTIONS = [
   { value: "goalkeeper", label: "Gardien" },
@@ -12,6 +26,13 @@ const POSITION_OPTIONS = [
   { value: "midfielder", label: "Milieu" },
   { value: "forward", label: "Attaquant" },
 ] as const;
+
+/** Effectif de la modale : inscrits ET en attente d'adhésion (ces derniers grisés, §4.1). */
+export const COMPOSE_ROSTER_QUERY_KEY = ["clubs", "players", "compose-roster"] as const;
+
+/** Texte de repli quand l'API d'éligibilité n'a pas fourni de motif (403, réseau). */
+const GENERIC_REASON = "Non sélectionnable (dette, suspension, inaptitude ou adhésion en attente)";
+const GENERIC_REASON_INLINE = "dette, suspension, inaptitude ou adhésion en attente";
 
 interface DraftRow {
   role: "starter" | "substitute";
@@ -27,58 +48,156 @@ export interface MatchComposeModalProps {
   onSaved: () => void;
 }
 
+function fullName(player: ClubPlayerListItem): string {
+  return `${player.first_name} ${player.last_name}`;
+}
+
+/** Retire le point final du motif de l'API pour l'insérer dans une phrase. */
+function inlineReason(reason: string): string {
+  return reason.trim().replace(/[.\s]+$/, "");
+}
+
+async function loadComposeRoster(): Promise<ClubPlayerListItem[]> {
+  // L'API ne filtre qu'un statut à la fois : inscrits + en attente d'adhésion.
+  // Les joueurs en attente reviennent avec `is_unavailable` (motif via
+  // l'éligibilité) : ils sont affichés grisés, jamais sélectionnables.
+  const [active, pending] = await Promise.all([
+    listClubPlayers({ status: "active" }),
+    listClubPlayers({ status: "pending" }),
+  ]);
+  const seen = new Set(active.map((p) => p.membership_id));
+  return [...active, ...pending.filter((p) => !seen.has(p.membership_id))];
+}
+
 /**
- * « Composer l'équipe » (docs/ecrans/sport-feuille-de-match.md §4.1).
+ * « Composer l'équipe » (docs/ecrans/sport-feuille-de-match.md §4.1 et §4.1 bis).
  *
- * Pré-grisage (§4.1 bis, série 6) : la liste de l'effectif porte
- * `is_unavailable` ; un joueur en dette, suspendu, inapte ou en attente
- * d'adhésion a sa case désactivée et n'est jamais envoyé. Le motif lisible
- * (« En dette : 10.00 USD. »…) est lu tel quel dans `GET /sport/eligibility/`
- * (`useEligibility`) et affiché sous le nom ; il n'est jamais recalculé ici.
- * Si cet appel échoue (403, réseau), la ligne garde le texte générique.
- * **Écart restant** : pas de rafraîchissement périodique de 15 s ni de
- * bandeau « n'est plus sélectionnable » pendant la saisie ; le contrôle réel (CLAUDE.md règle n° 5) reste fait par le service
- * `add_to_composition`, dont l'erreur s'affiche sur la ligne.
+ * Non-sélection (CLAUDE.md règle 5) : un joueur est grisé si l'effectif le dit
+ * indisponible (`is_unavailable`) OU si `GET /sport/eligibility/` le dit non
+ * éligible ; le motif est le texte de l'API, jamais recalculé ici. Le contrôle
+ * réel reste le service `add_to_composition`, dont l'erreur s'affiche sur la ligne.
+ *
+ * Régularisation sur place (4.8) : effectif et éligibilité sont relus toutes les
+ * 15 s tant que la modale est ouverte (polling, suspendu onglet caché). Un
+ * joueur coché qui devient non sélectionnable est décoché avec un bandeau ; un
+ * joueur qui redevient sélectionnable est annoncé par un toast.
  */
 export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }: MatchComposeModalProps) {
+  const { showToast } = useToast();
+  const online = useOnlineStatus();
   const [search, setSearch] = useState("");
   const [drafts, setDrafts] = useState<Record<number, DraftRow>>({});
   const [rowErrors, setRowErrors] = useState<Record<number, string>>({});
+  const [removedNotices, setRemovedNotices] = useState<Record<number, string>>({});
+  const [infoId, setInfoId] = useState<number | null>(null);
+  const [cashPlayer, setCashPlayer] = useState<PlayerSearchResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const rosterQuery = useQuery({
-    queryKey: ["clubs", "players", "active"],
-    queryFn: () => listClubPlayers({ status: "active" }),
+    queryKey: COMPOSE_ROSTER_QUERY_KEY,
+    queryFn: loadComposeRoster,
     enabled: open,
+    refetchInterval: visiblePollInterval(ELIGIBILITY_POLL_MS),
   });
 
-  const eligibility = useEligibility(open);
+  const eligibility = useEligibility(open, { pollMs: ELIGIBILITY_POLL_MS });
 
+  // « Encaisser » : capacité calculée par l'API (Trésorier ou adjoint), jamais
+  // déduite d'un rôle ici. Un échec laisse simplement le lien absent.
+  const capabilitiesQuery = useQuery({
+    queryKey: ["treasury", "capabilities"],
+    queryFn: () => getTreasuryCapabilities(),
+    enabled: open,
+    retry: false,
+  });
+  const canCollect = capabilitiesQuery.data?.capabilities.can_record_payments ?? false;
+  const currency = capabilitiesQuery.data?.currency ?? "";
+
+  const roster = rosterQuery.data;
   const alreadyComposed = useMemo(() => new Set(existing.map((e) => e.membership_id)), [existing]);
   // Non sélectionnable si l'effectif OU l'éligibilité groupée le disent :
   // deux réponses de l'API, aucune règle évaluée ici.
-  const blockedIds = useMemo(
+  const blockedIds = useMemo<ReadonlySet<number>>(
     () =>
       new Set(
-        (rosterQuery.data ?? [])
+        (roster ?? [])
           .filter((p) => p.is_unavailable || eligibility.get(p.membership_id)?.eligible === false)
           .map((p) => p.membership_id),
       ),
-    [rosterQuery.data, eligibility],
+    [roster, eligibility],
   );
 
+  const reasonOf = useCallback(
+    (membershipId: number): string => {
+      const item = eligibility.get(membershipId);
+      return item && !item.eligible ? item.reason.trim() : "";
+    },
+    [eligibility],
+  );
+
+  // Transitions entre deux rafraîchissements (§4.1 bis) : comparaison avec
+  // l'état précédent, jamais au premier chargement.
+  const previousBlockedRef = useRef<ReadonlySet<number> | null>(null);
+  useEffect(() => {
+    if (!open || !roster) {
+      previousBlockedRef.current = null;
+      return;
+    }
+    const previous = previousBlockedRef.current;
+    previousBlockedRef.current = blockedIds;
+    if (!previous || previous === blockedIds) return;
+
+    const byId = new Map(roster.map((p) => [p.membership_id, p] as const));
+    const newlyBlocked = [...blockedIds].filter((id) => !previous.has(id));
+    const unblocked = [...previous].filter((id) => !blockedIds.has(id) && byId.has(id));
+
+    const removed = newlyBlocked.filter((id) => drafts[id] && !alreadyComposed.has(id));
+    if (removed.length > 0) {
+      setDrafts((current) => {
+        const next = { ...current };
+        for (const id of removed) delete next[id];
+        return next;
+      });
+    }
+    if (removed.length > 0 || unblocked.length > 0) {
+      setRemovedNotices((current) => {
+        const next = { ...current };
+        for (const id of unblocked) delete next[id];
+        for (const id of removed) {
+          const player = byId.get(id)!;
+          const reason = inlineReason(reasonOf(id)) || GENERIC_REASON_INLINE;
+          next[id] = `${fullName(player)} n'est plus sélectionnable : ${reason}. Il a été retiré de votre sélection.`;
+        }
+        return next;
+      });
+    }
+    for (const id of unblocked) {
+      if (alreadyComposed.has(id)) continue;
+      showToast(`${fullName(byId.get(id)!)} est désormais sélectionnable.`);
+    }
+  }, [open, roster, blockedIds, drafts, alreadyComposed, showToast, reasonOf]);
+
+  // Fermeture : les bandeaux et le panneau d'information ne survivent pas.
+  useEffect(() => {
+    if (!open) {
+      setRemovedNotices({});
+      setInfoId(null);
+      setCashPlayer(null);
+    }
+  }, [open]);
+
   // Sélectionnables d'abord, non sélectionnables ensuite (§4.1).
-  const sorted = [...(rosterQuery.data ?? [])].sort(
+  const sorted = [...(roster ?? [])].sort(
     (a, b) => Number(blockedIds.has(a.membership_id)) - Number(blockedIds.has(b.membership_id)),
   );
+  const query = search.trim().toLowerCase();
   const filtered = sorted.filter((player) => {
-    if (!search.trim()) return true;
-    const q = search.trim().toLowerCase();
-    return (
-      `${player.first_name} ${player.last_name}`.toLowerCase().includes(q) ||
-      String(player.jersey_number ?? "").includes(q)
-    );
+    if (!query) return true;
+    return fullName(player).toLowerCase().includes(query) || String(player.jersey_number ?? "").includes(query);
   });
+  const noneSelectable =
+    (roster ?? []).length > 0 &&
+    (roster ?? []).every((p) => blockedIds.has(p.membership_id) || alreadyComposed.has(p.membership_id));
 
   function toggle(player: ClubPlayerListItem): void {
     setDrafts((current) => {
@@ -132,115 +251,196 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
 
   const selectedCount = Object.keys(drafts).length;
   const starterCount = Object.values(drafts).filter((d) => d.role === "starter").length;
+  const notices = Object.entries(removedNotices);
+
+  function renderList() {
+    if (rosterQuery.isLoading) {
+      return <Loader loading variant="list" count={6} />;
+    }
+    if (rosterQuery.isError) {
+      return (
+        <EmptyState
+          variant="error"
+          message="Impossible de charger l'effectif."
+          actionLabel="Réessayer"
+          onAction={() => void rosterQuery.refetch()}
+        />
+      );
+    }
+    if ((roster ?? []).length === 0) {
+      return <EmptyState message="Aucun joueur dans l'effectif." />;
+    }
+    if (filtered.length === 0) {
+      return <EmptyState variant="no-results" message={`Aucun joueur ne correspond à « ${search.trim()} ».`} />;
+    }
+    return (
+      <ul className="divide-y divide-border">
+        {filtered.map((player) => {
+          const composed = alreadyComposed.has(player.membership_id);
+          // §4.1 bis : un joueur en dette, suspendu, inapte ou en attente
+          // n'est jamais cochable (CLAUDE.md règle 5). Le motif est le texte
+          // de l'API ; le service de composition reste le contrôle réel.
+          const blocked = blockedIds.has(player.membership_id) && !composed;
+          const reason = reasonOf(player.membership_id);
+          const draft = drafts[player.membership_id];
+          const error = rowErrors[player.membership_id];
+          const infoOpen = blocked && infoId === player.membership_id;
+          const name = fullName(player);
+          const identity = (
+            <>
+              <Avatar name={name} photoUrl={player.photo} size={40} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm text-text">
+                  {name}
+                  {composed ? " (déjà composé)" : ""}
+                </span>
+                <span className="block truncate text-xs text-text-muted">{player.position_label}</span>
+                {blocked ? (
+                  // 14 px : information critique (§4.1 bis, 10.2 n° 31).
+                  <span className="block text-sm text-status-danger-fg">{reason || GENERIC_REASON}</span>
+                ) : null}
+              </span>
+            </>
+          );
+          return (
+            <li key={player.membership_id} className="py-2">
+              <div className="flex items-center gap-3">
+                {/* Zone tactile de 44 px autour de la case (§4.1, B7). */}
+                <label
+                  className={[
+                    "flex h-11 w-11 shrink-0 items-center justify-center",
+                    blocked ? "opacity-60" : "cursor-pointer",
+                  ].join(" ")}
+                >
+                  <input
+                    type="checkbox"
+                    className="h-5 w-5 shrink-0"
+                    checked={(Boolean(draft) || composed) && !blocked}
+                    disabled={composed || blocked}
+                    aria-disabled={composed || blocked}
+                    onChange={() => toggle(player)}
+                    aria-label={`Sélectionner ${name}`}
+                  />
+                </label>
+                {blocked ? (
+                  // Toucher le reste de la ligne : panneau d'information seul
+                  // (§4.1 bis), jamais « Titulaire » ni « Remplaçant ».
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-3 text-left opacity-60"
+                    aria-expanded={infoOpen}
+                    aria-label={`Pourquoi ${name} n'est pas sélectionnable`}
+                    onClick={() => setInfoId(infoOpen ? null : player.membership_id)}
+                  >
+                    {identity}
+                  </button>
+                ) : (
+                  <div className="flex min-w-0 flex-1 items-center gap-3">{identity}</div>
+                )}
+              </div>
+              {infoOpen ? (
+                <div
+                  role="note"
+                  className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-muted px-3 py-2 text-sm text-text"
+                >
+                  <span>
+                    {name} ne peut pas être sélectionné : {reason ? inlineReason(reason) : GENERIC_REASON_INLINE}
+                  </span>
+                  {canCollect ? (
+                    <Button size="sm" variant="secondary" onClick={() => setCashPlayer(toPlayerSearchResult(player))}>
+                      Encaisser
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+              {draft && !composed && !blocked ? (
+                <div className="mt-2 flex flex-wrap items-end gap-3 pl-7">
+                  <SegmentedControl
+                    label="Rôle"
+                    value={draft.role}
+                    onChange={(v) => updateDraft(player.membership_id, { role: v })}
+                    options={[
+                      { value: "starter", label: "Titulaire" },
+                      { value: "substitute", label: "Remplaçant" },
+                    ]}
+                  />
+                  <label className="block text-sm font-medium text-text">
+                    Poste du jour
+                    <select
+                      className="mt-1 h-control-md rounded-sm border border-border-strong bg-surface px-2 text-base"
+                      value={draft.position}
+                      onChange={(e) => updateDraft(player.membership_id, { position: e.target.value })}
+                    >
+                      {POSITION_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <NumberField
+                    label="N° du jour"
+                    value={draft.jerseyNumber}
+                    onChange={(v) => updateDraft(player.membership_id, { jerseyNumber: v })}
+                    min={1}
+                    max={99}
+                  />
+                </div>
+              ) : null}
+              {error ? <p className="mt-1 pl-7 text-xs text-status-danger-fg">{error}</p> : null}
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Composer l'équipe"
-      size="lg"
-      isSubmitting={submitting}
-      confirmLabel="Enregistrer"
-      confirmDisabled={selectedCount === 0}
-      onConfirm={() => void handleSubmit()}
-    >
-      <div className="space-y-3">
-        <input
-          type="text"
-          placeholder="Nom ou numéro"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="h-9 w-full rounded-sm border border-border-strong bg-surface px-3 text-base text-text placeholder:text-text-muted"
-        />
-        <p className="text-xs text-text-muted">
-          {starterCount} titulaires · {selectedCount - starterCount} remplaçants
-        </p>
+    <>
+      <Modal
+        open={open}
+        onClose={onClose}
+        title="Composer l'équipe"
+        size="lg"
+        isSubmitting={submitting}
+        confirmLabel="Enregistrer"
+        confirmDisabled={selectedCount === 0 || !online}
+        onConfirm={() => void handleSubmit()}
+      >
+        <div className="space-y-3">
+          {notices.map(([id, message]) => (
+            <Banner key={id} variant="danger">
+              {message}
+            </Banner>
+          ))}
+          {!online ? <Banner variant="warning">{OFFLINE_ACTION_MESSAGE}</Banner> : null}
+          <input
+            type="text"
+            placeholder="Nom ou numéro"
+            aria-label="Nom ou numéro"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-9 w-full rounded-sm border border-border-strong bg-surface px-3 text-base text-text placeholder:text-text-muted"
+          />
+          <p className="text-xs text-text-muted">
+            {starterCount} titulaires · {selectedCount - starterCount} remplaçants
+          </p>
+          {noneSelectable ? (
+            <p className="text-sm text-text-muted">Aucun joueur n'est sélectionnable pour l'instant.</p>
+          ) : null}
+          {renderList()}
+        </div>
+      </Modal>
 
-        {rosterQuery.isLoading ? (
-          <p className="text-sm text-text-muted">Chargement…</p>
-        ) : (
-          <ul className="divide-y divide-border">
-            {filtered.map((player) => {
-              const composed = alreadyComposed.has(player.membership_id);
-              // §4.1 bis : un joueur en dette, suspendu, inapte ou en attente
-              // n'est jamais cochable (CLAUDE.md règle 5). Le motif est le texte
-              // de l'API ; le service de composition reste le contrôle réel.
-              const blocked = blockedIds.has(player.membership_id) && !composed;
-              const eligibilityItem = eligibility.get(player.membership_id);
-              const reason = eligibilityItem && !eligibilityItem.eligible ? eligibilityItem.reason.trim() : "";
-              const draft = drafts[player.membership_id];
-              const error = rowErrors[player.membership_id];
-              return (
-                <li key={player.membership_id} className="py-2">
-                  <div className={["flex items-center gap-3", blocked ? "opacity-60" : ""].join(" ")}>
-                    {/* Zone tactile de 44 px autour de la case (§4.1, B7). */}
-                    <label className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center">
-                      <input
-                        type="checkbox"
-                        className="h-5 w-5 shrink-0"
-                        checked={(Boolean(draft) || composed) && !blocked}
-                        disabled={composed || blocked}
-                        aria-disabled={composed || blocked}
-                        onChange={() => toggle(player)}
-                        aria-label={`Sélectionner ${player.first_name} ${player.last_name}`}
-                      />
-                    </label>
-                    <Avatar name={`${player.first_name} ${player.last_name}`} photoUrl={player.photo} size={40} />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm text-text">
-                        {player.first_name} {player.last_name}
-                        {composed ? " (déjà composé)" : ""}
-                      </p>
-                      <p className="truncate text-xs text-text-muted">{player.position_label}</p>
-                      {blocked ? (
-                        // 14 px : information critique (§4.1 bis, 10.2 n° 31).
-                        <p className="text-sm text-status-danger-fg">
-                          {reason || "Non sélectionnable (dette, suspension, inaptitude ou adhésion en attente)"}
-                        </p>
-                      ) : null}
-                    </div>
-                  </div>
-                  {draft && !composed && !blocked ? (
-                    <div className="mt-2 flex flex-wrap items-end gap-3 pl-7">
-                      <SegmentedControl
-                        label="Rôle"
-                        value={draft.role}
-                        onChange={(v) => updateDraft(player.membership_id, { role: v })}
-                        options={[
-                          { value: "starter", label: "Titulaire" },
-                          { value: "substitute", label: "Remplaçant" },
-                        ]}
-                      />
-                      <label className="block text-sm font-medium text-text">
-                        Poste du jour
-                        <select
-                          className="mt-1 h-control-md rounded-sm border border-border-strong bg-surface px-2 text-base"
-                          value={draft.position}
-                          onChange={(e) => updateDraft(player.membership_id, { position: e.target.value })}
-                        >
-                          {POSITION_OPTIONS.map((o) => (
-                            <option key={o.value} value={o.value}>
-                              {o.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <NumberField
-                        label="N° du jour"
-                        value={draft.jerseyNumber}
-                        onChange={(v) => updateDraft(player.membership_id, { jerseyNumber: v })}
-                        min={1}
-                        max={99}
-                      />
-                    </div>
-                  ) : null}
-                  {error ? <p className="mt-1 pl-7 text-xs text-status-danger-fg">{error}</p> : null}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-    </Modal>
+      {canCollect ? (
+        <CashRegisterFlow
+          open={cashPlayer !== null}
+          level={2}
+          currency={currency}
+          initialPlayer={cashPlayer}
+          onClose={() => setCashPlayer(null)}
+        />
+      ) : null}
+    </>
   );
 }

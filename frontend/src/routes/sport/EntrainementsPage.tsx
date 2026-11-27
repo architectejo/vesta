@@ -387,7 +387,7 @@ export function EntrainementsPage() {
                           </span>
                           <span className="block text-xs text-text-muted">
                             {session.attendance_rate === null
-                              ? "Personne pointé"
+                              ? "Non pointée"
                               : `${session.present} ${plural(session.present, "présent", "présents")} · ${session.attendance_rate} %`}
                             {staff && session.average_rating !== null ? ` · note ${formatNote(session.average_rating)}` : ""}
                             {!staff && session.my_rating !== null ? ` · ma note ${formatNote(session.my_rating)}` : ""}

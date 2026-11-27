@@ -6,6 +6,17 @@ import { listEligibility, type EligibilityItem } from "../../api/sport";
 /** Préfixe de la clé : complété par l'identifiant du club actif (étanchéité du cache). */
 export const ELIGIBILITY_QUERY_KEY = ["sport", "eligibility"] as const;
 
+/** Rafraîchissement de l'éligibilité dans « Composer l'équipe » (§4.1, 4.8 : 15 s, polling). */
+export const ELIGIBILITY_POLL_MS = 15_000;
+
+/**
+ * Intervalle de rafraîchissement suspendu quand l'onglet est caché (même
+ * règle que le fil et le chat, 6.5) : aucune requête inutile en arrière-plan.
+ */
+export function visiblePollInterval(ms: number): () => number | false {
+  return () => (typeof document !== "undefined" && document.visibilityState === "hidden" ? false : ms);
+}
+
 const EMPTY: ReadonlyMap<number, EligibilityItem> = new Map();
 
 function indexByMembership(data: { results: EligibilityItem[] }): ReadonlyMap<number, EligibilityItem> {
@@ -34,8 +45,15 @@ function shouldRetry(failureCount: number, error: Error): boolean {
  * réutilise jamais les motifs de l'ancien), et un refus d'accès (401/403, par
  * exemple après révocation du rôle de Coach) efface aussitôt les motifs déjà
  * reçus au lieu de continuer à les afficher.
+ *
+ * `pollMs` (facultatif) : rafraîchissement périodique tant que `enabled`
+ * reste vrai (modale ouverte), suspendu onglet caché. Pas de WebSocket
+ * (contrainte d'hébergement, CLAUDE.md §4).
  */
-export function useEligibility(enabled: boolean): ReadonlyMap<number, EligibilityItem> {
+export function useEligibility(
+  enabled: boolean,
+  options: { pollMs?: number } = {},
+): ReadonlyMap<number, EligibilityItem> {
   const queryClient = useQueryClient();
   const clubId = queryClient.getQueryData<MyProfile>(["profile", "me"])?.club?.id ?? null;
   const query = useQuery({
@@ -43,6 +61,7 @@ export function useEligibility(enabled: boolean): ReadonlyMap<number, Eligibilit
     queryFn: listEligibility,
     enabled,
     staleTime: 15_000,
+    refetchInterval: options.pollMs ? visiblePollInterval(options.pollMs) : false,
     retry: shouldRetry,
     select: indexByMembership,
   });

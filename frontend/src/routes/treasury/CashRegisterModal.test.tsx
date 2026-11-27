@@ -3,7 +3,8 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../design-system";
-import { CashRegisterFlow } from "./CashRegisterModal";
+import { ELIGIBILITY_QUERY_KEY } from "../sport/useEligibility";
+import { CashRegisterFlow, type CashRegisterFlowProps } from "./CashRegisterModal";
 
 vi.mock("../../api/treasury", async () => {
   const actual = await vi.importActual<typeof import("../../api/treasury")>("../../api/treasury");
@@ -42,17 +43,34 @@ const SESSION = {
   currency: "USD",
 };
 
-function renderFlow(onClose = vi.fn()) {
+function renderFlow(onClose = vi.fn(), extra: Partial<CashRegisterFlowProps> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const invalidateSpy = vi.spyOn(client, "invalidateQueries");
   render(
     <QueryClientProvider client={client}>
       <ToastProvider>
-        <CashRegisterFlow open currency="USD" onClose={onClose} />
+        <CashRegisterFlow open currency="USD" onClose={onClose} {...extra} />
       </ToastProvider>
     </QueryClientProvider>,
   );
-  return { onClose };
+  return { onClose, invalidateSpy };
 }
+
+const JEAN = {
+  membership_id: 5,
+  first_name: "Jean",
+  last_name: "Kabila",
+  jersey_number: 7,
+  photo: null,
+  membership_status: "active",
+  membership_status_label: "Inscrit",
+  default_contribution_type_id: null,
+  balance: "-10.00",
+  amount_due: "10.00",
+  is_in_good_standing: false,
+  reason: "Le joueur est en dette : 10.00 USD à régulariser.",
+  currency: "USD",
+};
 
 describe("CashRegisterFlow", () => {
   afterEach(() => {
@@ -156,7 +174,7 @@ describe("CashRegisterFlow", () => {
     });
 
     const user = userEvent.setup();
-    renderFlow();
+    const { invalidateSpy } = renderFlow();
 
     const search = await screen.findByRole("combobox", { name: "Nom ou numéro du joueur" });
     await user.type(search, "Jean");
@@ -179,6 +197,26 @@ describe("CashRegisterFlow", () => {
     );
     expect(await screen.findByText("Jean est en ordre. Il peut être composé.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Encaisser pour un autre joueur" })).toBeInTheDocument();
+    // Régularisation sur place (sport-feuille-de-match.md §4.1) : l'éligibilité
+    // de « Composer l'équipe » est relue aussitôt après l'encaissement.
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ELIGIBILITY_QUERY_KEY });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["clubs", "players"] });
+  });
+
+  it("lien « Encaisser » de la composition : joueur prérempli avec son solde, au niveau 2", async () => {
+    vi.mocked(getCurrentCashSession).mockResolvedValue({ session: SESSION });
+    vi.mocked(getContributionTypes).mockResolvedValue([]);
+    vi.mocked(searchCashSessionPlayers).mockResolvedValue({ results: [JEAN] });
+    renderFlow(vi.fn(), {
+      level: 2,
+      initialPlayer: { id: 5, firstName: "Jean", lastName: "Kabila", number: 7, position: "Milieu", photoUrl: null },
+    });
+
+    expect(await screen.findByText("Solde : -10 USD")).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Caisse Terrain Express" });
+    expect(within(dialog).getAllByText("Jean Kabila").length).toBeGreaterThan(0);
+    expect(searchCashSessionPlayers).toHaveBeenCalledWith("session-1", "Kabila");
+    expect(within(dialog).getByLabelText("Montant en espèces")).toBeInTheDocument();
   });
 
   it("ferme la session après confirmation", async () => {

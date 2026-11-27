@@ -40,14 +40,15 @@ function dashboard(overrides: Partial<BoardDashboard> = {}): BoardDashboard {
     as_of: "2026-11-15",
     attendance: {
       events_count: 4,
+      unmarked_count: 0,
       average_rate: "74.00",
       last_rate: "72.00",
       late_counts_absent: false,
       totals: { expected: 40, present: 30, late: 0, excused: 4, absent: 6 },
       by_kind: {},
       points: [
-        { event_id: 1, kind: "session", kind_label: "Séance", date: "2026-11-03", expected: 10, present: 8, late: 0, excused: 1, absent: 1, rate: "80.00" },
-        { event_id: 2, kind: "session", kind_label: "Séance", date: "2026-11-10", expected: 10, present: 7, late: 0, excused: 1, absent: 2, rate: "70.00" },
+        { event_id: 1, kind: "session", kind_label: "Séance", date: "2026-11-03", expected: 10, present: 8, late: 0, excused: 1, absent: 1, marked: true, rate: "80.00" },
+        { event_id: 2, kind: "session", kind_label: "Séance", date: "2026-11-10", expected: 10, present: 7, late: 0, excused: 1, absent: 2, marked: true, rate: "70.00" },
       ],
       series: [],
     },

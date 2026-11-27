@@ -67,11 +67,15 @@ export interface AttendancePoint {
   late: number;
   excused: number;
   absent: number;
+  /** Faux : séance sans aucun pointage (« Non pointée », sans compteurs, hors moyenne). */
+  marked: boolean;
   rate: Rate;
 }
 
 export interface AttendanceCard {
   events_count: number;
+  /** Séances de la période sans aucun pointage (exclues de la moyenne). */
+  unmarked_count: number;
   average_rate: Rate;
   last_rate: Rate;
   late_counts_absent: boolean;

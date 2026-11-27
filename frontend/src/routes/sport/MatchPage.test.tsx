@@ -221,3 +221,58 @@ describe("MatchPage : publication du résultat", () => {
     expect(await screen.findByText("Le résultat de ce match est déjà publié.")).toBeInTheDocument();
   });
 });
+
+describe("MatchPage — composition hors connexion (§4.1 bis)", () => {
+  beforeEach(() => {
+    vi.mocked(listClubPlayers).mockResolvedValue(makeRoster());
+    vi.mocked(listEventIncidents).mockResolvedValue({ count: 0, next_offset: null, results: [] });
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile("coach"));
+  });
+
+  it("« Composer l'équipe » désactivé avec « Cette action nécessite une connexion. »", async () => {
+    const onLine = vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    vi.mocked(getMatch).mockResolvedValue(makeMatch());
+    renderPage();
+
+    const buttons = await screen.findAllByRole("button", { name: "Composer l'équipe" });
+    for (const button of buttons) expect(button).toBeDisabled();
+    expect(screen.getByText("Cette action nécessite une connexion.")).toBeInTheDocument();
+    onLine.mockRestore();
+  });
+
+  it("« Publier la composition » et « Modifier la composition » désactivés hors connexion", async () => {
+    const onLine = vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    const brief = { membership_id: 12, name: "Kevin Proto", jersey_number: 12, position: "midfielder", position_label: "Milieu", photo: null };
+    vi.mocked(getMatch).mockResolvedValue(
+      makeMatch({
+        starters: [
+          {
+            id: 1,
+            membership_id: 12,
+            player: brief,
+            role: "starter",
+            role_label: "Titulaire",
+            position: "midfielder",
+            position_label: "Milieu",
+            jersey_number: 12,
+            no_longer_eligible: null,
+          },
+        ],
+      }),
+    );
+    renderPage();
+
+    const publish = await screen.findAllByRole("button", { name: "Publier la composition" });
+    for (const button of publish) expect(button).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Modifier la composition" })).toBeDisabled();
+    expect(screen.getByText("Cette action nécessite une connexion.")).toBeInTheDocument();
+    onLine.mockRestore();
+  });
+
+  it("en ligne : « Composer l'équipe » reste actif", async () => {
+    vi.mocked(getMatch).mockResolvedValue(makeMatch());
+    renderPage();
+    const buttons = await screen.findAllByRole("button", { name: "Composer l'équipe" });
+    for (const button of buttons) expect(button).toBeEnabled();
+  });
+});

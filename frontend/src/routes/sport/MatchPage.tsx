@@ -57,6 +57,7 @@ import {
 import { IncidentModal } from "./IncidentModal";
 import { useBulkAttendance, type BulkAttendanceState } from "./useBulkAttendance";
 import { MatchComposeModal } from "./MatchComposeModal";
+import { OFFLINE_ACTION_MESSAGE, useOnlineStatus } from "../logistics/useOnlineStatus";
 import { getSportAccess } from "./sportAccess";
 import { formatTime, useClubTimeZone } from "./sportTime";
 
@@ -147,6 +148,7 @@ function CompositionCard({
   match,
   canManage,
   ownMembershipId,
+  online,
   onOpenCompose,
   onRemove,
   onPublish,
@@ -154,6 +156,8 @@ function CompositionCard({
   match: MatchDetail;
   canManage: boolean;
   ownMembershipId: number | undefined;
+  /** Composition et publication exigent une connexion (§4.1 bis, hors 6.6). */
+  online: boolean;
   onOpenCompose: () => void;
   onRemove: (membershipId: number) => void;
   onPublish: () => void;
@@ -178,7 +182,7 @@ function CompositionCard({
       ) : null}
 
       {ineligibleCount > 0 && canManage ? (
-        <Banner variant="warning" className="mb-2" action={<Button size="sm" variant="ghost" onClick={onOpenCompose}>Modifier la composition</Button>}>
+        <Banner variant="warning" className="mb-2" action={<Button size="sm" variant="ghost" disabled={!online} title={online ? undefined : OFFLINE_ACTION_MESSAGE} onClick={onOpenCompose}>Modifier la composition</Button>}>
           {ineligibleCount} joueur(s) de la composition ne peuvent plus jouer. Retirez-les ou attendez leur
           régularisation.
         </Banner>
@@ -187,8 +191,9 @@ function CompositionCard({
       {all.length === 0 ? (
         <EmptyState
           message={canManage ? "Aucune composition pour l'instant." : "La composition n'est pas encore publiée."}
-          actionLabel={canManage ? "Composer l'équipe" : undefined}
-          onAction={canManage ? onOpenCompose : undefined}
+          description={canManage && !online ? OFFLINE_ACTION_MESSAGE : undefined}
+          actionLabel={canManage && online ? "Composer l'équipe" : undefined}
+          onAction={canManage && online ? onOpenCompose : undefined}
         />
       ) : (
         <div className="space-y-3">
@@ -228,13 +233,28 @@ function CompositionCard({
             );
           })}
           {canManage && !match.is_composition_published ? (
-            <div className="flex gap-2">
-              <Button size="sm" variant="secondary" onClick={onOpenCompose}>
-                Modifier la composition
-              </Button>
-              <Button size="sm" variant="primary" disabled={ineligibleCount > 0} onClick={onPublish}>
-                Publier la composition
-              </Button>
+            <div className="space-y-1">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!online}
+                  title={online ? undefined : OFFLINE_ACTION_MESSAGE}
+                  onClick={onOpenCompose}
+                >
+                  Modifier la composition
+                </Button>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={ineligibleCount > 0 || !online}
+                  title={online ? undefined : OFFLINE_ACTION_MESSAGE}
+                  onClick={onPublish}
+                >
+                  Publier la composition
+                </Button>
+              </div>
+              {!online ? <p className="text-[13px] text-text-muted">{OFFLINE_ACTION_MESSAGE}</p> : null}
             </div>
           ) : null}
         </div>
@@ -719,6 +739,8 @@ export function MatchPage() {
     enabled: Number.isFinite(matchId),
   });
 
+  // Composition et publication : en ligne seulement (§4.1 bis, absentes du 6.6).
+  const online = useOnlineStatus();
   const pendingQueue = useOfflineActionQueue<PendingMatchAttendance>({
     storageKey: `vesta.offline.match-attendance.${matchId}`,
     processItem: async (payload) => {
@@ -907,14 +929,21 @@ export function MatchPage() {
       {access.canManageMatch && !match.is_locked ? (
         <div className="flex flex-wrap gap-2">
           {match.starters.length === 0 && match.substitutes.length === 0 ? (
-            <Button variant="primary" size="sm" onClick={() => setComposeOpen(true)}>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!online}
+              title={online ? undefined : OFFLINE_ACTION_MESSAGE}
+              onClick={() => setComposeOpen(true)}
+            >
               Composer l'équipe
             </Button>
           ) : !match.is_composition_published ? (
             <Button
               variant="primary"
               size="sm"
-              disabled={[...match.starters, ...match.substitutes].some((c) => c.no_longer_eligible)}
+              disabled={!online || [...match.starters, ...match.substitutes].some((c) => c.no_longer_eligible)}
+              title={online ? undefined : OFFLINE_ACTION_MESSAGE}
               onClick={() => void handlePublish()}
             >
               Publier la composition
@@ -984,6 +1013,7 @@ export function MatchPage() {
         match={match}
         canManage={access.canManageMatch && !match.is_locked}
         ownMembershipId={profileQuery.data?.membership_id}
+        online={online}
         onOpenCompose={() => setComposeOpen(true)}
         onRemove={(id) => setRemoveConfirm(id)}
         onPublish={() => void handlePublish()}

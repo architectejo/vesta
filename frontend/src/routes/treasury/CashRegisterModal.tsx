@@ -29,6 +29,7 @@ import {
   type StatusKey,
 } from "../../design-system";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { ELIGIBILITY_QUERY_KEY } from "../sport/useEligibility";
 import { formatAmount, formatMonthYear, toApiAmount } from "./money";
 
 const CASH_SESSION_QUERY_KEY = ["treasury", "cash-session-current"] as const;
@@ -67,6 +68,11 @@ export interface CashRegisterFlowProps {
   open: boolean;
   currency: string;
   onClose: () => void;
+  /** Niveau d'empilement : 2 quand la caisse s'ouvre depuis une autre modale
+   * (lien « Encaisser » de « Composer l'équipe », sport-feuille-de-match.md §4.1). */
+  level?: 1 | 2;
+  /** Joueur prérempli (lien « Encaisser ») ; l'utilisateur peut le changer. */
+  initialPlayer?: PlayerSearchResult | null;
 }
 
 /**
@@ -79,7 +85,7 @@ export interface CashRegisterFlowProps {
  * complet (file d'actions locale horodatée, envoi différé, `SyncIndicator`)
  * n'est pas implémenté ici ; seul le cas en ligne fonctionne de bout en bout.
  */
-export function CashRegisterFlow({ open, currency, onClose }: CashRegisterFlowProps) {
+export function CashRegisterFlow({ open, currency, onClose, level = 1, initialPlayer = null }: CashRegisterFlowProps) {
   const queryClient = useQueryClient();
   const [justOpened, setJustOpened] = useState<CashSession | null>(null);
 
@@ -100,14 +106,14 @@ export function CashRegisterFlow({ open, currency, onClose }: CashRegisterFlowPr
   if (!session) {
     if (sessionQuery.isLoading) {
       return (
-        <Modal open onClose={onClose} title="Caisse Terrain Express" size="xl" loading hideFooter>
+        <Modal open onClose={onClose} title="Caisse Terrain Express" size="xl" level={level} loading hideFooter>
           {null}
         </Modal>
       );
     }
     if (sessionQuery.isError) {
       return (
-        <Modal open onClose={onClose} title="Caisse Terrain Express" size="xl" hideFooter>
+        <Modal open onClose={onClose} title="Caisse Terrain Express" size="xl" level={level} hideFooter>
           <EmptyState variant="error" actionLabel="Réessayer" onAction={() => void sessionQuery.refetch()} />
         </Modal>
       );
@@ -127,6 +133,8 @@ export function CashRegisterFlow({ open, currency, onClose }: CashRegisterFlowPr
     <CashRegisterModal
       session={session}
       currency={currency}
+      level={level}
+      initialPlayer={initialPlayer}
       onClose={onClose}
       onSessionClosed={() => {
         setJustOpened(null);
@@ -205,6 +213,8 @@ function OpenCashSessionModal({
 interface CashRegisterModalProps {
   session: CashSession;
   currency: string;
+  level: 1 | 2;
+  initialPlayer: PlayerSearchResult | null;
   onClose: () => void;
   onSessionClosed: () => void;
   onSessionRefresh: (session: CashSession) => void;
@@ -213,13 +223,16 @@ interface CashRegisterModalProps {
 function CashRegisterModal({
   session,
   currency,
+  level,
+  initialPlayer,
   onClose,
   onSessionClosed,
   onSessionRefresh,
 }: CashRegisterModalProps) {
   const { showToast } = useToast();
+  const queryClient = useQueryClient();
 
-  const [player, setPlayer] = useState<PlayerSearchResult | null>(null);
+  const [player, setPlayer] = useState<PlayerSearchResult | null>(initialPlayer);
   const [selectedRaw, setSelectedRaw] = useState<CashSessionPlayer | null>(null);
   const [contributionTypeId, setContributionTypeId] = useState<number | null>(null);
   const [amount, setAmount] = useState("");
@@ -230,6 +243,24 @@ function CashRegisterModal({
   const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const lastResultsRef = useRef<Map<string | number, CashSessionPlayer>>(new Map());
+  // Joueur prérempli (lien « Encaisser ») : son solde et son statut viennent
+  // de la même recherche de la caisse que pour une saisie manuelle.
+  const [prefillRaw, setPrefillRaw] = useState<CashSessionPlayer | null>(null);
+  useEffect(() => {
+    if (!initialPlayer) return;
+    let cancelled = false;
+    searchCashSessionPlayers(session.id, initialPlayer.lastName)
+      .then(({ results }) => {
+        if (cancelled) return;
+        setPrefillRaw(results.find((result) => result.membership_id === Number(initialPlayer.id)) ?? null);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [initialPlayer, session.id]);
+  const playerRaw =
+    selectedRaw ?? (player && prefillRaw && prefillRaw.membership_id === Number(player.id) ? prefillRaw : null);
 
   const typesQuery = useQuery({
     queryKey: CONTRIBUTION_TYPES_QUERY_KEY,
@@ -295,6 +326,10 @@ function CashRegisterModal({
         client_recorded_at: new Date().toISOString(),
       });
       showToast(`Encaissement enregistré. Reçu n° ${payment.receipt_number}.`);
+      // Régularisation sur place (4.4.5, 4.8) : l'éligibilité et l'indisponibilité
+      // de l'effectif sont relues aussitôt, sans attendre le prochain cycle de 15 s.
+      void queryClient.invalidateQueries({ queryKey: ELIGIBILITY_QUERY_KEY });
+      void queryClient.invalidateQueries({ queryKey: ["clubs", "players"] });
       if (payment.player_status) {
         setOutcome({
           inGoodStanding: payment.player_status.is_in_good_standing,
@@ -336,6 +371,7 @@ function CashRegisterModal({
         open
         onClose={onClose}
         title="Caisse Terrain Express"
+        level={level}
         size="xl"
         footer={
           <>
@@ -417,13 +453,13 @@ function CashRegisterModal({
                   {player.number != null ? (
                     <p className="text-sm text-text-muted">n° {player.number}</p>
                   ) : null}
-                  {selectedRaw ? (
+                  {playerRaw ? (
                     <p className="text-sm text-text-muted">
-                      Solde : {formatAmount(selectedRaw.balance, selectedRaw.currency)}
+                      Solde : {formatAmount(playerRaw.balance, playerRaw.currency)}
                     </p>
                   ) : null}
-                  {selectedRaw ? (
-                    <StatusBadge status={statusKeyFromGoodStanding(selectedRaw.is_in_good_standing)} />
+                  {playerRaw ? (
+                    <StatusBadge status={statusKeyFromGoodStanding(playerRaw.is_in_good_standing)} />
                   ) : null}
                 </div>
                 <Button size="sm" variant="ghost" onClick={() => selectPlayer(null)}>
