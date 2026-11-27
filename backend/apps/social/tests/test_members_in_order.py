@@ -197,6 +197,25 @@ class TestImageAndCounters:
         assert refused.data["detail"] == "Ce message n'existe pas dans ce club."
         assert allowed.status_code == status.HTTP_200_OK
 
+    def test_image_endpoint_never_reveals_a_hidden_text_only_message(self, ctx):
+        """Audit du 27/11/2026, écart majeur 1 : un message réservé sans image
+        doit répondre exactement comme un identifiant inexistant (sinon un
+        joueur non en ordre compte les messages qui lui sont cachés)."""
+        hidden = _send(ctx, ctx.president, "Réservé, texte seul")
+        hidden_url = reverse("social:chat-message-image-download", kwargs={"pk": hidden.pk})
+        missing_url = reverse("social:chat-message-image-download", kwargs={"pk": hidden.pk + 10_000})
+
+        on_hidden = _client(ctx.debtor.user).get(hidden_url)
+        on_missing = _client(ctx.debtor.user).get(missing_url)
+
+        assert on_hidden.status_code == on_missing.status_code == status.HTTP_404_NOT_FOUND
+        assert on_hidden.data == on_missing.data
+
+        # Un lecteur autorisé garde la réponse « pas d'image » sur un message sans image.
+        allowed = _client(ctx.in_order.user).get(hidden_url)
+        assert allowed.status_code == status.HTTP_404_NOT_FOUND
+        assert allowed.data["detail"] == "Cette image n'existe pas."
+
     def test_unread_count_and_last_message_ignore_hidden_messages(self, ctx):
         public = _send(ctx, ctx.president, "Pour tous", reserved=False)
         _send(ctx, ctx.president)

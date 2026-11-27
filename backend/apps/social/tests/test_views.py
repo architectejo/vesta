@@ -270,7 +270,7 @@ class TestChatMessageImageSecurity:
 
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_board_channel_image_is_forbidden_to_a_non_board_member(self):
+    def test_board_channel_image_is_hidden_from_a_non_board_member(self):
         club = ClubFactory()
         board = ChatChannelFactory(club=club, channel_type=ChatChannel.ChannelType.BOARD)
         coach = MembershipFactory(club=club)
@@ -282,8 +282,14 @@ class TestChatMessageImageSecurity:
         response = _authenticated_client(coach.user).get(
             reverse("social:chat-message-image-download", kwargs={"pk": message.pk})
         )
+        missing = _authenticated_client(coach.user).get(
+            reverse("social:chat-message-image-download", kwargs={"pk": message.pk + 10_000})
+        )
 
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        # Même réponse qu'un identifiant inexistant : l'existence d'un message du
+        # canal du bureau n'est jamais révélée (audit de sécurité du 27/11/2026).
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert response.data == missing.data
 
     def test_board_channel_image_succeeds_for_a_board_member(self):
         club = ClubFactory()

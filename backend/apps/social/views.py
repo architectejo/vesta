@@ -539,13 +539,18 @@ class ChatMessageImageDownloadView(APIView):
         except ChatMessage.DoesNotExist:
             return _not_found(_CHAT_MESSAGE_NOT_FOUND)
 
-        if not message.image:
-            return _not_found("Cette image n'existe pas.")
-
+        # Droit de lecture verifie AVANT toute autre reponse : un message que le
+        # lecteur ne peut pas lire (canal du bureau, message reserve aux membres
+        # en ordre) repond exactement comme un identifiant inexistant, pour ne
+        # jamais reveler son existence ni sa position (10.3 n° 182, spec C7.1 ;
+        # audit de securite du 27/11/2026, ecart majeur 1).
         if not services.can_access_channel(user=request.user, channel=message.channel):
-            return Response({"detail": "Vous n'avez plus accès à ce canal."}, status=status.HTTP_403_FORBIDDEN)
+            return _not_found(_CHAT_MESSAGE_NOT_FOUND)
 
         if not services.can_read_message(message=message, reader=_chat_reader(request, _own_membership(request))):
             return _not_found(_CHAT_MESSAGE_NOT_FOUND)
+
+        if not message.image:
+            return _not_found("Cette image n'existe pas.")
 
         return private_file_response(message.image, download_stem=f"image-{message.pk}", as_attachment=False)
