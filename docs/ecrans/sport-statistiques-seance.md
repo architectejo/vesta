@@ -59,6 +59,7 @@ Raison du « Non » pour les coéquipiers : la matrice 2.4 donne « P » au joue
 
 - **Joueurs attendus** : les joueurs du club ayant une adhésion active à la date de la séance (statut « Inscrit » ; les joueurs partis et ceux arrivés après la date sont exclus). Un joueur bloqué (dette, suspension, inaptitude) **est** attendu : le pointage est une présence. Le statut « En attente d'adhésion » : exclu (proposition, question C-Q2).
 - **Taux de présence** = présents ÷ attendus, arrondi à l'unité. Un retardataire compte comme absent si le club le décide (défaut, 10.2 n° 25), comme présent sinon. Une absence excusée **reste une absence** (4.7) : elle est au dénominateur et pas au numérateur.
+- **Moyenne de présence d'une période** (page « Entraînements » B2 et tableau de bord du bureau, carte 1) : total des présents comptés ÷ total des attendus sur les séances de la période, arrondi à l'unité une seule fois ; une séance sans aucun pointage n'est pas comptée (jamais 0 %) ; matchs exclus. Une seule fonction de l'API sert les deux écrans (proposition, CDC 10.3 n° 185).
 - Les quatre compteurs font toujours la somme des attendus.
 
 ### A4.2 Carte « Notes du Coach » (rôles du tableau A3)
@@ -71,6 +72,7 @@ Titre : « Notes du Coach ». Contexte (13 px) : « Évaluations ouvertes encore
    - « Écart avec la moyenne » : « +0,4 par rapport aux 10 dernières séances » (masquée sous 3 séances).
 2. **« Meilleures notes »** : les 3 meilleures, ligne de 44 px : rang, avatar 32, « Prénom Nom », note « 8,5 » (16 px, gras). Ex æquo : même rang, tous affichés (au plus 5 lignes).
 3. **« Notes les plus faibles »** : les 3 plus faibles, même ligne. Titre volontairement neutre : jamais « Les pires ».
+   Un joueur n'est jamais cité dans les deux listes. Sous 6 joueurs évalués, les deux listes se partagent l'effectif : « Meilleures notes » prend la moitié haute arrondie au-dessus, « Notes les plus faibles » le reste (2 → 1/1, 3 → 2/1, 4 → 2/2, 5 → 3/2) ; les ex æquo restent du côté des meilleures (position provisoire, CDC 10.3 n° 184).
 4. **Répartition des notes** (facultative à 360 px, dépliable « Voir la répartition ») : `BarChart` vertical, 5 tranches (« 0 à 2 », « 2 à 4 », « 4 à 6 », « 6 à 8 », « 8 à 10 »), nombre de joueurs sur chaque barre.
 5. Action de carte : bouton secondaire « Voir toutes les notes » → modale A5.3. Pour le Coach, l'Assistant, le Président et le VP pendant les 48 h : bouton principal « Évaluer les joueurs » (modale existante `sport-espace-coach.md` §4.6) si des joueurs restent à évaluer ; c'est l'unique action principale de la carte.
 

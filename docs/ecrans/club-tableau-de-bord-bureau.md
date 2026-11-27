@@ -175,7 +175,7 @@ Ces composants servent aussi à `sport-statistiques-seance.md` et à `club-carte
 ## 9. Règles métier, journal, notifications
 
 - Aucune règle n'est calculée par l'interface : chaque chiffre vient de l'API, qui réutilise les services existants (solde calculé `apps/treasury/services.py`, jamais un champ stocké, règle 2 ; cotisations libres jamais en dette, règle 3 ; aptitude du module médical sans diagnostic, règle 11).
-- Les définitions sont identiques à celles des modules : un taux de recouvrement, une caisse disponible ou un taux de présence affichés ici doivent être **égaux** à ceux des pages Trésorerie et Entraînements pour la même période (critère d'acceptation à tester).
+- Les définitions sont identiques à celles des modules : un taux de recouvrement, une caisse disponible ou un taux de présence affichés ici doivent être **égaux** à ceux des pages Trésorerie et Entraînements pour la même période (critère d'acceptation à tester). Pour la présence : taux par séance arrondi à l'unité (A4.1 de `sport-statistiques-seance.md`), servi en chaîne (« 34 »), et moyenne de la période selon la définition unique du CDC 10.3 n° 185 (séances seulement, séance non pointée exclue). Le tableau de bord n'a pas de calcul propre : il appelle la fonction de `apps/sport`.
 - La page ne crée, ne modifie ni ne supprime rien : **aucune entrée de journal** pour sa consultation. Les actions faites depuis une modale de module ouverte au niveau 2 (par exemple valider une dépense) journalisent comme d'habitude, dans leur module.
 - Aucune notification nouvelle.
 - Devise : celle du club, servie par l'API ; montants en `Decimal` côté API, affichés au format du club.
