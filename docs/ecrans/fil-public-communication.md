@@ -346,7 +346,7 @@ Ordre des éléments du pied (C4), de haut en bas, à 360 px :
 
 1. aperçu de l'image (s'il y en a une, inchangé) ;
 2. **ligne « réservé »** (nouvelle) :
-   - `Checkbox` native 20 px, libellé à droite « Réservé aux membres en ordre » (14 px/500) ; la ligne entière (case + libellé) est la zone tactile, hauteur 44 px ;
+   - `Checkbox` du design system (case 16 px, §3.1), libellé à droite « Réservé aux membres en ordre » (14 px/500) ; la ligne entière (case + libellé) est la zone tactile, 44 px ;
    - aide sous le libellé, 13 px, `--color-text-muted`, une ligne à 360 px : « Seuls les joueurs en ordre de cotisation et le bureau le verront. » ;
    - décochée à l'ouverture de la conversation ;
 3. TextArea + bouton « Envoyer » (inchangés).
@@ -400,7 +400,7 @@ Alternative si le client refuse P5 : aucun bandeau ; seule la notification d'inc
 | Destinataires | Notification | Clic |
 | --- | --- | --- |
 | Ceux qui peuvent lire le message réservé | **Aucune notification cloche**, comme tout message de chat (D) ; seul le compteur de non-lus du canal augmente | — |
-| Membres actifs du canal « Général » qui ne peuvent pas le lire (non en ordre, en attente d'adhésion — P3) | In-app : « Un message réservé aux membres en ordre a été publié dans le chat. Régularisez votre cotisation pour voir toutes les informations et tous les messages du groupe. » | `/profil`, positionné sur la carte « Situation financière » |
+| Membres **actifs** du canal « Général » qui ne peuvent pas le lire (non en ordre ; hors rôles du bureau). Un joueur « En attente d'adhésion » (P3) ne lit pas le message réservé mais, n'ayant pas accès au chat, ne reçoit pas d'incitation | In-app : « Un message réservé aux membres en ordre a été publié dans le chat. Régularisez votre cotisation pour voir toutes les informations et tous les messages du groupe. » | `/profil`, positionné sur la carte « Situation financière » |
 
 - Texte **exact** du n° 182, sans aucune variable : il ne reprend jamais le contenu, l'auteur ni l'heure du message.
 - Au plus une par joueur et par jour (P1) : un deuxième message réservé le même jour ne crée pas de nouvelle notification. Le « jour » s'entend dans le fuseau du club.
@@ -446,7 +446,7 @@ Aucun nom de club, logo ou lien en dur : la page garde l'en-tête « {nom du clu
 5. **Case remise à décochée après chaque envoi** (C7.2) : proposition ; alternative, la case reste cochée jusqu'à la fermeture de la conversation.
 6. **P5 — bandeau** « Certains messages sont réservés aux membres en ordre de cotisation. Voir mon solde » pour le joueur non en ordre, seulement si un message réservé existe dans le canal ; alternative : aucun bandeau.
 7. **P6** : notification d'incitation in-app seulement, sans email.
-8. **Superuser en session de support** : lit-il les messages réservés ? Proposition : oui (il intervient pour le club), sans jamais recevoir d'incitation ni voir la case.
+8. **Superuser en session de support** : position provisoire codée, la plus restrictive : il **ne lit pas** les messages réservés (ni case, ni bandeau, ni incitation). Le CDC 2.5 (« a accès à tout ») dit l'inverse : à trancher par le client, comme le n° 137.
 
 ---
 
