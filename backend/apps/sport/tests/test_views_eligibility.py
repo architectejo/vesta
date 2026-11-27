@@ -31,6 +31,13 @@ pytestmark = pytest.mark.django_db
 URL = "sport:eligibility-list"
 
 
+def _arrival(session):
+    from apps.sport.services import _club_settings, _club_tz
+
+    tz = _club_tz(_club_settings(session.club))
+    return datetime.datetime.combine(session.event.event_date, datetime.time(7, 40), tzinfo=tz)
+
+
 def _get(user):
     return client_for(user).get(reverse(URL))
 
@@ -75,8 +82,9 @@ def test_le_coach_voit_chaque_motif_lisible(ctx, blocked, assistant, who):
     rows = _rows(viewer.user)
 
     assert rows[ctx.player.pk] == {"membership_id": ctx.player.pk, "eligible": True, "reason_code": "", "reason": ""}
+    # 10.3 n° 188 : le Coach et l'Assistant ne savent rien de la dette.
     assert rows[ctx.debtor.pk] == {
-        "membership_id": ctx.debtor.pk, "eligible": False, "reason_code": "debt", "reason": "En dette : 10.00 USD.",
+        "membership_id": ctx.debtor.pk, "eligible": False, "reason_code": "unavailable", "reason": "Non éligible.",
     }
     assert rows[blocked["suspended"].pk]["reason"] == "Suspendu : encore 1 match(s)."
     assert rows[blocked["suspended"].pk]["reason_code"] == "suspension"
@@ -92,15 +100,55 @@ def test_le_coach_voit_chaque_motif_lisible(ctx, blocked, assistant, who):
 
 def test_motifs_identiques_au_controle_de_composition(ctx, blocked):
     """Aucune règle dupliquée : chaque ligne reprend exactement le motif que
-    ``add_to_composition`` opposerait (``get_playability``)."""
+    ``add_to_composition`` opposerait au Coach (``ensure_playable``, filtré
+    par ``describe_reason_for_viewer``)."""
 
     rows = _rows(ctx.coach.user)
     targets = [ctx.player, ctx.debtor, ctx.pending_member, blocked["suspended"], blocked["unfit"], ctx.coach]
     for membership in targets:
         playability = services.get_playability(membership)
         assert rows[membership.pk]["eligible"] is playability.eligible, membership
-        assert rows[membership.pk]["reason"] == playability.detail, membership
-        assert rows[membership.pk]["reason_code"] == playability.reason_code, membership
+        if playability.eligible:
+            assert rows[membership.pk]["reason"] == "", membership
+            continue
+        with pytest.raises(services.PlayerNotEligibleError) as exc:
+            services.ensure_playable(membership, actor=ctx.coach.user)
+        assert rows[membership.pk]["reason"] == str(exc.value), membership
+        if membership.pk != ctx.debtor.pk:
+            assert rows[membership.pk]["reason_code"] == playability.reason_code, membership
+
+
+@pytest.mark.parametrize("who", ["coach", "assistant"])
+def test_le_coach_ne_recoit_jamais_montant_devise_ni_dette(ctx, blocked, assistant, who):
+    """10.3 n° 188 : aucune réponse vue par le Coach ou l'Assistant (liste
+    d'éligibilité, refus de composition, de répartition et de placement,
+    zone « Ne peuvent pas jouer ») ne contient le montant, la devise ou
+    « dette »."""
+
+    from apps.sport.tests.factories import MatchFactory, SessionFactory
+
+    viewer = ctx.coach if who == "coach" else assistant
+    client = client_for(viewer.user)
+    texts = [client.get(reverse(URL)).content.decode()]
+
+    match = MatchFactory(club=ctx.club, event__club=ctx.club, event__season=ctx.season)
+    refused = client.post(
+        reverse("sport:match-composition-add", args=[match.pk]),
+        {"membership_id": ctx.debtor.pk, "role": "starter", "position": "midfielder", "jersey_number": 9},
+    )
+    assert refused.status_code == 400 and refused.data["detail"] == "Non éligible."
+    texts.append(refused.content.decode())
+
+    session = SessionFactory(club=ctx.club, event__club=ctx.club, event__season=ctx.season)
+    services.mark_arrival(
+        session=session, membership=ctx.debtor, arrived_at=_arrival(session), marked_by=ctx.coach.user
+    )
+    texts.append(client.get(reverse("sport:session-unassigned", args=[session.pk])).content.decode())
+
+    for text in texts:
+        lowered = text.lower()
+        for forbidden in ("dette", "debt", "10 $", "10.00", "usd", "amount_due", "balance"):
+            assert forbidden not in lowered, (forbidden, text)
 
 
 def test_get_playabilities_egale_get_playability_pour_chaque_joueur(ctx, blocked):
@@ -197,6 +245,39 @@ def test_anonyme_refuse():
 
 def test_superuser_sans_session_de_support_refuse(ctx):
     assert _get(SuperuserFactory()).status_code == 403
+
+
+def test_superuser_en_session_de_support_ne_voit_qu_indisponible(ctx, blocked):
+    """Lecture autorisée en session de support (``ghost_readable``), mais le
+    Superuser n'a aucun rôle du club : ni montant de dette, ni suspension, ni
+    inaptitude, ni attente d'adhésion (10.2 n° 16 ; CLAUDE.md règle n° 11)."""
+
+    from rest_framework_simplejwt.tokens import RefreshToken
+
+    from apps.licences.tests.factories import SupportSessionFactory
+
+    superuser = SuperuserFactory()
+    support_session = SupportSessionFactory(superuser=superuser, club=ctx.club)
+    response = APIClient().get(
+        reverse(URL),
+        HTTP_AUTHORIZATION=f"Bearer {RefreshToken.for_user(superuser).access_token}",
+        HTTP_X_SUPPORT_SESSION=str(support_session.pk),
+    )
+    assert response.status_code == 200, response.data
+    rows = {row["membership_id"]: row for row in response.json()["results"]}
+
+    assert rows[ctx.player.pk] == {"membership_id": ctx.player.pk, "eligible": True, "reason_code": "", "reason": ""}
+    for blocked_member in (ctx.debtor, ctx.pending_member, blocked["suspended"], blocked["unfit"]):
+        assert rows[blocked_member.pk] == {
+            "membership_id": blocked_member.pk,
+            "eligible": False,
+            "reason_code": "unavailable",
+            "reason": "Indisponible",
+        }, blocked_member
+
+    text = response.content.decode()
+    for forbidden in ("En dette", "10 $", "USD", "Inapte", "retour prévu", "Suspendu", "MEDHIST-SECRET", "amount_due"):
+        assert forbidden not in text, forbidden
 
 
 def test_coach_revoque_refuse(ctx):

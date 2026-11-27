@@ -118,17 +118,34 @@ def _mean(values, places: Decimal) -> Optional[Decimal]:
     return (sum(values, Decimal("0")) / Decimal(len(values))).quantize(places, rounding=ROUND_HALF_UP)
 
 
-def _roster(club) -> list[Membership]:
-    """Adhésions pouvant être « attendues » à une date : ni en attente (C-Q2),
-    ni parties sans date de départ, ni annulées avant l'inscription."""
+def is_expectable(membership: Membership) -> bool:
+    """Règle UNIQUE « qui peut être attendu » (CDC 10.3 n° 185) : ni en
+    attente (C-Q2), ni partie sans date de départ, ni annulée avant
+    l'inscription. Partagée par la page Entraînements (:func:`_roster`) et le
+    tableau de bord du bureau (:func:`roster_from`), qui n'a aucun calcul
+    propre."""
 
-    return list(
-        Membership.all_objects.filter(club=club)
-        .exclude(status=Membership.Status.PENDING)
-        .exclude(status=Membership.Status.DEPARTED, left_on__isnull=True)
-        .exclude(status=Membership.Status.DEPARTED, left_reason=Membership.LeftReason.CANCELLED)
-        .select_related("user")
-    )
+    if membership.status == Membership.Status.PENDING:
+        return False
+    if membership.status == Membership.Status.DEPARTED and (
+        membership.left_on is None or membership.left_reason == Membership.LeftReason.CANCELLED
+    ):
+        return False
+    return True
+
+
+def roster_from(memberships) -> list[Membership]:
+    """Filtre des adhésions déjà chargées (aucune requête) selon
+    :func:`is_expectable`."""
+
+    return [m for m in memberships if is_expectable(m)]
+
+
+def _roster(club) -> list[Membership]:
+    """Adhésions pouvant être « attendues » à une date (:func:`is_expectable`),
+    en une requête, ``user`` joint."""
+
+    return roster_from(Membership.all_objects.filter(club=club).select_related("user"))
 
 
 def _expected_on(roster, day) -> list[Membership]:
@@ -168,9 +185,11 @@ def _event_counts(expected, rows_for_event: dict, counts_absent: bool) -> dict:
 def _retained_by_event(club, event_ids, *, membership_ids=None) -> dict[int, dict[int, dict]]:
     """``{event_id: {membership_id: {...}}}`` : note retenue d'un joueur =
     moyenne des notes globales de ses évaluateurs, arrondie à 0,1 (CDC 4.10).
-    Une seule requête ; les moyennes sont calculées en Decimal."""
+    Une seule requête (``event_ids`` peut être une sous-requête) ; les
+    moyennes sont calculées en Decimal."""
 
-    queryset = Evaluation.all_objects.filter(club=club, event_id__in=list(event_ids))
+    ids = event_ids if isinstance(event_ids, QuerySet) else list(event_ids)
+    queryset = Evaluation.all_objects.filter(club=club, event_id__in=ids)
     if membership_ids is not None:
         queryset = queryset.filter(membership_id__in=list(membership_ids))
     grouped: dict[int, dict[int, list]] = defaultdict(lambda: defaultdict(list))
@@ -195,6 +214,45 @@ def _retained_by_event(club, event_ids, *, membership_ids=None) -> dict[int, dic
 
 def _event_average(retained_for_event: dict) -> Optional[Decimal]:
     return _mean([row["overall"] for row in retained_for_event.values()], _TENTH)
+
+
+def summarize_ratings(club, events, *, retained=None) -> dict:
+    """Définition UNIQUE de la note moyenne de l'équipe (CDC 10.3 n° 190,
+    décision du client du 27/11/2026) : « moyenne par joueur, sur base de ça
+    on calcule la moyenne de l'équipe ».
+
+    1. note retenue par joueur et par événement = moyenne de ses évaluateurs
+       (CDC 4.10, :func:`_retained_by_event`) ;
+    2. moyenne par joueur sur les ``events`` donnés ;
+    3. moyenne de l'équipe = moyenne des moyennes par joueur (un joueur
+       évalué 20 fois ne pèse pas plus qu'un joueur évalué une fois).
+
+    Arrondi à 0,1 à chaque étape, comme la page « Entraînements » (notes
+    retenues et moyennes d'événement). Appelée par la page Entraînements et
+    par le tableau de bord du bureau (aucun calcul propre). ``retained`` :
+    notes retenues déjà chargées (sur-ensemble accepté) ; sinon une requête."""
+
+    events = list(events)
+    event_ids = [event.pk for event in events]
+    if retained is None:
+        retained = _retained_by_event(club, event_ids) if event_ids else {}
+    per_player: dict[int, list] = defaultdict(list)
+    per_event: dict[int, dict] = {}
+    evaluations = 0
+    for event_id in event_ids:
+        by_member = retained.get(event_id, {})
+        count = sum(row["evaluators_count"] for row in by_member.values())
+        evaluations += count
+        per_event[event_id] = {"average": _event_average(by_member), "evaluations": count}
+        for membership_id, row in by_member.items():
+            per_player[membership_id].append(row["overall"])
+    player_averages = {pk: _mean(values, _TENTH) for pk, values in per_player.items()}
+    return {
+        "team_average": _mean(player_averages.values(), _TENTH),
+        "player_averages": player_averages,
+        "per_event": per_event,
+        "evaluations": evaluations,
+    }
 
 
 def _prior_events(club, event: Event) -> list[Event]:
@@ -588,16 +646,17 @@ def get_stats_history(club, *, viewer, period: str) -> dict:
     )
     locations = dict(Session.all_objects.filter(club=club, event_id__in=event_ids).values_list("event_id", "location"))
 
-    results, averages = [], []
+    # Note moyenne de l'équipe : moyenne des moyennes par joueur (10.3
+    # n° 190), même fonction que le tableau de bord du bureau.
+    ratings = summarize_ratings(club, events, retained=retained) if sees_evaluations else None
+    results = []
     for event in events:
         counts = summary["per_event"][event.pk]
         by_member = retained.get(event.pk, {})
-        average_rating = _event_average(by_member) if sees_evaluations else None
+        average_rating = ratings["per_event"][event.pk]["average"] if ratings else None
         my_rating = None
         if viewer_membership is not None and viewer_membership.pk in by_member:
             my_rating = by_member[viewer_membership.pk]["overall"]
-        if average_rating is not None:
-            averages.append(average_rating)
         results.append(
             {
                 "session_id": event.pk,
@@ -618,7 +677,9 @@ def get_stats_history(club, *, viewer, period: str) -> dict:
         # Définition unique (CDC 10.3 n° 185) : total des présents comptés ÷
         # total des attendus sur les séances pointées, arrondi une seule fois.
         "average_attendance_rate": summary["average_rate"],
-        "average_rating": str(_mean(averages, _TENTH)) if averages else None,
+        "average_rating": (
+            str(ratings["team_average"]) if ratings and ratings["team_average"] is not None else None
+        ),
         "my_average_rating": str(_mean(my_ratings, _TENTH)) if my_ratings else None,
         "results": results,
     }

@@ -106,16 +106,20 @@ def test_team_assignment_refuses_a_debtor_with_role_filtered_reason(ctx):
     response = client_for(ctx.coach.user).post(url, {"membership_id": ctx.debtor.pk, "team": "A"})
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert response.data["code"] == "player_not_eligible"
-    assert "dette" in response.data["detail"].lower()
+    # 10.3 n° 188 : le Coach ne lit ni la dette ni le montant.
+    assert response.data["detail"] == "Non éligible."
 
     assert TeamAssignment.all_objects.filter(club=ctx.club, session=session, membership=ctx.debtor).count() == 0
 
     # La zone « Non répartis » applique le même filtrage de motif par rôle
-    # (10.2 n° 16) que le service : Coach voit le montant, un coéquipier voit
-    # seulement « Indisponible ».
+    # (10.2 n° 16, 10.3 n° 188) que le service : le Coach voit « Non éligible. »,
+    # le Président le montant, un coéquipier seulement « Indisponible ».
     for_coach = client_for(ctx.coach.user).get(reverse("sport:session-unassigned", args=[session.pk]))
     debtor_entry = next(item for item in for_coach.data["cannot_play"] if item["membership_id"] == ctx.debtor.pk)
-    assert "dette" in debtor_entry["reason"].lower()
+    assert (debtor_entry["reason"], debtor_entry["reason_code"]) == ("Non éligible.", "unavailable")
+    for_president = client_for(ctx.president.user).get(reverse("sport:session-unassigned", args=[session.pk]))
+    debtor_entry = next(item for item in for_president.data["cannot_play"] if item["membership_id"] == ctx.debtor.pk)
+    assert debtor_entry["reason"] == "En dette : 10 $."
 
     for_teammate = client_for(ctx.player.user).get(reverse("sport:session-unassigned", args=[session.pk]))
     debtor_entry_teammate = next(
@@ -229,7 +233,9 @@ def test_unassigned_reason_code_is_hidden_from_teammates_and_captain(ctx):
             assert item["reason"] == "Indisponible"
             assert item["reason_code"] == "unavailable"
     coach_item = entry(ctx.coach, ctx.debtor)
-    assert coach_item["reason_code"] == "debt"
+    assert (coach_item["reason"], coach_item["reason_code"]) == ("Non éligible.", "unavailable")  # 10.3 n° 188
+    assert entry(ctx.coach, ctx.pending_member)["reason_code"] == "pending_membership"
+    assert entry(ctx.president, ctx.debtor)["reason_code"] == "debt"
 
 
 def test_superuser_unlock_without_support_session_is_403_not_500(ctx):

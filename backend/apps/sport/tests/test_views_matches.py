@@ -59,6 +59,7 @@ def test_composition_refuses_a_debtor_with_reason_and_reserved_to_coach(ctx):
     )
     assert refused.status_code == status.HTTP_400_BAD_REQUEST
     assert refused.data["code"] == "player_not_eligible"
+    assert refused.data["detail"] == "Non éligible."  # 10.3 n° 188
     assert MatchComposition.all_objects.filter(club=ctx.club, match=match).count() == 0
 
     added = client_for(ctx.coach.user).post(

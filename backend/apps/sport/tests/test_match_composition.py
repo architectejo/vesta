@@ -38,7 +38,23 @@ def test_debtor_cannot_be_composed(ctx):
             match=match, membership=ctx.debtor, role=MatchComposition.Role.STARTER, position=Membership.Position.MIDFIELDER,
             jersey_number=9, added_by=ctx.coach.user,
         )
-    assert "En dette" in str(exc.value)
+    # 10.3 n° 188 : l'auteur (Coach) ne lit que « Non éligible. ».
+    assert str(exc.value) == "Non éligible."
+    assert "dette" not in str(exc.value).lower()
+
+
+def test_debt_reason_in_composition_error_matches_eligibility_text_for_president(ctx):
+    """Même texte, au même format monétaire, que GET /sport/eligibility/ pour
+    un rôle qui voit la dette (un seul point de mise en forme)."""
+
+    match = _create_match(ctx)
+    with pytest.raises(services.PlayerNotEligibleError) as exc:
+        services.add_to_composition(
+            match=match, membership=ctx.debtor, role=MatchComposition.Role.STARTER, position=Membership.Position.MIDFIELDER,
+            jersey_number=9, added_by=ctx.president.user,
+        )
+    assert str(exc.value) == "En dette : 10 $."
+    assert str(exc.value) == services.get_playabilities(ctx.club, [ctx.debtor])[ctx.debtor.pk].detail
 
 
 def test_regularization_allows_composition(ctx, monkeypatch):

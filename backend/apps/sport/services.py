@@ -122,6 +122,7 @@ __all__ = [
     "Playability",
     "get_playability",
     "describe_reason_for_viewer",
+    "ensure_playable",
     "is_event_locked",
     "ensure_event_writable",
     "unlock_event",
@@ -379,7 +380,13 @@ def _suspension_detail(remaining: int) -> str:
 
 
 def _debt_detail(amount_due: Decimal, currency: str) -> str:
-    return f"En dette : {amount_due:.2f} {currency}."
+    """« En dette : 10 $. », « En dette : 12,50 $. » : format monétaire du
+    club, celui des reçus et des notifications de la trésorerie (annexe D
+    §1.7), jamais un format propre au module sport."""
+
+    from apps.treasury.services import format_receipt_amount
+
+    return f"En dette : {format_receipt_amount(amount_due, currency)}."
 
 
 def get_playabilities(club, memberships) -> dict[int, Playability]:
@@ -432,12 +439,19 @@ def get_playabilities(club, memberships) -> dict[int, Playability]:
 # (suspension, inaptitude, attente d'adhésion). Position provisoire pour
 # le Capitaine (voir sport-seance.md §7, point ouvert 3) : « Indisponible »
 # seul, sans motif — appliquée telle quelle ici.
-_FINANCIAL_DETAIL_ROLES = frozenset(
-    {MembershipRole.Role.PRESIDENT, MembershipRole.Role.VICE_PRESIDENT, *COACHING_STAFF_ROLES}
-)
-_FULL_DETAIL_ROLES = _FINANCIAL_DETAIL_ROLES | frozenset(
+#
+# CDC 10.3 n° 188 (décision du client du 27/11/2026) : le Coach et
+# l'Assistant du Coach ne savent RIEN de la dette (« il verra seulement si
+# le joueur est éligible ou non ») : ils sont retirés des rôles qui voient
+# le motif financier et reçoivent « Non éligible. », code ``unavailable``.
+_FINANCIAL_DETAIL_ROLES = frozenset({MembershipRole.Role.PRESIDENT, MembershipRole.Role.VICE_PRESIDENT})
+# Attente d'adhésion : motif administratif, toujours visible du Coach.
+_PENDING_DETAIL_ROLES = _FINANCIAL_DETAIL_ROLES | COACHING_STAFF_ROLES
+_FULL_DETAIL_ROLES = _PENDING_DETAIL_ROLES | frozenset(
     {MembershipRole.Role.SPORTS_DIRECTOR, MembershipRole.Role.DOCTOR}
 )
+# Texte générique du Coach pour un joueur bloqué par une dette (10.3 n° 188).
+COACH_DEBT_MASKED_DETAIL = "Non éligible."
 
 
 def reason_visible_to_viewer(
@@ -445,10 +459,11 @@ def reason_visible_to_viewer(
 ) -> bool:
     """Le lecteur a-t-il droit au motif réel de blocage (10.2 n° 16) ?
 
-    Le joueur voit toujours le sien. Dette et attente d'adhésion (motifs
-    administratifs/financiers) : Président, VP, Coach. Suspension et
-    inaptitude : ces rôles + Directeur sportif + Médecin. Tous les autres
-    (coéquipiers, Capitaine) : « Indisponible » seul, sans code de motif."""
+    Le joueur voit toujours le sien. Dette : Président et VP seuls (10.3
+    n° 188 : jamais le Coach ni l'Assistant). Attente d'adhésion : Président,
+    VP, Coach, Assistant. Suspension et inaptitude : ces rôles + Directeur
+    sportif + Médecin. Tous les autres (coéquipiers, Capitaine) :
+    « Indisponible » seul, sans code de motif."""
 
     if playability.eligible:
         return True
@@ -457,8 +472,10 @@ def reason_visible_to_viewer(
     # ``viewer_roles`` : rôles déjà résolus par l'appelant pour un calcul
     # groupé (une seule requête de rôles pour toute une liste).
     roles = viewer_roles if viewer_roles is not None else get_active_roles(viewer, club=membership.club)
-    if playability.reason_code in ("debt", "pending_membership"):
+    if playability.reason_code == "debt":
         return bool(roles & _FINANCIAL_DETAIL_ROLES)
+    if playability.reason_code == "pending_membership":
+        return bool(roles & _PENDING_DETAIL_ROLES)
     return bool(roles & _FULL_DETAIL_ROLES)
 
 
@@ -471,9 +488,25 @@ def describe_reason_for_viewer(
 
     if playability.eligible:
         return ""
-    if reason_visible_to_viewer(playability, viewer=viewer, membership=membership, viewer_roles=viewer_roles):
+    roles = viewer_roles if viewer_roles is not None else get_active_roles(viewer, club=membership.club)
+    if reason_visible_to_viewer(playability, viewer=viewer, membership=membership, viewer_roles=roles):
         return playability.detail
+    if playability.reason_code == "debt" and roles & COACHING_STAFF_ROLES:
+        return COACH_DEBT_MASKED_DETAIL
     return "Indisponible"
+
+
+def ensure_playable(membership: Membership, *, actor) -> Playability:
+    """Contrôle d'éligibilité de toute action de placement (répartition A/B,
+    terrain de la séance, composition, plan tactique ; CLAUDE.md règle n° 5).
+    Le motif de l'erreur passe par le filtre UNIQUE
+    :func:`describe_reason_for_viewer` appliqué à l'auteur de l'action :
+    le Coach ne lit jamais le montant ni le mot « dette » (10.3 n° 188)."""
+
+    playability = get_playability(membership)
+    if not playability.eligible:
+        raise PlayerNotEligibleError(describe_reason_for_viewer(playability, viewer=actor, membership=membership))
+    return playability
 
 
 # ---------------------------------------------------------------------------
@@ -888,9 +921,7 @@ def assign_team(*, session: Session, membership: Membership, team: str, assigned
     if attendance is None or attendance.status not in (Attendance.Status.PRESENT, Attendance.Status.LATE_ABSENT):
         raise SportValidationError("Ce joueur doit être pointé présent ou en retard avant d'être réparti.")
 
-    playability = get_playability(membership)
-    if not playability.eligible:
-        raise PlayerNotEligibleError(playability.detail)
+    playability = ensure_playable(membership, actor=assigned_by)
 
     existing = TeamAssignment.all_objects.filter(club=session.club_id, session=session, membership=membership).first()
 
@@ -1117,9 +1148,7 @@ def place_team_player(
         )
         return assignment
 
-    playability = get_playability(membership)
-    if not playability.eligible:
-        raise PlayerNotEligibleError(playability.detail)
+    playability = ensure_playable(membership, actor=actor)
 
     before = {
         "is_on_field": assignment.is_on_field,
@@ -1602,9 +1631,7 @@ def add_to_composition(
     de nouveau composable, sans latence perceptible (la vérification est
     faite à chaque appel, jamais mise en cache)."""
 
-    playability = get_playability(membership)
-    if not playability.eligible:
-        raise PlayerNotEligibleError(playability.detail)
+    playability = ensure_playable(membership, actor=added_by)
 
     existing = MatchComposition.all_objects.filter(club=match.club_id, match=match, membership=membership).first()
     taken = MatchComposition.all_objects.filter(club=match.club_id, match=match, jersey_number=jersey_number)
@@ -2187,9 +2214,7 @@ def place_on_plan(*, plan: TacticalPlan, membership: Membership, x_coord: Decima
     if plan.is_published:
         raise SportValidationError("Un plan publié ne peut plus être modifié : dupliquez-le d'abord.")
 
-    playability = get_playability(membership)
-    if not playability.eligible:
-        raise PlayerNotEligibleError(playability.detail)
+    playability = ensure_playable(membership, actor=placed_by)
 
     existing = TacticalPlanPlacement.all_objects.filter(club=plan.club_id, plan=plan, membership=membership).first()
     if existing is not None:

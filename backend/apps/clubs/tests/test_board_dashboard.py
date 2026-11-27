@@ -721,7 +721,7 @@ class TestOtherCards:
                 club=ctx.club, event=event, membership=ctx.captain, evaluator=ctx.coach.user, overall_score=score
             )
         card = get(ctx.president.user).data["coach_notes"]
-        assert card["average"] == "7.00" and card["evaluations"] == 2
+        assert card["average"] == "7.0" and card["evaluations"] == 2  # moyenne des moyennes par joueur (10.3 n° 190)
 
     def test_activite_du_fil(self, ctx):
         from apps.social.models import Comment, Like, Post
@@ -900,3 +900,74 @@ class TestProfileClubTimezone:
         response = profile(ctx.player.user)
         assert response.status_code == 200
         assert response.data["club"]["timezone"] is None
+
+
+# ---------------------------------------------------------------------------
+# Notes du Coach : moyenne des moyennes par joueur (CDC 10.3 n° 190)
+# ---------------------------------------------------------------------------
+
+
+class TestCoachNotesTeamAverage:
+    """Note retenue par joueur et par événement (moyenne des évaluateurs,
+    4.10), moyenne par joueur, puis moyenne de l'équipe = moyenne des
+    moyennes par joueur. Une seule fonction (``summarize_ratings``) pour le
+    tableau de bord et la page « Entraînements »."""
+
+    @pytest.fixture
+    def ratings_data(self, ctx):
+        today = sport_services.get_club_today(ctx.club)
+
+        def day(n):
+            return today - datetime.timedelta(days=n)
+
+        def note(event, membership, score, evaluator):
+            Evaluation.all_objects.create(
+                club=ctx.club, event=event, membership=membership, evaluator=evaluator, overall_score=score
+            )
+
+        s1, s2, s3 = (make_session(ctx, day=day(n)) for n in (3, 2, 1))
+        # s1 : deux évaluateurs pour le joueur -> note retenue (8 + 6) / 2 = 7,0.
+        note(s1, ctx.player, "8.0", ctx.coach.user)
+        note(s1, ctx.player, "6.0", ctx.sports_director.user)
+        note(s1, ctx.captain, "4.0", ctx.coach.user)
+        # Le joueur est évalué sur beaucoup de séances, le capitaine sur une seule.
+        note(s2, ctx.player, "7.0", ctx.coach.user)
+        note(s3, ctx.player, "7.0", ctx.coach.user)
+        match = make_match(ctx, day=day(1)).event
+        note(match, ctx.captain, "6.0", ctx.coach.user)
+        return {"sessions": (s1, s2, s3), "match": match}
+
+    def _card(self, ctx):
+        return get(ctx.president.user, period="season", season=ctx.season.pk).data["coach_notes"]
+
+    def test_moyenne_des_moyennes_par_joueur(self, ctx, ratings_data):
+        card = self._card(ctx)
+        # Séances seules : joueur 7,0 (3 séances), capitaine 4,0 (1 séance) -> 5,5.
+        # (moyenne des événements : 6,5 ; moyenne de toutes les évaluations : 6,4)
+        assert card["sessions_average"] == "5.5"
+        # Séances et matchs : joueur 7,0 ; capitaine (4 + 6) / 2 = 5,0 -> 6,0.
+        assert card["average"] == "6.0"
+        assert card["players_count"] == 2
+        assert card["evaluations"] == 6
+        points = {p["event_id"]: p for p in card["points"]}
+        s1 = ratings_data["sessions"][0]
+        assert points[s1.pk]["average"] == "5.5"  # (7,0 + 4,0) / 2, note retenue du joueur
+        assert points[s1.pk]["evaluations"] == 3
+
+    def test_seances_seules_egale_la_page_entrainements(self, ctx, ratings_data):
+        card = self._card(ctx)
+        history = client_for(ctx.coach.user).get(reverse("sport:session-stats-history"), {"period": "season"}).data
+        assert history["average_rating"] == "5.5"
+        assert card["sessions_average"] == history["average_rating"]
+        sport_points = {r["session_id"]: r["average_rating"] for r in history["results"] if r["average_rating"]}
+        board_points = {p["event_id"]: p["average"] for p in card["points"] if p["kind"] == "session"}
+        assert board_points == sport_points
+
+    def test_etancheite_autre_club_sans_effet(self, ctx, other_ctx, ratings_data):
+        before = self._card(ctx)
+        other = make_session(other_ctx, day=sport_services.get_club_today(other_ctx.club))
+        Evaluation.all_objects.create(
+            club=other_ctx.club, event=other, membership=other_ctx.player, evaluator=other_ctx.coach.user,
+            overall_score="1.0",
+        )
+        assert self._card(ctx) == before

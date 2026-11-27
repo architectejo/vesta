@@ -159,7 +159,8 @@ def test_placement_refuses_a_debtor_with_role_filtered_reason(ctx):
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert response.data["code"] == "player_not_eligible"
-    assert "dette" in response.data["detail"].lower()
+    # 10.3 n° 188 : le Coach ne lit ni la dette ni le montant.
+    assert response.data["detail"] == "Non éligible."
 
 
 def test_placement_refuses_an_unassigned_player(ctx):

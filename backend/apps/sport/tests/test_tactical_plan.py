@@ -30,7 +30,7 @@ def test_cannot_place_debtor_even_manually(ctx):
     plan = _create_plan(ctx)
     with pytest.raises(services.PlayerNotEligibleError) as exc:
         services.place_on_plan(plan=plan, membership=ctx.debtor, x_coord=Decimal("50.00"), y_coord=Decimal("80.00"), placed_by=ctx.coach.user)
-    assert "En dette" in str(exc.value)
+    assert str(exc.value) == "Non éligible."  # 10.3 n° 188 : le Coach ne sait rien de la dette
 
 
 def test_cannot_place_pending_membership(ctx):

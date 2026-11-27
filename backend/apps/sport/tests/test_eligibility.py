@@ -27,8 +27,26 @@ def test_debtor_is_not_eligible_with_amount(ctx):
     playability = services.get_playability(ctx.debtor)
     assert playability.eligible is False
     assert playability.reason_code == "debt"
-    assert "En dette" in playability.detail
+    assert playability.detail == "En dette : 10 $."
     assert playability.amount_due == pytest.approx(10)
+
+
+@pytest.mark.parametrize(
+    "amount,currency,expected",
+    [
+        ("10.00", "USD", "En dette : 10 $."),
+        ("12.50", "USD", "En dette : 12,50 $."),
+        ("1250.00", "USD", "En dette : 1 250 $."),
+        ("25000", "CDF", "En dette : 25 000 FC."),
+    ],
+)
+def test_debt_detail_uses_club_money_format(amount, currency, expected):
+    """Montant au format monétaire du club (reçus et notifications de la
+    trésorerie, annexe D §1.7), en Decimal, jamais « 10.00 USD »."""
+
+    from decimal import Decimal
+
+    assert services._debt_detail(Decimal(amount), currency) == expected
 
 
 def test_pending_membership_is_not_eligible(ctx):
@@ -70,8 +88,10 @@ def test_medical_integration_pending_does_not_block(ctx):
 def test_describe_reason_for_viewer_debt_filtered_by_role(ctx):
     playability = services.get_playability(ctx.debtor)
 
-    # Coach/Président/VP/le joueur lui-même voient le montant.
-    assert "En dette" in services.describe_reason_for_viewer(playability, viewer=ctx.coach.user, membership=ctx.debtor)
+    # Président/VP/le joueur lui-même voient le montant.
+    # 10.3 n° 188 : le Coach ne sait rien de la dette, seulement « Non éligible. ».
+    assert services.describe_reason_for_viewer(playability, viewer=ctx.coach.user, membership=ctx.debtor) == "Non éligible."
+    assert "En dette" in services.describe_reason_for_viewer(playability, viewer=ctx.vice_president.user, membership=ctx.debtor)
     assert "En dette" in services.describe_reason_for_viewer(playability, viewer=ctx.president.user, membership=ctx.debtor)
     assert "En dette" in services.describe_reason_for_viewer(playability, viewer=ctx.debtor.user, membership=ctx.debtor)
 

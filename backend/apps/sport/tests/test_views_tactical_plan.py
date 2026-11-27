@@ -60,6 +60,7 @@ def test_placement_refuses_a_debtor_with_role_filtered_reason(ctx):
     refused = client_for(ctx.coach.user).post(url, {"membership_id": ctx.debtor.pk, "x_coord": "50", "y_coord": "80"})
     assert refused.status_code == status.HTTP_400_BAD_REQUEST
     assert refused.data["code"] == "player_not_eligible"
+    assert refused.data["detail"] == "Non éligible."  # 10.3 n° 188
     assert TacticalPlanPlacement.all_objects.filter(club=ctx.club, plan_id=plan_id, membership=ctx.debtor).count() == 0
 
     placed = client_for(ctx.coach.user).post(url, {"membership_id": ctx.player.pk, "x_coord": "50", "y_coord": "80"})

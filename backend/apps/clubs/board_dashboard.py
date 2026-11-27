@@ -241,19 +241,16 @@ class _Ctx:
 
     def counted_members(self) -> list[Membership]:
         """Adhésions comptées dans l'effectif historique : ni en attente, ni
-        annulées avant l'inscription, ni parties sans date de départ."""
+        annulées avant l'inscription, ni parties sans date de départ.
+
+        Règle unique de ``apps.sport`` (``session_stats.is_expectable``, la
+        même que la page Entraînements, CDC 10.3 n° 185) appliquée aux
+        adhésions déjà chargées : aucune requête supplémentaire."""
 
         def compute():
-            result = []
-            for m in self.members().values():
-                if m.status == Membership.Status.PENDING:
-                    continue
-                if m.status == Membership.Status.DEPARTED and (
-                    m.left_on is None or m.left_reason == Membership.LeftReason.CANCELLED
-                ):
-                    continue
-                result.append(m)
-            return result
+            from apps.sport.session_stats import roster_from
+
+            return roster_from(self.members().values())
 
         return self.memo("counted", compute)
 
@@ -1119,44 +1116,64 @@ def _equipment_out(ctx: _Ctx) -> dict:
 
 
 def _coach_notes(ctx: _Ctx) -> dict:
-    def compute():
-        from apps.sport.models import Evaluation
+    """Notes du Coach : **aucun calcul propre** (CDC 10.3 n° 190). Note
+    retenue par joueur et par événement (4.10), moyenne par joueur, puis
+    moyenne de l'équipe = moyenne des moyennes par joueur : tout vient de
+    ``apps.sport.session_stats.summarize_ratings``, la fonction de la page
+    « Entraînements ». Séances et matchs (``average``) et séances seules
+    (``sessions_average``, égale à la note moyenne de la page Entraînements
+    sur les mêmes séances).
 
-        rows = list(
-            Evaluation.all_objects.for_club(ctx.club)
-            .filter(event__event_date__gte=ctx.period.query_start, event__event_date__lte=ctx.until)
-            .values("event_id", "event__event_date", "event__kind")
-            .annotate(total=Sum("overall_score"), n=Count("pk"))
-            .order_by("event__event_date", "event_id")
+    Requêtes : événements de la fenêtre (1) + évaluations (1), quel que soit
+    le volume."""
+
+    def compute():
+        from apps.sport.models import Event
+        from apps.sport.session_stats import _retained_by_event, summarize_ratings
+
+        window_qs = Event.all_objects.for_club(ctx.club).filter(
+            event_date__gte=ctx.period.query_start, event_date__lte=ctx.until
         )
-        events = []
-        monthly: dict[date, list] = defaultdict(lambda: [Decimal("0"), 0])
-        for r in rows:
-            monthly[svc._period_start(r["event__event_date"])][0] += r["total"]
-            monthly[svc._period_start(r["event__event_date"])][1] += r["n"]
-            if r["event__event_date"] >= ctx.period.start:
-                events.append(
-                    {
-                        "event_id": r["event_id"],
-                        "kind": r["event__kind"],
-                        "kind_label": _KIND_LABELS.get(r["event__kind"], r["event__kind"]),
-                        "date": r["event__event_date"].isoformat(),
-                        "average": _avg(r["total"], r["n"]),
-                        "evaluations": r["n"],
-                    }
-                )
-        total = sum((r["total"] for r in rows if r["event__event_date"] >= ctx.period.start), Decimal("0"))
-        count = sum(r["n"] for r in rows if r["event__event_date"] >= ctx.period.start)
+        window = list(window_qs.order_by("event_date", "pk").only("pk", "kind", "event_date"))
+        # Sous-requête : une seule requête d'évaluations, même sans événement.
+        retained = _retained_by_event(ctx.club, window_qs.values("pk"))
+        evaluated = [e for e in window if retained.get(e.pk)]
+
+        def summarize(selected):
+            return summarize_ratings(ctx.club, selected, retained=retained)
+
+        def fmt(value):
+            return str(value) if value is not None else None
+
+        in_period = [e for e in evaluated if e.event_date >= ctx.period.start]
+        period = summarize(in_period)
+        sessions = summarize([e for e in in_period if e.kind == Event.Kind.SESSION])
+        events = [
+            {
+                "event_id": e.pk,
+                "kind": e.kind,
+                "kind_label": _KIND_LABELS.get(e.kind, e.kind),
+                "date": e.event_date.isoformat(),
+                "average": fmt(period["per_event"][e.pk]["average"]),
+                "evaluations": period["per_event"][e.pk]["evaluations"],
+            }
+            for e in in_period
+        ]
+        by_month: dict[date, list] = defaultdict(list)
+        for e in evaluated:
+            by_month[svc._period_start(e.event_date)].append(e)
         card = {
-            "average": _avg(total, count),
-            "evaluations": count,
+            "average": fmt(period["team_average"]),
+            "sessions_average": fmt(sessions["team_average"]),
+            "players_count": len(period["player_averages"]),
+            "evaluations": period["evaluations"],
             "events_count": len(events),
             "points": events[-POINTS_MAX:],
             "series": [
                 {
                     "month": fin._month_key(month),
                     "label": svc.french_month_label(month),
-                    "average": _avg(*monthly[month]) if month in monthly else None,
+                    "average": fmt(summarize(by_month[month])["team_average"]) if month in by_month else None,
                 }
                 for month in ctx.period.months
             ],
