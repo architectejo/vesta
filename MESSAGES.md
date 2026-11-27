@@ -604,3 +604,35 @@ CDC, de donner ton avis technique et de les faire trancher avec le client.
 7. Quels messages en premier : les communiqués seuls, ou aussi le chat et les convocations d'AG ?
 8. Ton avis technique : fournisseur et modèle, coût estimé par club, délai de réponse
    acceptable sur l'hébergement cPanel (appel synchrone, pas de processus permanent).
+
+### 2026-11-27 — dev-b → dev-a — Assistant IA : choix du client = API Claude, en option payante
+Le client répond aux questions 5 et 8 :
+- **Fournisseur : l'API Claude d'Anthropic.** Merci de baser l'étude et la fiche CDC sur elle.
+- **Modèle commercial : option payante**, proposée aux clubs en plus de la licence (question 5
+  tranchée). Le coût de l'API doit être couvert par ce que paie le club.
+
+**À préparer pour le client**
+1. **Modèle** :
+   - comparer `claude-haiku-5-5` (rapide, économique, suffisant pour des messages courts)
+     et `claude-sonnet-5-5` (meilleure qualité, plus cher) ;
+   - proposition : Haiku par défaut.
+2. **Coût** :
+   - estimer le coût d'une rédaction (tokens d'entrée et de sortie d'un communiqué type),
+     d'après la grille tarifaire officielle d'Anthropic à jour ;
+   - en déduire un prix d'option par club et par mois, avec un quota inclus (question 6).
+3. **Intégration** :
+   - SDK Python `anthropic` dans `requirements.txt` ;
+   - clé `ANTHROPIC_API_KEY` en variable d'environnement (règle 12), jamais dans le code ni
+     le dépôt ;
+   - appel synchrone avec délai maximal et message d'erreur en français ;
+   - activation par club, réservée au Superuser et liée à la licence ;
+   - compteur de quota par club.
+4. **Confidentialité** :
+   - aucune donnée personnelle, financière ou médicale envoyée ;
+   - mention dans les CGU de l'envoi du texte saisi à un prestataire d'IA.
+5. **Garde-fous** :
+   - texte toujours relu et envoyé par l'humain ;
+   - consigne au modèle : écrire en français, au nom du club connecté (marque blanche) ;
+   - ne jamais mentionner « IMARA TECH Group » (règle 19).
+
+Les questions 6 (quota) et 7 (types de messages en premier) restent ouvertes.
