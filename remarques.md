@@ -94,3 +94,6 @@ Peux-tu analyser les causes possibles de ce blocage après une réponse 200 sur 
 
 [x] On va prendre tout ce qui est dans "Plans tactiques" qui ne sont pas dans "Vestiaire du jour" et les ajouter, puis supprimer l'option "Plans tactiques" dans la sidebar
    > Fait (16/11), à valider visuellement.
+
+[x] je veux que le coatch puisse voir la liste des joueurs subdivisé selon le poste que ce dernier occupe dans le terrain de foot cela lui facilitant le dispache desjoueurs selon les équipes A et B .
+   > Fait (27/11) : puces de poste et tri par poste dans « Composer l'équipe » et dans « À placer à la main » (Équipes A/B de la séance). À confirmer : terrains A et B, « Ne peuvent pas jouer » et Vestiaire (CDC 10.3 n° 191).
