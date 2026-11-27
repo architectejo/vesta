@@ -318,6 +318,136 @@ Footer.
 - **360 px** : page = une carte de 2 lignes ; modale plein écran ; en-tête 56 px ; pied collé au clavier (`visualViewport`), la zone de messages occupe le reste. Bulles 80 % de 336 px, texte 14 px, jamais plus gros.
 - **≥ 1024 px** : modale `lg` (800 px, 90 vh). Proposition d'amélioration ultérieure, **non incluse** : liste des canaux et conversation côte à côte dans la page ; elle obligerait à mettre le champ de saisie dans la page (exception à la règle 3.2 à faire valider, comme le tableau noir, 10.2 n° 32). Au MVP, on reste en modale.
 
+## C7. Messages réservés aux membres en ordre (révision 27/11/2026, CDC 10.3 n° 182)
+
+Source : décision du client du 27/11/2026 (circuit 9.4), CDC 10.3 **n° 182**, 4.16 (chat d'équipe), 4.17 (notifications), matrice 2.4, 10.3 n° 165 (composition du canal « Bureau »), n° 166 (journal). Cette section complète C2 à C6 ; tout ce qui n'y est pas redit reste inchangé.
+
+### C7.1 Règle rappelée (n° 182)
+
+- Dans le **chat uniquement** (ni communiqués, ni fil d'actualité), un message envoyé par un rôle du canal « Bureau » (Président, VP, DS, Trésorier, Trésorier adjoint, Intendant, Secrétaire — n° 165) peut être marqué « Réservé aux membres en ordre ». La case est **décochée par défaut** : sans action, le message est visible par tous.
+- Un message réservé est lu par : les joueurs dont le statut financier calculé est « En ordre » (règle 2 ; cotisations libres exclues), **son auteur**, et **les rôles du bureau** (même s'ils ne sont pas eux-mêmes en ordre).
+- Visibilité calculée **à la lecture** et **filtrée par l'API** : liste des messages, interrogation `after=`, images, compteurs de non-lus, aperçu du dernier message de la liste des canaux. L'interface ne calcule rien et ne masque rien elle-même : elle affiche ce que l'API renvoie (même principe que 0.3).
+- Pour un joueur non en ordre, le message est **absent** du chat : pas de bulle grisée, pas de « message masqué », pas de trou dans la conversation, pas de compteur.
+
+**Propositions par défaut appliquées (n° 182 « restent à trancher », à confirmer par le client)** :
+
+| # | Proposition appliquée |
+| --- | --- |
+| P1 | Au plus **une** notification d'incitation par joueur et par jour, quel que soit le nombre de messages réservés publiés ce jour-là |
+| P2 | **Canal « Général » seulement** : la case n'existe pas dans le canal « Bureau » (tous ses membres sont du bureau, la case n'y aurait aucun effet) |
+| P3 | Un joueur « En attente d'adhésion » est traité comme **non en ordre** |
+| P4 | Un badge « Membres en ordre » est affiché sur chaque message réservé, visible de ceux qui peuvent le lire |
+
+### C7.2 Pied de la conversation « Général » pour un rôle du bureau
+
+La case n'est affichée que si l'API l'autorise pour ce canal et cet utilisateur (indicateur porté par le canal, par ex. `can_restrict_to_members_in_order`, nom à fixer par `backend-dev`). L'interface ne déduit jamais ce droit des rôles qu'elle connaît ; l'API refuse de toute façon un message réservé envoyé par quelqu'un d'autre.
+
+Ordre des éléments du pied (C4), de haut en bas, à 360 px :
+
+1. aperçu de l'image (s'il y en a une, inchangé) ;
+2. **ligne « réservé »** (nouvelle) :
+   - `Checkbox` native 20 px, libellé à droite « Réservé aux membres en ordre » (14 px/500) ; la ligne entière (case + libellé) est la zone tactile, hauteur 44 px ;
+   - aide sous le libellé, 13 px, `--color-text-muted`, une ligne à 360 px : « Seuls les joueurs en ordre de cotisation et le bureau le verront. » ;
+   - décochée à l'ouverture de la conversation ;
+3. TextArea + bouton « Envoyer » (inchangés).
+
+Comportement :
+
+- **Case cochée** : le placeholder du champ devient « Message réservé aux membres en ordre… » et une petite icône cadenas (16 px, `aria-hidden`) apparaît à gauche du libellé de la case. Le bouton reste « Envoyer » (une seule action principale, pas de changement de couleur).
+- **Après un envoi réussi**, la case **revient à décochée** : chaque message part avec la valeur par défaut du n° 182 (« décochée par défaut »), ce qui évite de réserver par mégarde les messages suivants. Proposition, voir point C7.9-5.
+- **Échec d'envoi** (« Non envoyé » + « Réessayer », C4) : le brouillon conserve son état réservé ; « Réessayer » renvoie le message avec la même valeur. La bulle en échec porte déjà le badge (C7.3) pour que l'auteur voie ce qu'il renvoie.
+- Pas de modale de confirmation : réserver un message n'est pas une action sensible au sens de la règle 7 (aucune écriture financière, l'auteur est journalisé).
+- **Hors connexion** (0.2) : case désactivée comme « Envoyer ». **Lecture seule** (licence expirée, 0.4) : pied masqué, donc case masquée.
+- **Bureau ≥ 1024 px** : même disposition ; l'aide reste sous le libellé.
+
+**Aucune case** pour : les joueurs qui ne sont pas membres du canal « Bureau » (Coach, Capitaine, Médecin, simples joueurs), le canal « Bureau » lui-même (P2), le Superuser en session de support (Ghost Mode, 5.4). Pour eux, le pied est exactement celui de C4, sans espace réservé vide.
+
+### C7.3 Affichage d'un message réservé (pour ceux qui le lisent)
+
+- **Badge « Membres en ordre »** (P4) en tête de la bulle, avant le texte et l'image : icône cadenas 12 px (`aria-hidden`) + libellé 13 px/500, rayon `--radius-full`, famille **gris neutre** (`--status-neutral-bg` / `--status-neutral-fg`). Pourquoi gris et pas vert : ce badge qualifie le **message**, pas un joueur ; un vert « En ordre » se confondrait avec le `StatusBadge` financier, qui reste interdit sur cette page (0.3). Le libellé porte l'information, jamais la couleur seule.
+- Message d'un autre membre : nom au-dessus de la bulle (inchangé), badge sur la première ligne dans la bulle. Mon message : badge sur la première ligne de ma bulle, aligné à droite.
+- Message réservé contenant seulement une image : badge au-dessus de la vignette.
+- **Liste des canaux** (C3) : si le dernier message visible par l'utilisateur est réservé, l'aperçu commence par une icône cadenas 12 px, avec texte accessible « Réservé aux membres en ordre : » lu avant l'aperçu. Pour un joueur non en ordre, l'aperçu, l'heure et le compteur portent sur le dernier message **qu'il peut voir** (filtré par l'API).
+- La visionneuse d'image (A5.4) ne montre pas de badge ; son texte alternatif est inchangé.
+
+### C7.4 Ce que voit un joueur non en ordre
+
+**Dans la conversation** : les messages réservés sont absents, sans aucune trace à leur place (n° 182).
+
+**Bandeau d'information (proposition P5, à confirmer)** — en tête de la modale « Général », entre l'en-tête de la modale et la zone des messages, fixe (ne défile pas avec les messages) :
+
+- `Banner` variante `info` (pas `warning` ni `danger` : discret, ce n'est pas une alerte), compact, 13 px, 2 lignes au plus à 360 px :
+  « Certains messages sont réservés aux membres en ordre de cotisation. » + lien « Voir mon solde » (zone tactile 44 px).
+- Affiché **seulement** si l'API indique qu'au moins un message réservé du canal n'est pas visible pour ce joueur (booléen porté par le canal ou la réponse de la liste, par ex. `has_hidden_reserved_messages` ; **jamais** de nombre, de date, d'auteur ni de position). Sans message réservé dans le canal, le bandeau n'apparaît pas : la phrase serait fausse et ressemblerait à un rappel de dette gratuit.
+- Pas de bouton de fermeture : il disparaît de lui-même dès que le joueur est en ordre.
+- Jamais affiché dans la liste des canaux, ni sur l'accueil, ni dans le canal « Bureau ».
+- Pourquoi c'est cohérent avec « le message est absent » : le bandeau ne localise aucun message et n'en révèle ni le nombre ni le moment ; il dit seulement ce que la notification d'incitation (C7.5) a déjà dit. Il ne parle que de la situation **de la personne qui regarde**, ne nomme personne et n'affiche ni montant ni statut (0.3 respecté).
+- Le mot « dette » n'apparaît pas : un tiers qui verrait l'écran par-dessus l'épaule (bord du terrain) n'apprend pas de montant ni de statut explicite.
+- Clic sur « Voir mon solde » : ferme la modale (confirmation « Abandonner les modifications ? » si un message est en cours de saisie) et ouvre `/profil` positionné sur la carte « Situation financière » (`comptes-mon-profil.md` §3).
+
+Alternative si le client refuse P5 : aucun bandeau ; seule la notification d'incitation informe le joueur.
+
+**Canal sans message visible** : si le joueur ne voit aucun message alors que le bandeau est affiché, l'état vide devient « Aucun message à afficher pour l'instant. » (au lieu de « Aucun message pour l'instant. Lancez la conversation. », qui contredirait le bandeau). Le pied reste actif : un joueur non en ordre peut écrire dans le canal « Général » (le n° 182 ne restreint que la lecture des messages réservés).
+
+**Changement de situation pendant la lecture** (visibilité calculée à la lecture) :
+
+- Le joueur **régularise** (paiement validé) : à l'interrogation suivante (10 s), l'API renvoie les anciens messages réservés à leur place chronologique et le bandeau disparaît. L'interface **recharge la fenêtre de messages affichée** (pas seulement `after=`), sinon les messages plus anciens que le dernier reçu n'apparaîtraient jamais. Pas de Toast, pas de séparateur « Nouveaux messages » ajouté pour eux, pas de saut de défilement si le joueur lit plus haut.
+- Le joueur **passe en dette** (échéance) : à l'interrogation suivante, les messages réservés disparaissent ; même rechargement complet de la fenêtre. Une image réservée ouverte dans la visionneuse affiche « Image indisponible ».
+- Pour `frontend-dev` : le code actuel (`ConversationModal.tsx`) recharge déjà toute la fenêtre à chaque interrogation (`limit`) ; si l'interrogation devient incrémentale (`after=`, 0.1), un changement du booléen du bandeau ou de la situation du joueur doit déclencher le rechargement complet.
+
+### C7.5 Notifications (4.17, n° 182)
+
+| Destinataires | Notification | Clic |
+| --- | --- | --- |
+| Ceux qui peuvent lire le message réservé | **Aucune notification cloche**, comme tout message de chat (D) ; seul le compteur de non-lus du canal augmente | — |
+| Membres actifs du canal « Général » qui ne peuvent pas le lire (non en ordre, en attente d'adhésion — P3) | In-app : « Un message réservé aux membres en ordre a été publié dans le chat. Régularisez votre cotisation pour voir toutes les informations et tous les messages du groupe. » | `/profil`, positionné sur la carte « Situation financière » |
+
+- Texte **exact** du n° 182, sans aucune variable : il ne reprend jamais le contenu, l'auteur ni l'heure du message.
+- Au plus une par joueur et par jour (P1) : un deuxième message réservé le même jour ne crée pas de nouvelle notification. Le « jour » s'entend dans le fuseau du club.
+- Le clic mène au **solde**, pas au chat (n° 182 : « mène à leur solde ») : dans le chat, il n'y aurait rien à voir.
+- Ligne de la cloche : icône neutre (cadenas), pas de pastille rouge ni de style « alerte rouge » (réservé au 4.17 « Dépense non justifiée »).
+- **Email** : non prévu (proposition P6) ; le n° 182 ne cite qu'une notification et le tableau 4.17 ne prévoit l'email que pour quelques événements. À confirmer.
+- L'auteur du message n'est pas prévenu de qui a reçu l'incitation (aucune liste de joueurs non en ordre exposée dans le chat).
+
+### C7.6 États
+
+| Zone | Chargement | Vide | Erreur / cas limite |
+| --- | --- | --- | --- |
+| Ligne « réservé » du pied | Absente tant que le canal n'est pas chargé (pas d'apparition après coup qui décalerait le champ) | — | Envoi refusé par l'API (droit retiré entre-temps, par ex. révocation du bureau) : « Vous ne pouvez plus réserver un message aux membres en ordre. » sous le champ ; le brouillon est conservé, la case disparaît, le message n'est pas envoyé automatiquement en « visible par tous » |
+| Bandeau joueur non en ordre | Non affiché pendant le chargement | — | Si la liste des messages est en erreur, le bandeau n'est pas affiché (on ne montre que l'erreur de C5) |
+| Conversation « Général » pour un joueur non en ordre | Squelettes de C5 | « Aucun message à afficher pour l'instant. » si le bandeau est affiché ; sinon texte de C5 | Erreurs de C5 inchangées |
+| Image réservée devenue inaccessible | — | — | « Image indisponible » (texte commun existant) |
+
+### C7.7 Accessibilité
+
+- Case : `<input type="checkbox">` natif avec `<label>` associé ; aide liée par `aria-describedby` ; focus visible ; ordre de tabulation : image → case → champ → « Envoyer ».
+- Changement de placeholder à la coche : pas d'annonce supplémentaire (l'état coché est annoncé par la case elle-même).
+- Badge : texte « Membres en ordre » placé **avant** le corps du message dans le DOM, pour qu'un lecteur d'écran l'annonce en premier ; icône `aria-hidden`.
+- Annonce `aria-live` des nouveaux messages (C4) : inchangée ; pour un joueur non en ordre, elle ne compte jamais un message réservé (l'API ne le renvoie pas).
+- Bandeau : élément statique (`role="note"`), **pas** de `aria-live` : son apparition ou sa disparition n'est pas annoncée (discrétion) ; le lien porte un libellé explicite « Voir mon solde ».
+- Contrastes : badge gris ≥ 7:1 (design-system 2.5, 7.1) ; bandeau `info` selon le composant `Banner` existant, lisible en plein soleil.
+
+### C7.8 Textes exacts (ajouts)
+
+« Réservé aux membres en ordre » ; « Seuls les joueurs en ordre de cotisation et le bureau le verront. » ; « Message réservé aux membres en ordre… » ; « Membres en ordre » ; « Réservé aux membres en ordre : » (texte accessible de l'aperçu) ; « Certains messages sont réservés aux membres en ordre de cotisation. » ; « Voir mon solde » ; « Aucun message à afficher pour l'instant. » ; « Vous ne pouvez plus réserver un message aux membres en ordre. » ; notification : « Un message réservé aux membres en ordre a été publié dans le chat. Régularisez votre cotisation pour voir toutes les informations et tous les messages du groupe. »
+
+Aucun nom de club, logo ou lien en dur : la page garde l'en-tête « {nom du club} · … » fourni par l'API (C3) ; le lien « Voir mon solde » est une route interne de l'application.
+
+### C7.9 Journal et points ouverts
+
+- **Journal** (règle 6, n° 166) : la création du message porte `members_in_order_only` (vrai/faux), **sans le texte**. L'envoi de la notification d'incitation n'est pas une action d'utilisateur ; journalisation à fixer par `backend-dev` (proposition : non journalisée, comme les autres notifications automatiques).
+
+**Points à confirmer par le client** :
+
+1. **P1** : une incitation au plus par joueur et par jour.
+2. **P2** : canal « Général » seulement.
+3. **P3** : « En attente d'adhésion » = non en ordre. Question liée : un nouveau joueur au statut transitoire « Inscrit » (design-system 2.5, avant le premier calcul du solde) est-il en ordre ? Position provisoire la plus prudente : seul le statut calculé « En ordre » donne accès.
+4. **P4** : badge « Membres en ordre » (gris neutre) sur les messages réservés.
+5. **Case remise à décochée après chaque envoi** (C7.2) : proposition ; alternative, la case reste cochée jusqu'à la fermeture de la conversation.
+6. **P5 — bandeau** « Certains messages sont réservés aux membres en ordre de cotisation. Voir mon solde » pour le joueur non en ordre, seulement si un message réservé existe dans le canal ; alternative : aucun bandeau.
+7. **P6** : notification d'incitation in-app seulement, sans email.
+8. **Superuser en session de support** : lit-il les messages réservés ? Proposition : oui (il intervient pour le club), sans jamais recevoir d'incitation ni voir la case.
+
 ---
 
 ## D. Journal et notifications (rappel pour `backend-dev` et `test-engineer`)
