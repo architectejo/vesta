@@ -39,7 +39,7 @@ export function PlayerDetail({
         />
         {badge ? (
           <p className="mt-2 text-center">
-            <StatusBadge status={badge.status} detail={badge.detail} />
+            <StatusBadge status={badge.status} detail={badge.detail} label={badge.label} />
           </p>
         ) : null}
       </div>

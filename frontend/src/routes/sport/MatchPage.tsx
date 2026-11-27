@@ -28,6 +28,7 @@ import {
   Button,
   ConfirmDialog,
   EmptyState,
+  IconLock,
   Loader,
   Modal,
   NumberField,
@@ -60,6 +61,9 @@ import { MatchComposeModal } from "./MatchComposeModal";
 import { OFFLINE_ACTION_MESSAGE, useOnlineStatus } from "../logistics/useOnlineStatus";
 import { getSportAccess } from "./sportAccess";
 import { formatTime, useClubTimeZone } from "./sportTime";
+
+/** Aide de « Publier la composition » bloquée (§3 point 2). */
+const PUBLISH_BLOCKED_HELP = "Retirez d'abord les joueurs qui ne peuvent plus jouer.";
 
 /** Section « Équipements reçus » (feuille de match, complète §4.5/§4.6 de
  * `docs/ecrans/logistique.md` : la modale « Ajouter des équipements » n'avait
@@ -182,18 +186,22 @@ function CompositionCard({
       ) : null}
 
       {ineligibleCount > 0 && canManage ? (
-        <Banner variant="warning" className="mb-2" action={<Button size="sm" variant="ghost" disabled={!online} title={online ? undefined : OFFLINE_ACTION_MESSAGE} onClick={onOpenCompose}>Modifier la composition</Button>}>
+        <Banner variant="warning" className="mb-2" action={<Button size="sm" variant="ghost" disabled={!online} onClick={onOpenCompose}>Modifier la composition</Button>}>
           {ineligibleCount} joueur(s) de la composition ne peuvent plus jouer. Retirez-les ou attendez leur
           régularisation.
+          {!online ? <span className="mt-1 block text-[13px]">{OFFLINE_ACTION_MESSAGE}</span> : null}
         </Banner>
       ) : null}
 
       {all.length === 0 ? (
+        // Hors connexion : bouton visible mais désactivé, avec l'aide écrite
+        // en dessous (§4.1 bis), jamais masqué.
         <EmptyState
           message={canManage ? "Aucune composition pour l'instant." : "La composition n'est pas encore publiée."}
           description={canManage && !online ? OFFLINE_ACTION_MESSAGE : undefined}
-          actionLabel={canManage && online ? "Composer l'équipe" : undefined}
-          onAction={canManage && online ? onOpenCompose : undefined}
+          actionLabel={canManage ? "Composer l'équipe" : undefined}
+          onAction={canManage ? onOpenCompose : undefined}
+          actionDisabled={!online}
         />
       ) : (
         <div className="space-y-3">
@@ -208,15 +216,33 @@ function CompositionCard({
                 <ul className="divide-y divide-border">
                   {list.map((entry) => (
                     <li key={entry.id} className="flex items-center gap-3 py-1.5">
-                      <Avatar name={entry.player.name} photoUrl={entry.player.photo} size={32} />
+                      <span className={`flex shrink-0 ${entry.no_longer_eligible && canManage ? "opacity-60" : ""}`}>
+                        <Avatar name={entry.player.name} photoUrl={entry.player.photo} size={32} />
+                      </span>
                       <div className="min-w-0 flex-1">
-                        <p className={`break-words text-sm ${entry.no_longer_eligible ? "text-text-muted" : "text-text"}`}>
-                          n° {entry.jersey_number} · {entry.player.name}
+                        <p
+                          className={`flex items-center gap-1 break-words text-sm ${entry.no_longer_eligible ? "text-text-muted" : "text-text"}`}
+                        >
+                          {entry.no_longer_eligible && canManage ? (
+                            // Cadenas (§3 point 2) : ligne grisée pour le staff.
+                            <IconLock
+                              aria-hidden="true"
+                              data-testid="composition-lock"
+                              className="h-4 w-4 shrink-0"
+                              strokeWidth={1.75}
+                            />
+                          ) : null}
+                          <span className="min-w-0">
+                            n° {entry.jersey_number} · {entry.player.name}
+                          </span>
                         </p>
-                        {entry.no_longer_eligible ? (
+                        {entry.no_longer_eligible && canManage ? (
                           <p className="text-xs text-text-muted">
-                            {canManage ? `N'est plus sélectionnable : ${entry.no_longer_eligible.reason}` : "Indisponible"}
+                            N'est plus sélectionnable : {entry.no_longer_eligible.reason}
                           </p>
+                        ) : entry.no_longer_eligible ? (
+                          // Hors staff : badge gris seul, sans motif (10.2 n° 16).
+                          <StatusBadge status="lineup_unavailable" className="mt-0.5" />
                         ) : (
                           <p className="text-xs text-text-muted">{entry.position_label}</p>
                         )}
@@ -239,7 +265,7 @@ function CompositionCard({
                   size="sm"
                   variant="secondary"
                   disabled={!online}
-                  title={online ? undefined : OFFLINE_ACTION_MESSAGE}
+                  aria-describedby={!online ? "composition-action-help" : undefined}
                   onClick={onOpenCompose}
                 >
                   Modifier la composition
@@ -248,13 +274,17 @@ function CompositionCard({
                   size="sm"
                   variant="primary"
                   disabled={ineligibleCount > 0 || !online}
-                  title={online ? undefined : OFFLINE_ACTION_MESSAGE}
+                  aria-describedby={!online || ineligibleCount > 0 ? "composition-action-help" : undefined}
                   onClick={onPublish}
                 >
                   Publier la composition
                 </Button>
               </div>
-              {!online ? <p className="text-[13px] text-text-muted">{OFFLINE_ACTION_MESSAGE}</p> : null}
+              {!online || ineligibleCount > 0 ? (
+                <p id="composition-action-help" className="text-[13px] text-text-muted">
+                  {!online ? OFFLINE_ACTION_MESSAGE : PUBLISH_BLOCKED_HELP}
+                </p>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -876,6 +906,18 @@ export function MatchPage() {
   const scoredCount = goalsFromScore.length;
   const scoreMismatch = match.sheet ? scoredCount < match.sheet.score_home : false;
 
+  // Action principale selon la phase (§3) ; le blocage de publication vient
+  // de l'API (`no_longer_eligible`), jamais recalculé ici.
+  const needsCompose = match.starters.length === 0 && match.substitutes.length === 0;
+  const needsPublish = !needsCompose && !match.is_composition_published;
+  const publishBlocked = [...match.starters, ...match.substitutes].some((c) => c.no_longer_eligible);
+  const headerActionHelp =
+    (needsCompose || needsPublish) && !online
+      ? OFFLINE_ACTION_MESSAGE
+      : needsPublish && publishBlocked
+        ? PUBLISH_BLOCKED_HELP
+        : null;
+
   return (
     <div className="space-y-4">
       <header className="space-y-1">
@@ -927,23 +969,24 @@ export function MatchPage() {
       {match.is_locked ? <Banner variant="readonly">Ce match est verrouillé : lecture seule (les buts restent modifiables).</Banner> : null}
 
       {access.canManageMatch && !match.is_locked ? (
+        <div className="space-y-1">
         <div className="flex flex-wrap gap-2">
-          {match.starters.length === 0 && match.substitutes.length === 0 ? (
+          {needsCompose ? (
             <Button
               variant="primary"
               size="sm"
               disabled={!online}
-              title={online ? undefined : OFFLINE_ACTION_MESSAGE}
+              aria-describedby={!online ? "match-header-action-help" : undefined}
               onClick={() => setComposeOpen(true)}
             >
               Composer l'équipe
             </Button>
-          ) : !match.is_composition_published ? (
+          ) : needsPublish ? (
             <Button
               variant="primary"
               size="sm"
-              disabled={!online || [...match.starters, ...match.substitutes].some((c) => c.no_longer_eligible)}
-              title={online ? undefined : OFFLINE_ACTION_MESSAGE}
+              disabled={!online || publishBlocked}
+              aria-describedby={!online || publishBlocked ? "match-header-action-help" : undefined}
               onClick={() => void handlePublish()}
             >
               Publier la composition
@@ -957,6 +1000,14 @@ export function MatchPage() {
               Modifier le score
             </Button>
           )}
+        </div>
+        {/* Aide visible (et non un simple `title`, invisible au toucher) :
+            §4.1 bis « Hors connexion » et §3 point 2 (publication bloquée). */}
+        {headerActionHelp ? (
+          <p id="match-header-action-help" className="text-[13px] text-text-muted">
+            {headerActionHelp}
+          </p>
+        ) : null}
         </div>
       ) : null}
 

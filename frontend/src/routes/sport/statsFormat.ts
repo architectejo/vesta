@@ -59,3 +59,20 @@ export function formatDayMonth(iso: string): string {
 export function plural(count: number, one: string, many: string): string {
   return count > 1 ? many : one;
 }
+
+/**
+ * Ligne de présence d'une séance de l'historique (page Entraînements).
+ * « Non pointée » se fonde sur `marked`, servi par l'API ; si le champ est
+ * absent (API plus ancienne), repli sur `attendance_rate === null`. Une séance
+ * pointée sans taux (aucun attendu) n'affiche que le nombre de présents.
+ */
+export function historyAttendanceLabel(session: {
+  marked?: boolean;
+  present: number;
+  attendance_rate: number | null;
+}): string {
+  const marked = session.marked ?? session.attendance_rate !== null;
+  if (!marked) return "Non pointée";
+  const present = `${session.present} ${plural(session.present, "présent", "présents")}`;
+  return session.attendance_rate === null ? present : `${present} · ${session.attendance_rate} %`;
+}

@@ -29,4 +29,23 @@ describe("EmptyState", () => {
     await user.click(screen.getByRole("button", { name: "Réessayer" }));
     expect(onAction).toHaveBeenCalledTimes(1);
   });
+
+  it("action désactivée (hors connexion) : bouton affiché, inerte, aide visible", async () => {
+    const onAction = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <EmptyState
+        message="Aucune composition pour l'instant."
+        description="Cette action nécessite une connexion."
+        actionLabel="Composer l'équipe"
+        onAction={onAction}
+        actionDisabled
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Composer l'équipe" });
+    expect(button).toBeDisabled();
+    await user.click(button);
+    expect(onAction).not.toHaveBeenCalled();
+    expect(screen.getByText("Cette action nécessite une connexion.")).toBeInTheDocument();
+  });
 });

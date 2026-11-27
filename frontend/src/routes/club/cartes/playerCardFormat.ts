@@ -43,10 +43,15 @@ export function plural(count: number, one: string, many: string): string {
 
 /**
  * Pastille de disponibilité (staff seulement). Une dette n'est jamais nommée :
- * l'API sert « Indisponible » sans motif, affiché tel quel. Le motif (suspension,
+ * l'API sert un libellé neutre (« Non éligible. » pour le Coach), affiché tel
+ * quel. Le motif (suspension,
  * inaptitude) n'apparaît que s'il est servi.
  */
-export function availabilityBadge(availability: PlayerCardAvailability): { status: StatusKey; detail?: string } {
+export function availabilityBadge(availability: PlayerCardAvailability): {
+  status: StatusKey;
+  detail?: string;
+  label?: string;
+} {
   switch (availability.family) {
     case "suspension":
       return { status: "suspended", detail: stripPrefix(availability.label, /^Suspendu\s*[:·]?\s*/) };
@@ -55,7 +60,10 @@ export function availabilityBadge(availability: PlayerCardAvailability): { statu
     case "pending":
       return { status: "pending" };
     default:
-      return { status: "medical_unavailable" };
+      // Libellé de l'API tel quel (ex. « Non éligible. » pour le Coach,
+      // CDC 10.3 n° 188) ; couleur grise de la clé ; repli « Indisponible »
+      // seulement si l'API n'a servi aucun libellé.
+      return { status: "medical_unavailable", label: availability.label.trim() || undefined };
   }
 }
 

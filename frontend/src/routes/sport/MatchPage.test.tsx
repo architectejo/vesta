@@ -234,9 +234,16 @@ describe("MatchPage — composition hors connexion (§4.1 bis)", () => {
     vi.mocked(getMatch).mockResolvedValue(makeMatch());
     renderPage();
 
+    // En-tête ET état vide : le bouton reste affiché, désactivé (jamais masqué).
     const buttons = await screen.findAllByRole("button", { name: "Composer l'équipe" });
+    expect(buttons).toHaveLength(2);
     for (const button of buttons) expect(button).toBeDisabled();
-    expect(screen.getByText("Cette action nécessite une connexion.")).toBeInTheDocument();
+    // Aide écrite et visible (pas un simple `title`) dans l'en-tête et l'état vide.
+    expect(screen.getAllByText("Cette action nécessite une connexion.")).toHaveLength(2);
+    for (const button of buttons) expect(button).not.toHaveAttribute("title");
+    expect(document.getElementById("match-header-action-help")).toHaveTextContent(
+      "Cette action nécessite une connexion.",
+    );
     onLine.mockRestore();
   });
 
@@ -265,7 +272,13 @@ describe("MatchPage — composition hors connexion (§4.1 bis)", () => {
     const publish = await screen.findAllByRole("button", { name: "Publier la composition" });
     for (const button of publish) expect(button).toBeDisabled();
     expect(screen.getByRole("button", { name: "Modifier la composition" })).toBeDisabled();
-    expect(screen.getByText("Cette action nécessite une connexion.")).toBeInTheDocument();
+    expect(document.getElementById("match-header-action-help")).toHaveTextContent(
+      "Cette action nécessite une connexion.",
+    );
+    expect(document.getElementById("composition-action-help")).toHaveTextContent(
+      "Cette action nécessite une connexion.",
+    );
+    for (const button of publish) expect(button).not.toHaveAttribute("title");
     onLine.mockRestore();
   });
 
@@ -274,5 +287,79 @@ describe("MatchPage — composition hors connexion (§4.1 bis)", () => {
     renderPage();
     const buttons = await screen.findAllByRole("button", { name: "Composer l'équipe" });
     for (const button of buttons) expect(button).toBeEnabled();
+  });
+});
+
+describe("MatchPage — composition devenue non conforme (§3 point 2)", () => {
+  const brief = (id: number, name: string) => ({
+    membership_id: id,
+    name,
+    jersey_number: id,
+    position: "midfielder",
+    position_label: "Milieu",
+    photo: null,
+  });
+  const entry = (id: number, name: string, blocked: boolean) => ({
+    id,
+    membership_id: id,
+    player: brief(id, name),
+    role: "starter" as const,
+    role_label: "Titulaire",
+    position: "midfielder",
+    position_label: "Milieu",
+    jersey_number: id,
+    no_longer_eligible: blocked
+      ? { eligible: false, reason_code: "suspended", reason: "Suspendu : encore 1 match(s)" }
+      : null,
+  });
+
+  beforeEach(() => {
+    vi.mocked(listClubPlayers).mockResolvedValue(makeRoster());
+    vi.mocked(listEventIncidents).mockResolvedValue({ count: 0, next_offset: null, results: [] });
+  });
+
+  it("Coach : publication désactivée avec l'aide « Retirez d'abord… », ligne avec cadenas et motif de l'API", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile("coach"));
+    vi.mocked(getMatch).mockResolvedValue(
+      makeMatch({ starters: [entry(12, "Kevin Proto", false), entry(13, "Aimé Leurre", true)] }),
+    );
+    renderPage();
+
+    const publish = await screen.findAllByRole("button", { name: "Publier la composition" });
+    for (const button of publish) expect(button).toBeDisabled();
+    expect(screen.getAllByText("Retirez d'abord les joueurs qui ne peuvent plus jouer.").length).toBeGreaterThan(0);
+    expect(document.getElementById("match-header-action-help")).toHaveTextContent(
+      "Retirez d'abord les joueurs qui ne peuvent plus jouer.",
+    );
+    expect(screen.getByText("N'est plus sélectionnable : Suspendu : encore 1 match(s)")).toBeInTheDocument();
+    expect(screen.getAllByTestId("composition-lock")).toHaveLength(1);
+    expect(screen.getByText(/1 joueur\(s\) de la composition ne peuvent plus jouer/)).toBeInTheDocument();
+  });
+
+  it("composition conforme : aucune aide de blocage", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile("coach"));
+    vi.mocked(getMatch).mockResolvedValue(makeMatch({ starters: [entry(12, "Kevin Proto", false)] }));
+    renderPage();
+
+    const publish = await screen.findAllByRole("button", { name: "Publier la composition" });
+    for (const button of publish) expect(button).toBeEnabled();
+    expect(screen.queryByText("Retirez d'abord les joueurs qui ne peuvent plus jouer.")).not.toBeInTheDocument();
+  });
+
+  it("hors staff : badge gris « Indisponible », sans motif ni cadenas (10.2 n° 16)", async () => {
+    vi.mocked(getMyProfile).mockResolvedValue(makeProfile());
+    vi.mocked(getMatch).mockResolvedValue(
+      makeMatch({
+        is_composition_published: true,
+        starters: [entry(12, "Kevin Proto", false), entry(13, "Aimé Leurre", true)],
+      }),
+    );
+    renderPage();
+
+    const badge = await screen.findByText("Indisponible");
+    expect(badge.closest("span.rounded-full")?.className).toContain("bg-status-neutral-bg");
+    expect(screen.queryByText(/Suspendu/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/N'est plus sélectionnable/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("composition-lock")).not.toBeInTheDocument();
   });
 });

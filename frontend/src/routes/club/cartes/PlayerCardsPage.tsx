@@ -396,7 +396,7 @@ export function PlayerCardsPage() {
               />
               {badge ? (
                 <p className="mt-1 text-center">
-                  <StatusBadge status={badge.status} detail={badge.detail} />
+                  <StatusBadge status={badge.status} detail={badge.detail} label={badge.label} />
                 </p>
               ) : null}
               {!isDesktop ? <StatsStrip row={row} /> : null}

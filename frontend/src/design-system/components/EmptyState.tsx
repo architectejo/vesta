@@ -19,6 +19,11 @@ export interface EmptyStateProps {
    */
   actionLabel?: string;
   onAction?: () => void;
+  /**
+   * Action affichée mais désactivée (ex. hors connexion) : l'aide qui en
+   * explique la raison passe par `description`, visible au toucher.
+   */
+  actionDisabled?: boolean;
   className?: string;
 }
 
@@ -46,6 +51,7 @@ export function EmptyState({
   icon,
   actionLabel,
   onAction,
+  actionDisabled = false,
   className = "",
 }: EmptyStateProps) {
   const resolvedMessage = message ?? DEFAULT_MESSAGE[variant];
@@ -62,7 +68,7 @@ export function EmptyState({
       <p className="text-sm text-text">{resolvedMessage}</p>
       {description ? <p className="text-xs text-text-muted">{description}</p> : null}
       {showAction ? (
-        <Button size="sm" variant="secondary" onClick={onAction}>
+        <Button size="sm" variant="secondary" onClick={onAction} disabled={actionDisabled}>
           {actionLabel}
         </Button>
       ) : null}

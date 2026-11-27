@@ -29,7 +29,15 @@ import { CreateSessionModal } from "./CreateSessionModal";
 import { SessionStatsPanel } from "./SessionStatsPanel";
 import { PerformanceTestsCard } from "./performance/PerformanceTestsCard";
 import { canCreateSession, canManagePerformanceTests, canViewTrainingStaffStats } from "./sportAccess";
-import { formatLongDate, formatNote, formatRate, formatSessionDate, plural, shortDateLabel } from "./statsFormat";
+import {
+  formatLongDate,
+  formatNote,
+  formatRate,
+  formatSessionDate,
+  historyAttendanceLabel,
+  plural,
+  shortDateLabel,
+} from "./statsFormat";
 
 const LIST_STEP = 5;
 const TOP = 5;
@@ -386,9 +394,7 @@ export function EntrainementsPage() {
                             {session.location || "Terrain non précisé"}
                           </span>
                           <span className="block text-xs text-text-muted">
-                            {session.attendance_rate === null
-                              ? "Non pointée"
-                              : `${session.present} ${plural(session.present, "présent", "présents")} · ${session.attendance_rate} %`}
+                            {historyAttendanceLabel(session)}
                             {staff && session.average_rating !== null ? ` · note ${formatNote(session.average_rating)}` : ""}
                             {!staff && session.my_rating !== null ? ` · ma note ${formatNote(session.my_rating)}` : ""}
                           </span>

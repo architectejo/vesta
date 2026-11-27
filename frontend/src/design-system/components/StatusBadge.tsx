@@ -4,6 +4,12 @@ export interface StatusBadgeProps {
   status: StatusKey;
   /** Complément affiché après le libellé (ex. « 20 $ », « 1 match »). */
   detail?: string;
+  /**
+   * Libellé servi tel quel par l'API (ex. « Non éligible. » pour une carte
+   * joueur vue par le Coach) : remplace le libellé de la clé, la couleur
+   * restant celle de la clé. Jamais un texte écrit en dur par un écran.
+   */
+  label?: string;
   className?: string;
 }
 
@@ -29,8 +35,9 @@ const PILL_CLASS: Record<StatusFamily, string> = {
  * ne passe une couleur. Jamais la couleur seule — le libellé est toujours
  * affiché.
  */
-export function StatusBadge({ status, detail, className = "" }: StatusBadgeProps) {
-  const entry = STATUS_MAP[status];
+export function StatusBadge({ status, detail, label, className = "" }: StatusBadgeProps) {
+  const mapped = STATUS_MAP[status];
+  const entry = label && label.trim() ? { ...mapped, label: label.trim() } : mapped;
   // Un complément identique au libellé (ex. libellé de statut renvoyé tel
   // quel par l'API : « En attente · En attente ») n'apporte rien : omis.
   const extra = detail && detail.trim().toLowerCase() !== entry.label.toLowerCase() ? detail : "";

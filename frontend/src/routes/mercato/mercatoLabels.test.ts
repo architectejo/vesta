@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TransferOffer } from "../../api/mercato";
-import { buildTransferTimeline, offerStatusKey } from "./mercatoLabels";
+import { STATUS_MAP } from "../../design-system/components/statusMap";
+import { ORIGIN_AWAITING_QUITUS_DETAIL, buildTransferTimeline, offerStatusKey } from "./mercatoLabels";
 
 const BASE: TransferOffer = {
   id: 1,
@@ -88,5 +89,64 @@ describe("buildTransferTimeline", () => {
     const steps = buildTransferTimeline(offer, LABELS);
     expect(steps.find((s) => s.key === "response")!.state).toBe("blocked");
     expect(steps.find((s) => s.key === "quitus")!.state).toBe("upcoming");
+  });
+});
+
+describe("offre bloquée vue du club d'origine sans accès aux finances (CDC 10.3 n° 188 et 192)", () => {
+  const FORBIDDEN = /dette|régularis|solde|financi|\d+[.,]\d{2}/i;
+  // Contrat de l'API : DS, Coach et Assistant du Coach du club A reçoivent
+  // `awaiting_quitus`, sans montant ni date de vérification.
+  const originNeutral: TransferOffer = {
+    ...BASE,
+    status: "awaiting_quitus",
+    debt_amount: null,
+    debt_checked_at: null,
+    player_decision_at: "2026-03-13T10:00:00Z",
+  };
+
+  it("badge « Quitus en attente », jamais « Bloquée (dette) »", () => {
+    const key = offerStatusKey(originNeutral.status);
+    expect(key).toBe("transfer_awaiting_quitus");
+    expect(STATUS_MAP[key].label).not.toMatch(FORBIDDEN);
+  });
+
+  it("club A : texte neutre, sans « dette », « régulariser », « solde » ni montant", () => {
+    const steps = buildTransferTimeline(originNeutral, {
+      responseStepLabel: "Réponse du joueur",
+      verificationStepLabel: "Vérification auprès de Club A",
+      viewerIsOriginClub: true,
+    });
+    const verification = steps.find((s) => s.key === "verification")!;
+    expect(verification.detail).toBe(ORIGIN_AWAITING_QUITUS_DETAIL);
+    const text = steps.map((s) => `${s.label} ${s.detail ?? ""}`).join(" ");
+    expect(text).not.toMatch(FORBIDDEN);
+    expect(text).not.toContain("son club actuel");
+  });
+
+  it("club B : texte inchangé « En attente du quitus de son club actuel », sans montant", () => {
+    const steps = buildTransferTimeline(originNeutral, LABELS);
+    const verification = steps.find((s) => s.key === "verification")!;
+    expect(verification.detail).toBe("En attente du quitus de son club actuel");
+    expect(verification.detail).not.toMatch(/\d/);
+  });
+
+  it("« Bloquée (dette) » sans montant : aucun motif financier recomposé par l'interface", () => {
+    const steps = buildTransferTimeline({ ...originNeutral, status: "blocked_debt" }, LABELS);
+    const verification = steps.find((s) => s.key === "verification")!;
+    expect(verification.state).toBe("blocked");
+    expect(verification.detail).toBeUndefined();
+  });
+
+  it("valeur inconnue de l'API : affichage neutre, jamais « Transfert effectué » ni motif recomposé", () => {
+    const unknown = { ...originNeutral, status: "something_new" } as unknown as TransferOffer;
+    expect(offerStatusKey(unknown.status)).toBe("transfer_pending");
+    const steps = buildTransferTimeline(unknown, LABELS);
+    expect(steps.find((s) => s.key === "done")!.state).toBe("upcoming");
+    expect(steps.some((s) => FORBIDDEN.test(s.detail ?? ""))).toBe(false);
+  });
+
+  it("offre annulée : les étapes suivantes ne sont pas marquées faites", () => {
+    const steps = buildTransferTimeline({ ...originNeutral, status: "cancelled" }, LABELS);
+    expect(steps.find((s) => s.key === "done")!.state).toBe("upcoming");
   });
 });

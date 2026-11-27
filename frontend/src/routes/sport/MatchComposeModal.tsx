@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../../api/client";
-import { listClubPlayers, toPlayerSearchResult, type ClubPlayerListItem } from "../../api/clubs";
+import { listClubPlayers, toPlayerSearchResult, type ClubPlayerListItem, type MyProfile } from "../../api/clubs";
 import { addToComposition, type CompositionEntry } from "../../api/sport";
 import { getTreasuryCapabilities } from "../../api/treasury";
 import {
@@ -19,6 +19,12 @@ import {
 } from "../../design-system";
 import { OFFLINE_ACTION_MESSAGE, useOnlineStatus } from "../logistics/useOnlineStatus";
 import { CashRegisterFlow } from "../treasury/CashRegisterModal";
+import {
+  GENERIC_REASON,
+  GENERIC_REASON_INLINE,
+  compositionErrorMessage,
+  inlineReason,
+} from "./compositionMessages";
 import { ELIGIBILITY_POLL_MS, useEligibility, visiblePollInterval } from "./useEligibility";
 import {
   ALL_POSITIONS_LABEL,
@@ -39,9 +45,12 @@ const POSITION_OPTIONS = [
 /** Effectif de la modale : inscrits ET en attente d'adhésion (ces derniers grisés, §4.1). */
 export const COMPOSE_ROSTER_QUERY_KEY = ["clubs", "players", "compose-roster"] as const;
 
-/** Texte de repli quand l'API d'éligibilité n'a pas fourni de motif (403, réseau). */
-const GENERIC_REASON = "Non sélectionnable pour l'instant";
-const GENERIC_REASON_INLINE = "motif non disponible pour l'instant";
+/** Préfixe de la clé des droits de trésorerie : complété par le club actif. */
+const TREASURY_CAPABILITIES_QUERY_KEY = ["treasury", "capabilities"] as const;
+
+function isAccessDenied(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 401 || error.status === 403);
+}
 
 interface DraftRow {
   role: "starter" | "substitute";
@@ -59,11 +68,6 @@ export interface MatchComposeModalProps {
 
 function fullName(player: ClubPlayerListItem): string {
   return `${player.first_name} ${player.last_name}`;
-}
-
-/** Retire le point final du motif de l'API pour l'insérer dans une phrase. */
-function inlineReason(reason: string): string {
-  return reason.trim().replace(/[.\s]+$/, "");
 }
 
 async function loadComposeRoster(): Promise<ClubPlayerListItem[]> {
@@ -102,6 +106,10 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
   const [infoId, setInfoId] = useState<number | null>(null);
   const [cashPlayer, setCashPlayer] = useState<PlayerSearchResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Un appel de caisse refusé (403) retire aussitôt « Encaisser », sans
+  // attendre la relecture des droits.
+  const [cashDenied, setCashDenied] = useState(false);
+  const queryClient = useQueryClient();
 
   const rosterQuery = useQuery({
     queryKey: COMPOSE_ROSTER_QUERY_KEY,
@@ -114,13 +122,20 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
 
   // « Encaisser » : capacité calculée par l'API (Trésorier ou adjoint), jamais
   // déduite d'un rôle ici. Un échec laisse simplement le lien absent.
+  // La clé porte le club actif (étanchéité du cache, même méthode que
+  // `useEligibility`) ; une relecture en 401/403 retire le lien même si une
+  // réponse antérieure l'accordait.
+  const activeClubId = queryClient.getQueryData<MyProfile>(["profile", "me"])?.club?.id ?? null;
   const capabilitiesQuery = useQuery({
-    queryKey: ["treasury", "capabilities"],
+    queryKey: [...TREASURY_CAPABILITIES_QUERY_KEY, activeClubId],
     queryFn: () => getTreasuryCapabilities(),
     enabled: open,
     retry: false,
   });
-  const canCollect = capabilitiesQuery.data?.capabilities.can_record_payments ?? false;
+  const canCollect =
+    !cashDenied &&
+    !isAccessDenied(capabilitiesQuery.error) &&
+    (capabilitiesQuery.data?.capabilities.can_record_payments ?? false);
   const currency = capabilitiesQuery.data?.currency ?? "";
 
   const roster = rosterQuery.data;
@@ -193,6 +208,7 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
       setRemovedNotices({});
       setInfoId(null);
       setCashPlayer(null);
+      setCashDenied(false);
     }
   }, [open]);
 
@@ -264,7 +280,8 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
           jersey_number: draft.jerseyNumber,
         });
       } catch (error) {
-        errors[membershipId] = error instanceof ApiError ? error.detail : "Enregistrement impossible.";
+        const player = roster?.find((p) => p.membership_id === membershipId);
+        errors[membershipId] = compositionErrorMessage(error, player ? fullName(player) : "Ce joueur");
       }
     }
     setRowErrors(errors);
@@ -275,8 +292,16 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
     }
   }
 
-  const selectedCount = Object.keys(drafts).length;
-  const starterCount = Object.values(drafts).filter((d) => d.role === "starter").length;
+  // Nouvelles cases cochées (le bouton « Enregistrer » ne dépend que d'elles) ;
+  // le récapitulatif compte aussi la composition déjà enregistrée (§4.1).
+  const newDrafts = Object.entries(drafts)
+    .filter(([id]) => !alreadyComposed.has(Number(id)))
+    .map(([, draft]) => draft);
+  const selectedCount = newDrafts.length;
+  const starterCount =
+    existing.filter((e) => e.role === "starter").length + newDrafts.filter((d) => d.role === "starter").length;
+  const substituteCount =
+    existing.filter((e) => e.role === "substitute").length + newDrafts.filter((d) => d.role === "substitute").length;
   const notices = Object.entries(removedNotices);
 
   function renderList() {
@@ -471,25 +496,34 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
             </Banner>
           ))}
           {!online ? <Banner variant="warning">{OFFLINE_ACTION_MESSAGE}</Banner> : null}
-          <input
-            type="text"
-            placeholder="Nom ou numéro"
-            aria-label="Nom ou numéro"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="h-9 w-full rounded-sm border border-border-strong bg-surface px-3 text-base text-text placeholder:text-text-muted"
-          />
-          {/* Puces de poste (§4.1) : défilent horizontalement à 360 px. */}
-          <FilterChips
-            label="Filtrer par poste"
-            value={positionFilter}
-            onChange={setPositionFilter}
-            options={POSITION_FILTER_OPTIONS}
-            allLabel={ALL_POSITIONS_LABEL}
-          />
-          <p className="text-xs text-text-muted">
-            {starterCount} titulaires · {selectedCount - starterCount} remplaçants
-          </p>
+          {/* Barre haute collante (§4.1, §6) : recherche, puces et récapitulatif
+              restent visibles pendant le défilement du corps de la modale.
+              Fond opaque ; z-20 comme les pieds collants des autres modales
+              (le corps a un padding de 16 px, d'où -top-4 et -mx-4). */}
+          <div
+            data-testid="compose-sticky-bar"
+            className="sticky -top-4 z-20 -mx-4 space-y-2 border-b border-border bg-surface px-4 pb-2 pt-2"
+          >
+            <input
+              type="text"
+              placeholder="Nom ou numéro"
+              aria-label="Nom ou numéro"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="h-9 w-full rounded-sm border border-border-strong bg-surface px-3 text-base text-text placeholder:text-text-muted"
+            />
+            {/* Puces de poste (§4.1) : défilent horizontalement à 360 px. */}
+            <FilterChips
+              label="Filtrer par poste"
+              value={positionFilter}
+              onChange={setPositionFilter}
+              options={POSITION_FILTER_OPTIONS}
+              allLabel={ALL_POSITIONS_LABEL}
+            />
+            <p className="text-xs text-text-muted" aria-live="polite">
+              {starterCount} titulaires · {substituteCount} remplaçants
+            </p>
+          </div>
           {noneSelectable ? (
             <p className="text-sm text-text-muted">Aucun joueur n'est sélectionnable pour l'instant.</p>
           ) : null}
@@ -497,13 +531,19 @@ export function MatchComposeModal({ open, matchId, existing, onClose, onSaved }:
         </div>
       </Modal>
 
-      {canCollect ? (
+      {/* La caisse ouverte reste affichée (avec son propre message d'erreur)
+          même si le droit vient d'être retiré : seul le lien disparaît. */}
+      {canCollect || cashPlayer !== null ? (
         <CashRegisterFlow
           open={cashPlayer !== null}
           level={2}
           currency={currency}
           initialPlayer={cashPlayer}
           onClose={() => setCashPlayer(null)}
+          onAccessDenied={() => {
+            setCashDenied(true);
+            void queryClient.invalidateQueries({ queryKey: TREASURY_CAPABILITIES_QUERY_KEY });
+          }}
         />
       ) : null}
     </>

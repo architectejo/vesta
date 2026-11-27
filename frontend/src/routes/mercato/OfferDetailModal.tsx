@@ -133,11 +133,19 @@ export function OfferDetailModal({
     );
   }
 
+  // Dirigeant du club d'origine (A) : l'API peut lui servir `awaiting_quitus`
+  // (DS, Coach, Assistant du Coach, CDC 10.3 n° 188 et 192). Texte neutre,
+  // sans « dette », « régulariser » ni même « solde ».
+  const viewerIsOriginClub = !viewerIsTargetPlayer && viewerClubId === offer.origin_club.id;
+  const neutralOriginView = viewerIsOriginClub && offer.status === "awaiting_quitus";
   const timeline = buildTransferTimeline(offer, {
     responseStepLabel: viewerIsTargetPlayer ? "Votre réponse" : "Réponse du joueur",
     verificationStepLabel: viewerIsTargetPlayer
       ? `Vérification de votre solde auprès de ${offer.origin_club.name}`
-      : `Vérification du solde auprès de ${offer.origin_club.name}`,
+      : neutralOriginView
+        ? `Vérification auprès de ${offer.origin_club.name}`
+        : `Vérification du solde auprès de ${offer.origin_club.name}`,
+    viewerIsOriginClub,
   });
 
   const canContribute =

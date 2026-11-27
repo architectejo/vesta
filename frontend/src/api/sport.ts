@@ -440,6 +440,12 @@ export interface SessionHistoryResult {
   expected: number;
   present: number;
   attendance_rate: number | null;
+  /**
+   * Séance pointée (au moins un pointage), servie par l'API d'historique.
+   * Absent sur une API plus ancienne : l'interface retombe alors sur
+   * `attendance_rate === null`.
+   */
+  marked?: boolean;
   /** Staff seulement, sinon `null`. */
   average_rating: string | null;
   my_rating: string | null;

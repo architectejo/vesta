@@ -13,6 +13,8 @@ export function offerStatusKey(status: TransferOfferStatus): StatusKey {
       return "transfer_refused";
     case "blocked_debt":
       return "transfer_blocked";
+    // Servi au club B, et au DS, Coach et Assistant du Coach du club A
+    // (CDC 10.3 n° 188 et 192) : l'API choisit, jamais l'interface.
     case "awaiting_quitus":
       return "transfer_awaiting_quitus";
     case "completed":
@@ -34,7 +36,17 @@ function fmt(iso: string | null): string | undefined {
 export interface TimelineLabels {
   responseStepLabel: string;
   verificationStepLabel: string;
+  /**
+   * Le lecteur est un dirigeant du club d'origine (A). Ne sert qu'au texte de
+   * `awaiting_quitus`, que l'API sert aussi au DS, au Coach et à l'Assistant
+   * du Coach du club A : texte neutre, sans « dette » ni « régulariser ».
+   */
+  viewerIsOriginClub?: boolean;
 }
+
+/** Texte neutre d'une offre « Quitus en attente » vue du club d'origine. */
+export const ORIGIN_AWAITING_QUITUS_DETAIL =
+  "Quitus en attente. Le transfert se fera automatiquement dès que le quitus pourra être établi.";
 
 /**
  * Chronologie à 5 étapes (§4.3, §4.4). Deux libellés changent selon le
@@ -74,13 +86,31 @@ export function buildTransferTimeline(offer: TransferOffer, labels: TimelineLabe
   }
 
   if (offer.status === "blocked_debt" || offer.status === "awaiting_quitus") {
+    // `blocked_debt` n'est servi qu'au joueur et aux Pdt/VP/Trésorier du
+    // club A, toujours avec le montant ; sans montant, aucun motif n'est
+    // recomposé ici (aucune donnée financière inventée par l'interface).
     const detail =
       offer.status === "blocked_debt"
         ? offer.debt_amount
           ? `Bloquée : En dette : ${offer.debt_amount}`
-          : "Bloquée : situation financière à régulariser"
-        : "En attente du quitus de son club actuel";
+          : undefined
+        : labels.viewerIsOriginClub
+          ? ORIGIN_AWAITING_QUITUS_DETAIL
+          : "En attente du quitus de son club actuel";
     steps.push({ key: "verification", label: labels.verificationStepLabel, state: "blocked", detail });
+    steps.push({ key: "quitus", label: "Quitus", state: "upcoming" });
+    steps.push({ key: "done", label: "Transfert effectué", state: "upcoming" });
+    return steps;
+  }
+
+  if (offer.status !== "completed") {
+    // Offre annulée ou valeur inconnue : affichage neutre, jamais
+    // « Transfert effectué » ni motif recomposé par l'interface.
+    steps.push({
+      key: "verification",
+      label: labels.verificationStepLabel,
+      state: offer.status === "cancelled" ? "upcoming" : "current",
+    });
     steps.push({ key: "quitus", label: "Quitus", state: "upcoming" });
     steps.push({ key: "done", label: "Transfert effectué", state: "upcoming" });
     return steps;

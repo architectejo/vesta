@@ -69,7 +69,12 @@ export type TransferOfferStatus =
   | "sent"
   | "accepted_by_player"
   | "declined_by_player"
+  /** Joueur concerné ; Président, VP, Trésorier du club A (avec `debt_amount`). */
   | "blocked_debt"
+  /**
+   * Club B ; et, pour une offre bloquée, DS, Coach et Assistant du Coach du
+   * club A (CDC 10.3 n° 188 et 192), sans montant ni date de vérification.
+   */
   | "awaiting_quitus"
   | "completed"
   | "cancelled";

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../../api/client";
 import {
@@ -73,6 +73,13 @@ export interface CashRegisterFlowProps {
   level?: 1 | 2;
   /** Joueur prérempli (lien « Encaisser ») ; l'utilisateur peut le changer. */
   initialPlayer?: PlayerSearchResult | null;
+  /** Appelé dès qu'un appel de caisse est refusé (403) : l'écran appelant
+   * retire alors son lien « Encaisser » (sport-feuille-de-match.md §4.1). */
+  onAccessDenied?: () => void;
+}
+
+function isForbidden(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403;
 }
 
 /**
@@ -85,15 +92,34 @@ export interface CashRegisterFlowProps {
  * complet (file d'actions locale horodatée, envoi différé, `SyncIndicator`)
  * n'est pas implémenté ici ; seul le cas en ligne fonctionne de bout en bout.
  */
-export function CashRegisterFlow({ open, currency, onClose, level = 1, initialPlayer = null }: CashRegisterFlowProps) {
+export function CashRegisterFlow({
+  open,
+  currency,
+  onClose,
+  level = 1,
+  initialPlayer = null,
+  onAccessDenied,
+}: CashRegisterFlowProps) {
   const queryClient = useQueryClient();
   const [justOpened, setJustOpened] = useState<CashSession | null>(null);
+  // Rappel le plus récent, gardé hors du rendu : `reportError` reste stable.
+  const onAccessDeniedRef = useRef(onAccessDenied);
+  useEffect(() => {
+    onAccessDeniedRef.current = onAccessDenied;
+  }, [onAccessDenied]);
+  const reportError = useCallback((error: unknown) => {
+    if (isForbidden(error)) onAccessDeniedRef.current?.();
+  }, []);
 
   const sessionQuery = useQuery({
     queryKey: CASH_SESSION_QUERY_KEY,
     queryFn: getCurrentCashSession,
     enabled: open,
   });
+  const sessionError = sessionQuery.error;
+  useEffect(() => {
+    if (sessionError) reportError(sessionError);
+  }, [sessionError, reportError]);
 
   useEffect(() => {
     if (!open) setJustOpened(null);
@@ -120,6 +146,7 @@ export function CashRegisterFlow({ open, currency, onClose, level = 1, initialPl
     }
     return (
       <OpenCashSessionModal
+        onError={reportError}
         onClose={onClose}
         onOpened={(opened) => {
           setJustOpened(opened);
@@ -142,6 +169,7 @@ export function CashRegisterFlow({ open, currency, onClose, level = 1, initialPl
         onClose();
       }}
       onSessionRefresh={(nextSession) => setJustOpened(nextSession)}
+      onError={reportError}
     />
   );
 }
@@ -153,9 +181,12 @@ export function CashRegisterFlow({ open, currency, onClose, level = 1, initialPl
 function OpenCashSessionModal({
   onClose,
   onOpened,
+  onError,
 }: {
   onClose: () => void;
   onOpened: (session: CashSession) => void;
+  /** Signale chaque erreur d'appel (refus d'accès remonté à l'appelant). */
+  onError: (error: unknown) => void;
 }) {
   const { showToast } = useToast();
   const online = useOnlineStatus();
@@ -170,6 +201,7 @@ function OpenCashSessionModal({
       showToast("Session de caisse ouverte jusqu'à minuit.");
       onOpened(session);
     } catch (err) {
+      onError(err);
       setError(apiErrorMessage(err));
     } finally {
       setSubmitting(false);
@@ -218,6 +250,8 @@ interface CashRegisterModalProps {
   onClose: () => void;
   onSessionClosed: () => void;
   onSessionRefresh: (session: CashSession) => void;
+  /** Signale chaque erreur d'appel (refus d'accès remonté à l'appelant). */
+  onError: (error: unknown) => void;
 }
 
 function CashRegisterModal({
@@ -228,6 +262,7 @@ function CashRegisterModal({
   onClose,
   onSessionClosed,
   onSessionRefresh,
+  onError,
 }: CashRegisterModalProps) {
   const { showToast } = useToast();
   const queryClient = useQueryClient();
@@ -254,11 +289,14 @@ function CashRegisterModal({
         if (cancelled) return;
         setPrefillRaw(results.find((result) => result.membership_id === Number(initialPlayer.id)) ?? null);
       })
-      .catch(() => undefined);
+      .catch((error: unknown) => {
+        if (!cancelled) onError(error);
+      });
     return () => {
       cancelled = true;
     };
-  }, [initialPlayer, session.id]);
+    // `onError` est stable (useCallback de CashRegisterFlow).
+  }, [initialPlayer, session.id, onError]);
   const playerRaw =
     selectedRaw ?? (player && prefillRaw && prefillRaw.membership_id === Number(player.id) ? prefillRaw : null);
 
@@ -306,6 +344,10 @@ function CashRegisterModal({
       }),
     enabled: previewEnabled,
   });
+  const previewError = previewQuery.error;
+  useEffect(() => {
+    if (previewError) onError(previewError);
+  }, [previewError, onError]);
 
   async function handleCollect(): Promise<void> {
     if (!player) return;
@@ -342,6 +384,7 @@ function CashRegisterModal({
         payments_total: String(Number(session.payments_total) + numericAmount),
       });
     } catch (error) {
+      onError(error);
       setSubmitError(apiErrorMessage(error));
     } finally {
       setSubmitting(false);
@@ -356,6 +399,7 @@ function CashRegisterModal({
       setConfirmCloseOpen(false);
       onSessionClosed();
     } catch (error) {
+      onError(error);
       setSubmitError(apiErrorMessage(error));
       setConfirmCloseOpen(false);
     } finally {

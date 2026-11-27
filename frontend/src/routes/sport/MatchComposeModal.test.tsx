@@ -3,8 +3,10 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../api/client";
-import type { ClubPlayerListItem } from "../../api/clubs";
+import type { ClubPlayerListItem, MyProfile } from "../../api/clubs";
+import type { CompositionEntry } from "../../api/sport";
 import { ToastProvider } from "../../design-system";
+import { compositionErrorMessage } from "./compositionMessages";
 import { MatchComposeModal } from "./MatchComposeModal";
 
 vi.mock("../../api/clubs", async () => {
@@ -55,17 +57,40 @@ function capabilities(canRecord: boolean) {
   };
 }
 
-function renderModal() {
+function renderModal(options: { existing?: CompositionEntry[]; clubId?: number } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  if (options.clubId !== undefined) {
+    queryClient.setQueryData(["profile", "me"], { club: { id: options.clubId } } as unknown as MyProfile);
+  }
   const onSaved = vi.fn();
   render(
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <MatchComposeModal open matchId={6} existing={[]} onClose={vi.fn()} onSaved={onSaved} />
+        <MatchComposeModal
+          open
+          matchId={6}
+          existing={options.existing ?? []}
+          onClose={vi.fn()}
+          onSaved={onSaved}
+        />
       </ToastProvider>
     </QueryClientProvider>,
   );
   return { onSaved, queryClient };
+}
+
+function composed(id: number, name: string, role: "starter" | "substitute"): CompositionEntry {
+  return {
+    id: 100 + id,
+    membership_id: id,
+    player: { membership_id: id, name, jersey_number: id, position: "midfielder", position_label: "Milieu", photo: null },
+    role,
+    role_label: role === "starter" ? "Titulaire" : "Remplaçant",
+    position: "midfielder",
+    position_label: "Milieu",
+    jersey_number: id,
+    no_longer_eligible: null,
+  };
 }
 
 beforeEach(() => {
@@ -526,5 +551,156 @@ describe("MatchComposeModal — puces de poste et tri (§4.1, demande du client 
     expect(screen.getByText("1 titulaires · 0 remplaçants")).toBeInTheDocument();
     await user.click(within(group).getByRole("button", { name: "Gardiens" }));
     expect(screen.getByRole("checkbox", { name: "Sélectionner Abel Gardien" })).toBeChecked();
+  });
+});
+
+describe("MatchComposeModal — barre haute collante et récapitulatif (§4.1, §6)", () => {
+  beforeEach(() => {
+    vi.mocked(listEligibility).mockResolvedValue({ count: 0, results: [] });
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("recherche, puces de poste et récapitulatif sont dans une barre collante à fond opaque", async () => {
+    mockRoster([player(12, "Kevin", "Proto")]);
+    renderModal();
+    await screen.findByRole("checkbox", { name: "Sélectionner Kevin Proto" });
+
+    const bar = screen.getByTestId("compose-sticky-bar");
+    expect(bar.className).toMatch(/\bsticky\b/);
+    expect(bar.className).toContain("bg-surface");
+    expect(bar.className).toContain("z-20");
+    expect(within(bar).getByRole("textbox", { name: "Nom ou numéro" })).toBeInTheDocument();
+    expect(within(bar).getByRole("group", { name: "Filtrer par poste" })).toBeInTheDocument();
+    expect(within(bar).getByText("0 titulaires · 0 remplaçants")).toBeInTheDocument();
+    // La liste des joueurs n'est pas dans la barre : elle défile dessous.
+    expect(within(bar).queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("le récapitulatif compte la composition existante en plus des nouvelles cases cochées", async () => {
+    mockRoster([player(12, "Kevin", "Proto"), player(20, "Jean", "Titu"), player(21, "Marc", "Titu"), player(22, "Luc", "Remp")]);
+    const user = userEvent.setup();
+    renderModal({
+      existing: [composed(20, "Jean Titu", "starter"), composed(21, "Marc Titu", "starter"), composed(22, "Luc Remp", "substitute")],
+    });
+
+    expect(await screen.findByText("2 titulaires · 1 remplaçants")).toBeInTheDocument();
+    await user.click(await screen.findByRole("checkbox", { name: "Sélectionner Kevin Proto" }));
+    expect(screen.getByText("3 titulaires · 1 remplaçants")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remplaçant" }));
+    expect(screen.getByText("2 titulaires · 2 remplaçants")).toBeInTheDocument();
+  });
+});
+
+describe("MatchComposeModal — refus de l'API à l'enregistrement (§4.1, §4.1 bis)", () => {
+  beforeEach(() => {
+    vi.mocked(listEligibility).mockResolvedValue({ count: 0, results: [] });
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("joueur devenu non sélectionnable : « {nom} n'est plus sélectionnable : {raison}. » sur sa ligne, sans double point", async () => {
+    mockRoster([player(12, "Kevin", "Proto")]);
+    vi.mocked(addToComposition).mockRejectedValue(
+      new ApiError(400, { detail: "Suspendu : encore 2 match(s).", code: "player_not_eligible" }),
+    );
+    const user = userEvent.setup();
+    const { onSaved } = renderModal();
+
+    await user.click(await screen.findByRole("checkbox", { name: "Sélectionner Kevin Proto" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    expect(
+      await screen.findByText("Kevin Proto n'est plus sélectionnable : Suspendu : encore 2 match(s)."),
+    ).toBeInTheDocument();
+    expect(onSaved).not.toHaveBeenCalled();
+    // La modale reste ouverte.
+    expect(screen.getByRole("dialog", { name: "Composer l'équipe" })).toBeInTheDocument();
+  });
+
+  it("autre refus (numéro déjà pris) : texte de l'API tel quel", async () => {
+    mockRoster([player(12, "Kevin", "Proto")]);
+    vi.mocked(addToComposition).mockRejectedValue(
+      new ApiError(400, { detail: "Le numéro 12 est déjà attribué à un autre joueur pour ce match." }),
+    );
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(await screen.findByRole("checkbox", { name: "Sélectionner Kevin Proto" }));
+    await user.click(screen.getByRole("button", { name: "Enregistrer" }));
+    expect(
+      await screen.findByText("Le numéro 12 est déjà attribué à un autre joueur pour ce match."),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("MatchComposeModal — droits de trésorerie (« Encaisser », §4.1)", () => {
+  beforeEach(() => {
+    mockRoster([player(13, "Aimé", "Leurre", true)]);
+    vi.mocked(listEligibility).mockResolvedValue({
+      count: 1,
+      results: [{ membership_id: 13, eligible: false, reason_code: "debt", reason: "Non éligible" }],
+    });
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function openInfo(user: ReturnType<typeof userEvent.setup>) {
+    await screen.findByText("Non éligible");
+    await user.click(screen.getByRole("button", { name: "Pourquoi Aimé Leurre n'est pas sélectionnable" }));
+    return screen.getByRole("note");
+  }
+
+  it("la clé du cache des droits porte le club actif", async () => {
+    vi.mocked(getTreasuryCapabilities).mockResolvedValue(capabilities(true));
+    const { queryClient } = renderModal({ clubId: 7 });
+    await waitFor(() => expect(queryClient.getQueryData(["treasury", "capabilities", 7])).toBeDefined());
+    expect(queryClient.getQueryData(["treasury", "capabilities"])).toBeUndefined();
+  });
+
+  it("droits relus en 403 : « Encaisser » disparaît même si une réponse antérieure l'accordait", async () => {
+    vi.mocked(getTreasuryCapabilities).mockResolvedValue(capabilities(true));
+    const user = userEvent.setup();
+    const { queryClient } = renderModal({ clubId: 7 });
+    const note = await openInfo(user);
+    expect(await within(note).findByRole("button", { name: "Encaisser" })).toBeInTheDocument();
+
+    vi.mocked(getTreasuryCapabilities).mockRejectedValue(new ApiError(403, { detail: "Accès refusé." }));
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ["treasury", "capabilities"] });
+    });
+    await waitFor(() =>
+      expect(within(screen.getByRole("note")).queryByRole("button", { name: "Encaisser" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("appel de caisse refusé (403) : le lien « Encaisser » disparaît", async () => {
+    vi.mocked(getTreasuryCapabilities).mockResolvedValue(capabilities(true));
+    vi.mocked(getCurrentCashSession).mockRejectedValue(new ApiError(403, { detail: "Accès refusé." }));
+    const user = userEvent.setup();
+    renderModal({ clubId: 7 });
+    const note = await openInfo(user);
+    await user.click(await within(note).findByRole("button", { name: "Encaisser" }));
+
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("note", { hidden: true })).queryByRole("button", { name: "Encaisser", hidden: true }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+});
+
+describe("compositionErrorMessage", () => {
+  it("motif de l'API sans point final doublé ; erreur inconnue : message neutre", () => {
+    expect(
+      compositionErrorMessage(new ApiError(400, { detail: "Non éligible.", code: "player_not_eligible" }), "Kevin Proto"),
+    ).toBe("Kevin Proto n'est plus sélectionnable : Non éligible.");
+    expect(
+      compositionErrorMessage(new ApiError(400, { detail: "Non éligible", code: "player_not_eligible" }), "Kevin Proto"),
+    ).toBe("Kevin Proto n'est plus sélectionnable : Non éligible.");
+    expect(compositionErrorMessage(new Error("x"), "Kevin Proto")).toBe("Enregistrement impossible.");
   });
 });

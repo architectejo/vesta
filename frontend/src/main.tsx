@@ -15,16 +15,25 @@ const queryClient = createQueryClient();
 // Le cache TanStack Query ne doit jamais survivre à la session qui l'a rempli
 // (CDC 7.1) : sur un téléphone partagé, les rôles et les soldes du Trésorier
 // ne doivent pas s'afficher pour le joueur suivant. On vide le cache dès que
-// la session disparaît ou que l'identité connectée change.
+// la session disparaît, que l'identité connectée change ou que le club actif
+// change (transfert du mercato pour le même utilisateur : les droits et les
+// motifs mis en cache appartiennent à l'ancien club, CLAUDE.md règles 8 et 9).
 // L'identité stockée vient du navigateur : on ne présume pas de sa forme
 // (ancienne version, valeur tronquée) pour ne jamais planter au démarrage.
-let lastSessionUserId: number | null = getStoredIdentity()?.user?.id ?? null;
+function currentSessionKey(): string | null {
+  if (!getAccessToken()) return null;
+  const identity = getStoredIdentity();
+  const userId = identity?.user?.id ?? null;
+  if (userId === null) return null;
+  return `${userId}:${identity?.club?.id ?? "-"}`;
+}
+let lastSessionKey: string | null = getStoredIdentity()?.user?.id != null ? currentSessionKey() : null;
 subscribeToSession(() => {
-  const currentUserId = getAccessToken() ? (getStoredIdentity()?.user?.id ?? null) : null;
-  if (currentUserId !== lastSessionUserId) {
+  const key = currentSessionKey();
+  if (key !== lastSessionKey) {
     queryClient.clear();
   }
-  lastSessionUserId = currentUserId;
+  lastSessionKey = key;
 });
 
 const rootElement = document.getElementById("root");
