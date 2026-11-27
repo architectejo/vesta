@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Any
 
 from apps.clubs import services as clubs_services
-from apps.clubs.models import Membership, MembershipRole
+from apps.clubs.models import ClubSettings, Membership, MembershipRole
 from apps.core.services import resolve_active_membership
 from apps.notifications.services import get_or_create_preference
 
@@ -79,6 +79,10 @@ def get_my_profile(user, request) -> dict[str, Any]:
 
     roles = MembershipRole.objects.filter(membership=membership, revoked_at__isnull=True)
     preference = get_or_create_preference(user)
+    # Fuseau IANA du club (CLAUDE.md section 7 : dates affichees dans le
+    # fuseau du club). ``None`` si les parametres ne sont pas encore
+    # configures : l'interface garde alors le fuseau du telephone.
+    club_timezone = ClubSettings.objects.filter(club_id=club.id).values_list("timezone", flat=True).first()
 
     return {
         "membership_id": membership.id,
@@ -89,6 +93,7 @@ def get_my_profile(user, request) -> dict[str, Any]:
             "logo": request.build_absolute_uri(club.logo.url) if club.logo else None,
             "primary_color": club.primary_color,
             "secondary_color": club.secondary_color,
+            "timezone": club_timezone or None,
         },
         "identity": {
             "first_name": user.first_name,

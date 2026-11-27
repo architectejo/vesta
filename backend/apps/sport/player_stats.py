@@ -327,6 +327,10 @@ class Availability:
     code: str  # "" | "pending_membership" | "suspension" | "unfit" | "debt"
     matches_remaining: Optional[int] = None
     return_date: Optional[datetime.date] = None
+    #: Montant à régulariser et devise (motif « debt » seulement), calculés
+    #: par la trésorerie (jamais stockés, CLAUDE.md règle n° 2).
+    amount_due: Optional[Decimal] = None
+    currency: str = ""
 
 
 def get_availabilities(club, memberships) -> dict[int, Availability]:
@@ -373,7 +377,9 @@ def get_availabilities(club, memberships) -> dict[int, Availability]:
             summaries = {}
         for membership_id, summary in summaries.items():
             if not summary.is_in_good_standing:
-                result[membership_id] = Availability("debt")
+                result[membership_id] = Availability(
+                    "debt", amount_due=summary.amount_due, currency=summary.currency
+                )
     return result
 
 
@@ -385,9 +391,7 @@ def unavailable_membership_ids(club, memberships) -> set[int]:
 
 
 def _unfit_label(return_date: Optional[datetime.date]) -> str:
-    if return_date is None:
-        return "Inapte · date de retour non fixée"
-    return f"Inapte · retour prévu le {medical_services.format_date_fr(return_date)}"
+    return medical_services.unfitness_label(return_date)
 
 
 def staff_availability(availability: Availability) -> Optional[dict]:

@@ -55,6 +55,8 @@ urlpatterns = [
         views.MatchCompositionRemoveView.as_view(),
         name="match-composition-remove",
     ),
+    # Éligibilité groupée pour la composition et le plan tactique (§4.1 bis)
+    path("eligibility/", views.EligibilityListView.as_view(), name="eligibility-list"),
     path("matches/<int:pk>/attendance/", views.MatchAttendanceMarkView.as_view(), name="match-attendance-mark"),
     path(
         "matches/<int:pk>/attendance/bulk/",

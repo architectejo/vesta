@@ -26,6 +26,8 @@ from apps.logistics.models import Article, Decommission, Holder, StockMovement
 
 __all__ = [
     "build_register",
+    "format_quantity",
+    "STOCK_TOTAL_LABEL",
     "render_register_csv",
     "render_register_pdf",
     "register_filters_snapshot",
@@ -42,6 +44,46 @@ _EXIT_TYPES = (
 
 def _fmt_date(value: Optional[datetime.date]) -> str:
     return value.strftime("%d/%m/%Y") if value else ""
+
+
+#: Libellé du pied de section : c'est le STOCK ACTUEL (après sorties et
+#: déplacements), pas la somme des lignes, qui listent des entrées (registre
+#: §10.2) -- libellé explicite pour lever l'ambiguïté (demande dev-b B4 n° 4).
+STOCK_TOTAL_LABEL = "Stock actuel"
+
+# Unités abrégées, invariables (« 2 kg », jamais « 2 kgs »).
+_INVARIABLE_UNITS = frozenset({"kg", "g", "mg", "l", "cl", "ml", "m", "cm", "mm", "km"})
+
+
+def _plural_unit(unit: str) -> str:
+    """Pluriel français d'une unité saisie librement (« pièce » → « pièces »,
+    « jeu » → « jeux », « paire » → « paires »). Prudence : une unité de
+    plusieurs mots, abrégée ou déjà terminée par s, x ou z reste inchangée."""
+
+    word = unit.strip()
+    if not word or not word.isalpha() or word.casefold() in _INVARIABLE_UNITS:
+        return unit
+    lower = word.casefold()
+    if lower.endswith(("s", "x", "z")):
+        return word
+    if lower.endswith(("au", "eu")):
+        return word + "x"
+    return word + "s"
+
+
+def format_quantity(quantity: int, unit: str) -> str:
+    """« 1 pièce », « 26 pièces » : accord en nombre (en français, 0 et 1 au
+    singulier, pluriel à partir de 2). L'unité stockée n'est jamais modifiée
+    (la colonne ``unite`` du CSV garde la forme d'import, registre §9.1)."""
+
+    unit = unit or ""
+    shown = _plural_unit(unit) if abs(quantity) >= 2 else unit
+    return f"{quantity} {shown}".strip()
+
+
+def stock_total_label(totals_by_unit: list[dict]) -> str:
+    parts = " · ".join(format_quantity(t["quantity"], t["unit"]) for t in totals_by_unit) or "0"
+    return f"{STOCK_TOTAL_LABEL} : {parts}"
 
 
 def _person_name(membership) -> str:
@@ -89,7 +131,7 @@ def _in_scope(holder_id, holder_filter) -> bool:
     return holder_id == holder_filter.pk
 
 
-def register_filters_snapshot(*, search: str, category: str, holder_filter) -> dict:
+def register_filters_snapshot(*, search: str, category: str, holder_filter, include_exits: bool = False) -> dict:
     return {
         "search": search or "",
         "category": category or "",
@@ -98,6 +140,7 @@ def register_filters_snapshot(*, search: str, category: str, holder_filter) -> d
             if holder_filter == "none"
             else (holder_filter.pk if isinstance(holder_filter, Holder) else None)
         ),
+        "include_exits": bool(include_exits),
     }
 
 
@@ -162,6 +205,7 @@ def build_register(
                 "category_display": article.get_category_display(),
                 "unit": article.unit,
                 "quantity": movement.quantity,
+                "quantity_label": format_quantity(movement.quantity, article.unit),
                 "movement_type": movement.movement_type,
                 "origin_kind": movement.origin_kind,
                 "donor_name": _donor_name(movement),
@@ -202,6 +246,7 @@ def build_register(
                 if qty > 0 and _in_scope(holder_id, holder_filter):
                     distribution[holder_id] = distribution.get(holder_id, 0) + qty
         section["stock_total_by_unit"] = [{"unit": unit, "quantity": qty} for unit, qty in totals.items()]
+        section["stock_total_label"] = stock_total_label(section["stock_total_by_unit"])
         rows = [
             {"holder_id": hid, "holder_name": holder_label(hid), "quantity": qty} for hid, qty in distribution.items()
         ]
@@ -228,6 +273,7 @@ def build_register(
                 "designation": dec.article.name,
                 "unit": dec.article.unit,
                 "quantity": dec.quantity,
+                "quantity_label": format_quantity(dec.quantity, dec.article.unit),
                 "reason": dec.reason,
                 "reason_display": dec.get_reason_display(),
                 "reason_note": dec.reason_note,
@@ -255,6 +301,7 @@ def build_register(
                     "designation": movement.article.name,
                     "unit": movement.article.unit,
                     "quantity": movement.quantity,
+                    "quantity_label": format_quantity(movement.quantity, movement.article.unit),
                     "movement_type": movement.movement_type,
                     "movement_type_display": movement.get_movement_type_display(),
                     "movement_date": movement.movement_date,
@@ -266,7 +313,9 @@ def build_register(
     return {
         "club": {"id": club.pk, "name": club.name},
         "as_of": today,
-        "filters": register_filters_snapshot(search=search, category=category, holder_filter=holder_filter),
+        "filters": register_filters_snapshot(
+            search=search, category=category, holder_filter=holder_filter, include_exits=include_exits
+        ),
         "filters_label": _filters_label(search=search, category=category, holder_filter=holder_filter, holder_label=holder_label),
         "include_exits": include_exits,
         "sections": ordered,
@@ -309,6 +358,10 @@ def render_register_csv(register: dict) -> bytes:
     writer.writerow(CSV_COLUMNS)
     for section in register["sections"]:
         for line in section["lines"]:
+            # Format d'import (registre §9.1, colonne ``origine``) : le texte
+            # libre d'un don est le NOM du donateur, que l'import relit en
+            # « Don de {texte} ». Écrire « Don de X » ici casserait l'aller-
+            # retour exigé au §10.4 (le donateur deviendrait « Don de X »).
             if line["origin_kind"] == StockMovement.OriginKind.DONATION:
                 origin = line["donor_name"]
             elif line["origin_kind"] == StockMovement.OriginKind.CLUB_FUNDS:
@@ -432,7 +485,7 @@ def render_register_pdf(club, register: dict, *, actor, now: Optional[datetime.d
                 [
                     p(line["category_display"]),
                     p(line["designation"]),
-                    p(f"{line['quantity']} {line['unit']}"),
+                    p(line["quantity_label"]),
                     p(line["origin"]),
                     p(line["acquisition_label"]),
                     p(line["location"]),
@@ -443,9 +496,8 @@ def render_register_pdf(club, register: dict, *, actor, now: Optional[datetime.d
         table.setStyle(grid)
         story.append(p(section["category_display"], h2))
         story.append(table)
-        totals = " · ".join(f"{t['quantity']} {t['unit']}" for t in section["stock_total_by_unit"]) or "0"
         story.append(Spacer(1, 1.5 * mm))
-        story.append(p(f"Total : {totals}", head))
+        story.append(p(section["stock_total_label"], head))
         dist = distribution_text(section["current_distribution"])
         if dist:
             story.append(p(f"Répartition actuelle : {dist}", body))
@@ -462,7 +514,7 @@ def render_register_pdf(club, register: dict, *, actor, now: Optional[datetime.d
         for dec in register["decommissions"]:
             reason = dec["reason_display"] + (f" — {dec['reason_note']}" if dec["reason_note"] else "")
             rows.append(
-                [p(dec["designation"]), p(f"{dec['quantity']} {dec['unit']}"), p(reason), p(dec["location"]), p(_fmt_date(dec["noted_on"]))]
+                [p(dec["designation"]), p(dec["quantity_label"]), p(reason), p(dec["location"]), p(_fmt_date(dec["noted_on"]))]
             )
         table = Table(rows, colWidths=[62 * mm, 24 * mm, 90 * mm, 50 * mm, 35 * mm], repeatRows=1)
         table.setStyle(grid)
@@ -478,7 +530,7 @@ def render_register_pdf(club, register: dict, *, actor, now: Optional[datetime.d
                 rows.append(
                     [
                         p(ex["designation"]),
-                        p(f"{ex['quantity']} {ex['unit']}"),
+                        p(ex["quantity_label"]),
                         p(ex["movement_type_display"]),
                         p(_fmt_date(ex["movement_date"])),
                         p(ex["location"]),

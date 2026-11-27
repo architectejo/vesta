@@ -124,7 +124,7 @@ def serialize_membership_brief(membership, *, request=None) -> dict:
     }
 
 
-def serialize_reason(membership, *, viewer, playability=None) -> dict:
+def serialize_reason(membership, *, viewer, playability=None, viewer_roles=None) -> dict:
     """Motif de blocage filtre par role (10.2 n16, matrice 2.4) : point de
     filtrage UNIQUE deja applique par
     ``apps.sport.services.describe_reason_for_viewer`` -- cette fonction ne
@@ -138,11 +138,35 @@ def serialize_reason(membership, *, viewer, playability=None) -> dict:
         # à qui ne voit que « Indisponible » (10.2 n° 16).
         "reason_code": (
             playability.reason_code
-            if services.reason_visible_to_viewer(playability, viewer=viewer, membership=membership)
+            if services.reason_visible_to_viewer(
+                playability, viewer=viewer, membership=membership, viewer_roles=viewer_roles
+            )
             else ("unavailable" if not playability.eligible else "")
         ),
-        "reason": services.describe_reason_for_viewer(playability, viewer=viewer, membership=membership),
+        "reason": services.describe_reason_for_viewer(
+            playability, viewer=viewer, membership=membership, viewer_roles=viewer_roles
+        ),
     }
+
+
+def serialize_eligibility_list(memberships, *, viewer, club) -> list[dict]:
+    """Éligibilité groupée pour la modale « Composer l'équipe »
+    (sport-feuille-de-match.md §4.1, §4.1 bis). Calcul groupé
+    (:func:`apps.sport.services.get_playabilities`) et rôles du lecteur
+    résolus UNE fois ; le motif reste filtré par
+    :func:`apps.sport.services.describe_reason_for_viewer` (10.2 n° 16)."""
+
+    playabilities = services.get_playabilities(club, memberships)
+    roles = get_active_roles(viewer, club=club)
+    return [
+        {
+            "membership_id": membership.pk,
+            **serialize_reason(
+                membership, viewer=viewer, playability=playabilities[membership.pk], viewer_roles=roles
+            ),
+        }
+        for membership in memberships
+    ]
 
 
 # ---------------------------------------------------------------------------

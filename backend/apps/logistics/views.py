@@ -798,7 +798,10 @@ class _RegisterBase(APIView):
             after={
                 "format": fmt,
                 "filters": register_module.register_filters_snapshot(
-                    search=kwargs["search"], category=kwargs["category"], holder_filter=kwargs["holder_filter"]
+                    search=kwargs["search"],
+                    category=kwargs["category"],
+                    holder_filter=kwargs["holder_filter"],
+                    include_exits=kwargs["include_exits"],
                 ),
             },
         )

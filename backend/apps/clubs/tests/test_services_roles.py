@@ -579,7 +579,12 @@ class TestCanViewPendingMembershipStatus:
             MembershipRole.Role.VICE_PRESIDENT,
             MembershipRole.Role.SPORTS_DIRECTOR,
             MembershipRole.Role.COACH,
+            MembershipRole.Role.ASSISTANT_COACH,
             MembershipRole.Role.DOCTOR,
+            # CDC 4.3 + matrice 2.4 « Enregistrement des paiements » : les
+            # fonctions d'encaissement des frais d'adhesion.
+            MembershipRole.Role.TREASURER,
+            MembershipRole.Role.ASSISTANT_TREASURER,
         ],
     )
     def test_les_roles_autorises_voient_le_statut(self, role):
@@ -614,6 +619,33 @@ class TestCanViewPendingMembershipStatus:
 
         assert not services.can_view_pending_membership_status(
             viewer_user=viewer_membership.user, target_membership=target
+        )
+
+    @pytest.mark.parametrize(
+        "role",
+        [MembershipRole.Role.SECRETARY, MembershipRole.Role.STEWARD, MembershipRole.Role.PLAYER_RECRUITER],
+    )
+    def test_les_roles_sans_acces_aux_encaissements_ne_voient_pas_le_statut(self, role):
+        """Matrice 2.4 : Secretaire, Intendant et recruteur n'ont aucun acces
+        aux paiements -- le masquage du 10.2 n16 s'applique a eux."""
+
+        club = ClubFactory()
+        viewer_membership = MembershipFactory(club=club)
+        MembershipRoleFactory(membership=viewer_membership, role=role)
+        target = MembershipFactory(club=club, status=Membership.Status.PENDING)
+
+        assert not services.can_view_pending_membership_status(
+            viewer_user=viewer_membership.user, target_membership=target
+        )
+
+    def test_le_tresorier_d_un_autre_club_ne_voit_pas_le_statut(self):
+        club = ClubFactory()
+        other_treasurer = MembershipFactory(club=ClubFactory())
+        MembershipRoleFactory(membership=other_treasurer, role=MembershipRole.Role.TREASURER)
+        target = MembershipFactory(club=club, status=Membership.Status.PENDING)
+
+        assert not services.can_view_pending_membership_status(
+            viewer_user=other_treasurer.user, target_membership=target
         )
 
     def test_le_joueur_concerne_voit_toujours_son_propre_statut(self):

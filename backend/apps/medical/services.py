@@ -174,9 +174,17 @@ def get_unfitness_reason(membership: Membership, *, at_date: Optional[date] = No
     if record.fitness_status in (HealthRecord.FitnessStatus.FIT, HealthRecord.FitnessStatus.FIT_WITH_RESTRICTION):
         return None
 
-    if record.fitness_return_date is not None:
-        return (f"Inapte · retour prévu le {format_date_fr(record.fitness_return_date)}", record.fitness_return_date)
-    return ("Inapte · date de retour non fixée", None)
+    return (unfitness_label(record.fitness_return_date), record.fitness_return_date)
+
+
+def unfitness_label(return_date: Optional[date]) -> str:
+    """Texte lisible d'une inaptitude (aptitude et date de retour seulement,
+    jamais de diagnostic -- CLAUDE.md regle n11). Point unique, partage par
+    :func:`get_unfitness_reason` et les calculs groupes de ``apps.sport``."""
+
+    if return_date is not None:
+        return f"Inapte · retour prévu le {format_date_fr(return_date)}"
+    return "Inapte · date de retour non fixée"
 
 
 def get_unfit_membership_dates(club, membership_ids) -> dict[int, Optional[date]]:

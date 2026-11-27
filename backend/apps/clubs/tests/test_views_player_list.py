@@ -357,3 +357,75 @@ class TestPlayerListViewLicenceGate:
         response = APIClient().get(reverse("clubs:players-list"))
 
         assert response.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN)
+
+
+def _card(client: APIClient, membership_id: int):
+    return client.get(reverse("clubs:player-card", args=[membership_id]))
+
+
+class TestPlayerCardPendingStatusForTreasury:
+    """Demande dev-b (B6, 27/11/2026) : la carte joueur montre « En attente »
+    au Tresorier et a son adjoint (CDC 4.3, matrice 2.4 « Enregistrement des
+    paiements ») ; le masquage du 10.2 n16 reste en place pour les
+    coequipiers."""
+
+    @pytest.mark.parametrize("role", [MembershipRole.Role.TREASURER, MembershipRole.Role.ASSISTANT_TREASURER])
+    def test_le_tresorier_voit_en_attente_sur_la_carte(self, role):
+        club = ClubFactory()
+        treasurer = MembershipFactory(club=club, status=Membership.Status.ACTIVE)
+        MembershipRoleFactory(membership=treasurer, role=role)
+        pending = MembershipFactory(club=club, status=Membership.Status.PENDING)
+
+        response = _card(_authenticated_client(treasurer.user), pending.id)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["membership_status"] == Membership.Status.PENDING
+        assert response.data["membership_status_label"] == "En attente"
+
+    def test_le_tresorier_retrouve_les_joueurs_en_attente_par_le_filtre(self):
+        club = ClubFactory()
+        treasurer = MembershipFactory(club=club, status=Membership.Status.ACTIVE)
+        MembershipRoleFactory(membership=treasurer, role=MembershipRole.Role.TREASURER)
+        pending = MembershipFactory(club=club, status=Membership.Status.PENDING)
+
+        response = _list(_authenticated_client(treasurer.user), status=Membership.Status.PENDING)
+
+        assert {row["membership_id"] for row in response.data} == {pending.id}
+
+    @pytest.mark.parametrize("role", [None, MembershipRole.Role.SECRETARY, MembershipRole.Role.CAPTAIN])
+    def test_un_coequipier_voit_toujours_le_statut_masque(self, role):
+        club = ClubFactory()
+        viewer = MembershipFactory(club=club, status=Membership.Status.ACTIVE)
+        if role:
+            MembershipRoleFactory(membership=viewer, role=role)
+        pending = MembershipFactory(club=club, status=Membership.Status.PENDING)
+
+        response = _card(_authenticated_client(viewer.user), pending.id)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["membership_status"] == "unavailable"
+        assert response.data["membership_status_label"] == "Indisponible"
+
+    def test_un_tresorier_revoque_ne_voit_plus_le_statut(self):
+        club = ClubFactory()
+        treasurer = MembershipFactory(club=club, status=Membership.Status.ACTIVE)
+        role = MembershipRoleFactory(membership=treasurer, role=MembershipRole.Role.TREASURER)
+        pending = MembershipFactory(club=club, status=Membership.Status.PENDING)
+        role.revoked_at = timezone.now()
+        role.revoked_by = treasurer.user
+        role.save()
+
+        response = _card(_authenticated_client(treasurer.user), pending.id)
+
+        assert response.data["membership_status"] == "unavailable"
+
+    def test_le_tresorier_d_un_autre_club_recoit_404(self):
+        club = ClubFactory()
+        pending = MembershipFactory(club=club, status=Membership.Status.PENDING)
+        other_treasurer = MembershipFactory(club=ClubFactory(), status=Membership.Status.ACTIVE)
+        MembershipRoleFactory(membership=other_treasurer, role=MembershipRole.Role.TREASURER)
+
+        response = _card(_authenticated_client(other_treasurer.user), pending.id)
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert "membership_status" not in response.data

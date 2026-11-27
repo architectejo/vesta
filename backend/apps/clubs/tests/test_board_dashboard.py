@@ -745,3 +745,27 @@ class TestDefaultLanding:
             assert response.status_code == 200, response.data
             assert response.data["default_landing"] == expected
             assert response.data["capabilities"]["can_view_board_dashboard"] is (expected == "board_dashboard")
+
+
+# ---------------------------------------------------------------------------
+# Fuseau du club dans « Mon profil » (demande dev-b B8, CLAUDE.md section 7)
+# ---------------------------------------------------------------------------
+
+
+class TestProfileClubTimezone:
+    def test_profil_renvoie_le_fuseau_du_club(self, ctx):
+        data = profile(ctx.player.user).data
+        assert data["club"]["timezone"] == "Africa/Kinshasa"
+
+    def test_fuseau_propre_a_chaque_club(self, ctx):
+        other = build_sport_club_context(timezone_name="Europe/Paris")
+        assert profile(ctx.coach.user).data["club"]["timezone"] == "Africa/Kinshasa"
+        assert profile(other.coach.user).data["club"]["timezone"] == "Europe/Paris"
+
+    def test_fuseau_absent_si_parametres_non_configures(self, ctx):
+        from apps.clubs.models import ClubSettings
+
+        ClubSettings.objects.filter(club_id=ctx.club.id).delete()
+        response = profile(ctx.player.user)
+        assert response.status_code == 200
+        assert response.data["club"]["timezone"] is None

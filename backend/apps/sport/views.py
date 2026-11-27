@@ -1368,3 +1368,29 @@ class LockerRoomView(APIView):
                 request=request,
             )
         )
+
+
+class EligibilityListView(APIView):
+    """Éligibilité groupée des joueurs du club actif (sport-feuille-de-match.md
+    §4.1 et §4.1 bis ; CDC 4.8 : « en dette (montant affiché), suspendu
+    (nombre de matchs restants), inapte (avis médical), en attente
+    d'adhésion »).
+
+    Réservée aux rôles qui composent (matrice 2.4, « Feuille de match et
+    composition » et « Plan tactique » : É pour le Coach seul, donc aussi son
+    assistant, 10.3 n° 179). Calcul groupé (nombre de requêtes fixe) ; le
+    motif est filtré par ``services.describe_reason_for_viewer`` (10.2
+    n° 16). Lecture seule : rien n'est journalisé.
+
+    Joueurs renvoyés : inscrits et en attente d'adhésion (les joueurs partis
+    ne sont pas composables et n'apparaissent pas dans la modale)."""
+
+    permission_classes = _GATE + [CanManageMatch]
+
+    def get(self, request):
+        club = get_active_club()
+        memberships = list(
+            Membership.objects.filter(status__in=(Membership.Status.ACTIVE, Membership.Status.PENDING)).order_by("pk")
+        )
+        results = serializers_mod.serialize_eligibility_list(memberships, viewer=request.user, club=club)
+        return Response({"count": len(results), "results": results})

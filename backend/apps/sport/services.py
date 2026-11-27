@@ -338,7 +338,7 @@ def get_playability(membership: Membership, *, at_date: Optional[date] = None) -
     d'implémentation est signalé au compte rendu."""
 
     if membership.status == Membership.Status.PENDING:
-        return Playability(False, "pending_membership", "En attente d'adhésion.")
+        return Playability(False, "pending_membership", _PENDING_MEMBERSHIP_DETAIL)
 
     active_suspension = (
         Suspension.all_objects.filter(club_id=membership.club_id, membership_id=membership.pk, lifted_at__isnull=True)
@@ -350,7 +350,7 @@ def get_playability(membership: Membership, *, at_date: Optional[date] = None) -
         return Playability(
             False,
             "suspension",
-            f"Suspendu : encore {remaining} match(s).",
+            _suspension_detail(remaining),
             suspension_matches_remaining=remaining,
         )
 
@@ -364,11 +364,67 @@ def get_playability(membership: Membership, *, at_date: Optional[date] = None) -
     in_good_standing, amount_due, _reason = is_in_good_standing(membership, at_date=at_date)
     if not in_good_standing:
         currency = _club_settings(membership.club).currency
-        return Playability(
-            False, "debt", f"En dette : {amount_due:.2f} {currency}.", amount_due=amount_due
-        )
+        return Playability(False, "debt", _debt_detail(amount_due, currency), amount_due=amount_due)
 
     return Playability(True, "", "")
+
+
+# Textes des motifs : point UNIQUE, partagé par :func:`get_playability` et
+# :func:`get_playabilities` (aucune règle ni libellé dupliqué).
+_PENDING_MEMBERSHIP_DETAIL = "En attente d'adhésion."
+
+
+def _suspension_detail(remaining: int) -> str:
+    return f"Suspendu : encore {remaining} match(s)."
+
+
+def _debt_detail(amount_due: Decimal, currency: str) -> str:
+    return f"En dette : {amount_due:.2f} {currency}."
+
+
+def get_playabilities(club, memberships) -> dict[int, Playability]:
+    """Version groupée de :func:`get_playability` (éligibilité « maintenant »,
+    comme le contrôle de :func:`add_to_composition`) : ``{adhésion:
+    Playability}`` en un nombre FIXE de requêtes, quel que soit l'effectif
+    (sport-feuille-de-match.md §4.1, rafraîchissement toutes les 15 s).
+
+    Mêmes motifs, même priorité (attente, suspension, inaptitude, dette) et
+    mêmes textes que :func:`get_playability` : le calcul groupé est celui de
+    :func:`apps.sport.player_stats.get_availabilities` (statut financier
+    fourni par la trésorerie), seuls les textes sont mis en forme ici."""
+
+    from apps.medical import services as medical_services
+    from apps.sport.player_stats import get_availabilities
+
+    result: dict[int, Playability] = {}
+    for membership_id, availability in get_availabilities(club, memberships).items():
+        code = availability.code
+        if not code:
+            result[membership_id] = Playability(True, "", "")
+        elif code == "pending_membership":
+            result[membership_id] = Playability(False, code, _PENDING_MEMBERSHIP_DETAIL)
+        elif code == "suspension":
+            result[membership_id] = Playability(
+                False,
+                code,
+                _suspension_detail(availability.matches_remaining),
+                suspension_matches_remaining=availability.matches_remaining,
+            )
+        elif code == "unfit":
+            result[membership_id] = Playability(
+                False,
+                code,
+                medical_services.unfitness_label(availability.return_date),
+                fitness_return_date=availability.return_date,
+            )
+        else:  # "debt"
+            result[membership_id] = Playability(
+                False,
+                code,
+                _debt_detail(availability.amount_due, availability.currency),
+                amount_due=availability.amount_due,
+            )
+    return result
 
 
 # 10.2 n° 16, matrice 2.4 (sport-seance.md §3.2 ter) : qui voit le motif
@@ -384,7 +440,9 @@ _FULL_DETAIL_ROLES = _FINANCIAL_DETAIL_ROLES | frozenset(
 )
 
 
-def reason_visible_to_viewer(playability: Playability, *, viewer, membership: Membership) -> bool:
+def reason_visible_to_viewer(
+    playability: Playability, *, viewer, membership: Membership, viewer_roles: Optional[frozenset] = None
+) -> bool:
     """Le lecteur a-t-il droit au motif réel de blocage (10.2 n° 16) ?
 
     Le joueur voit toujours le sien. Dette et attente d'adhésion (motifs
@@ -396,20 +454,24 @@ def reason_visible_to_viewer(playability: Playability, *, viewer, membership: Me
         return True
     if getattr(viewer, "id", None) == membership.user_id:
         return True
-    roles = get_active_roles(viewer, club=membership.club)
+    # ``viewer_roles`` : rôles déjà résolus par l'appelant pour un calcul
+    # groupé (une seule requête de rôles pour toute une liste).
+    roles = viewer_roles if viewer_roles is not None else get_active_roles(viewer, club=membership.club)
     if playability.reason_code in ("debt", "pending_membership"):
         return bool(roles & _FINANCIAL_DETAIL_ROLES)
     return bool(roles & _FULL_DETAIL_ROLES)
 
 
-def describe_reason_for_viewer(playability: Playability, *, viewer, membership: Membership) -> str:
+def describe_reason_for_viewer(
+    playability: Playability, *, viewer, membership: Membership, viewer_roles: Optional[frozenset] = None
+) -> str:
     """Texte de blocage filtré selon le rôle du lecteur (10.2 n° 16 ;
     sport-seance.md §3.2 ter). Point de filtrage UNIQUE : jamais
     reconstruit ailleurs (l'interface affiche ce texte tel quel)."""
 
     if playability.eligible:
         return ""
-    if reason_visible_to_viewer(playability, viewer=viewer, membership=membership):
+    if reason_visible_to_viewer(playability, viewer=viewer, membership=membership, viewer_roles=viewer_roles):
         return playability.detail
     return "Indisponible"
 

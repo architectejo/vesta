@@ -819,3 +819,95 @@ def test_unauthenticated_requests_are_refused():
     client = APIClient()
     for name in ("holder-list", "decommission-list", "register", "register-pdf", "register-csv"):
         assert client.get(reverse(f"logistics:{name}")).status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# Corrections demandées par dev-b (B4, 26/11/2026) : sorties dans le PDF et
+# le CSV, libellé du total, origine du CSV, accords en nombre
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("quantity", "unit", "expected"),
+    [
+        (1, "pièce", "1 pièce"),
+        (0, "pièce", "0 pièce"),
+        (26, "pièce", "26 pièces"),
+        (2, "paire", "2 paires"),
+        (3, "jeu", "3 jeux"),
+        (4, "lot", "4 lots"),
+        (5, "kg", "5 kg"),
+        (2, "pièces", "2 pièces"),
+        (2, "boîte de 6", "2 boîte de 6"),
+    ],
+)
+def test_format_quantity_accorde_l_unite(quantity, unit, expected):
+    from apps.logistics.register import format_quantity
+
+    assert format_quantity(quantity, unit) == expected
+
+
+def test_register_total_est_libelle_stock_actuel_et_accorde(ctx: LogisticsClubContext):
+    balls, jerseys, *_ = seed_register(ctx)
+    add_stock(ctx, balls, 3, movement_type="out_loss")
+    add_stock(ctx, jerseys, 19, movement_type="out_loss")
+    data = client_for(ctx.steward.user).get(reverse("logistics:register")).data
+    jersey_section, ball_section = data["sections"]
+    # Les lignes restent les entrées (14 + 8) ; le pied est le stock actuel.
+    assert sorted(line["quantity"] for line in ball_section["lines"]) == [8, 14]
+    assert ball_section["stock_total_label"] == "Stock actuel : 19 pièces"
+    assert jersey_section["stock_total_label"] == "Stock actuel : 1 pièce"
+    assert {line["quantity_label"] for line in ball_section["lines"]} == {"14 pièces", "8 pièces"}
+
+    pdf = client_for(ctx.steward.user).get(reverse("logistics:register-pdf")).content
+    assert b"Stock actuel : 19 pi" in pdf and b"Stock actuel : 1 pi" in pdf
+    assert b"Total :" not in pdf
+
+
+def test_register_accords_des_sorties_et_declassements(ctx: LogisticsClubContext):
+    balls, *_ = seed_register(ctx)
+    add_stock(ctx, balls, 1, movement_type="out_loss")
+    flag(client_for(ctx.steward.user), balls, 2)
+    data = client_for(ctx.steward.user).get(reverse("logistics:register") + "?include_exits=true").data
+    assert data["exits"][0]["quantity_label"] == "1 pièce"
+    assert data["decommissions"][0]["quantity_label"] == "2 pièces"
+
+
+def test_register_pdf_et_csv_appliquent_include_exits(ctx: LogisticsClubContext):
+    balls, jerseys, *_ = seed_register(ctx)
+    add_stock(ctx, jerseys, 20, movement_type="out_loss")  # article entièrement sorti
+    client = client_for(ctx.steward.user)
+
+    pdf_without = client.get(reverse("logistics:register-pdf")).content
+    pdf_with = client.get(reverse("logistics:register-pdf") + "?include_exits=true").content
+    assert b"Vareuse bleu-blanc" not in pdf_without and b"Sorties de l" not in pdf_without
+    assert b"Vareuse bleu-blanc" in pdf_with and b"Sorties de l" in pdf_with
+
+    csv_without = client.get(reverse("logistics:register-csv")).content.decode("utf-8-sig")
+    csv_with = client.get(reverse("logistics:register-csv") + "?include_exits=true").content.decode("utf-8-sig")
+    assert "Vareuse bleu-blanc" not in csv_without
+    assert "Vareuse bleu-blanc" in csv_with
+    # Le CSV reste au format d'import (§9.1) : aucune ligne de sortie, qui
+    # serait relue comme une entrée.
+    assert len(csv_with.splitlines()) == 1 + 3
+
+    logged = AuditLog.objects.filter(club=ctx.club, action_type="logistics.register.exported").order_by("pk")
+    assert [entry.after["filters"]["include_exits"] for entry in logged] == [False, True, False, True]
+
+
+def test_register_csv_origine_suit_le_format_d_import(ctx: LogisticsClubContext):
+    """Registre §9.1 : « Frais de l'équipe » → frais ; vide → inconnue ; autre
+    texte → « Don de {texte} ». La colonne porte donc le seul nom du
+    donateur (aller-retour du §10.4), jamais « Don de … »."""
+
+    balls, jerseys, landry, donor = seed_register(ctx)
+    add_stock(ctx, balls, 2, provenance={"origin_kind": "unknown"})
+    rows = client_for(ctx.steward.user).get(reverse("logistics:register-csv")).content.decode("utf-8-sig").splitlines()
+    origins = [row.split(";")[4] for row in rows[1:]]
+    assert "Lusamba" in origins
+    assert f"{donor.user.first_name} {donor.user.last_name}".strip() in origins
+    assert "Frais de l'équipe" in origins
+    assert "" in origins  # origine inconnue → vide
+    assert not any(origin.startswith("Don") for origin in origins)
+    # L'unité garde la forme d'import (singulier), même pour 14 pièces.
+    assert all(row.split(";")[3] == "pièce" for row in rows[1:])

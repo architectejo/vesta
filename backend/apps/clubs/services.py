@@ -399,6 +399,15 @@ PENDING_STATUS_VISIBLE_ROLES = frozenset(
         MembershipRole.Role.SPORTS_DIRECTOR,
         *COACHING_STAFF_ROLES,
         MembershipRole.Role.DOCTOR,
+        # Fonctions d'encaissement (matrice 2.4 « Enregistrement des
+        # paiements » : É pour Trés et Adj ; CDC 4.3 : les frais d'adhesion
+        # sont encaisses tant que le joueur est « En attente »). Le masquage
+        # du 10.2 n16 vise les coequipiers ; le Tresorier et son adjoint
+        # voient deja ce statut dans la tresorerie (tableau de bord,
+        # grille). Seul le statut d'adhesion est concerne ici : ni
+        # l'aptitude ni la suspension (10.2 n16 inchange pour ces motifs).
+        MembershipRole.Role.TREASURER,
+        MembershipRole.Role.ASSISTANT_TREASURER,
     }
 )
 
@@ -413,10 +422,12 @@ PLAYER_CARD_NEUTRAL_STATUS_LABEL = "Indisponible"
 
 def can_view_pending_membership_status(*, viewer_user, target_membership: "Membership") -> bool:
     """CDC 10.2 n16 (matrice 2.4, 4.2 ; precise en 4.12) : seuls le
-    President, le Vice-president, le Directeur sportif, le Coach, le
-    Medecin et le joueur concerne lui-meme voient qu'une adhesion est « En
-    attente » (parrainage en cours) ; tout autre coequipier ne doit
-    recevoir qu'un statut neutre pour cette adhesion.
+    President, le Vice-president, le Directeur sportif, le Coach (et son
+    assistant), le Medecin, le Tresorier et le Tresorier adjoint (CDC 4.3 :
+    encaissement des frais d'adhesion) et le joueur concerne lui-meme
+    voient qu'une adhesion est « En attente » (parrainage en cours) ; tout
+    autre coequipier ne doit recevoir qu'un statut neutre pour cette
+    adhesion.
 
     Point d'entree unique pour cette decision (CLAUDE.md section 5 : la
     regle metier ne vit jamais dans le serializer) -- seul appelant a ce
