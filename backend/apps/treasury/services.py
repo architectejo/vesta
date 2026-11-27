@@ -150,6 +150,7 @@ __all__ = [
     "get_balance",
     "get_balances",
     "is_in_good_standing",
+    "get_good_standing_membership_ids",
     "BalanceSummary",
     "get_balance_summary",
     "allocate_payment",
@@ -1009,6 +1010,15 @@ def _balance_aggregates(*, club, at_date: date, membership_ids: Optional[Iterabl
     return paid, owed
 
 
+def _net_balance(paid: dict, owed: dict, membership_id: int) -> Decimal:
+    """Solde = paye - du echu d'une adhesion, a partir de
+    :func:`_balance_aggregates` (formule unique de :func:`get_balance` et
+    :func:`get_balances`, donc de :func:`is_in_good_standing` et de
+    :func:`get_good_standing_membership_ids`)."""
+
+    return (paid.get(membership_id) or Decimal("0.00")) - (owed.get(membership_id) or Decimal("0.00"))
+
+
 def get_balance(membership: Membership, at_date: Optional[date] = None) -> Decimal:
     """Calcule le solde avec deux agregations SQL, sans consulter les allocations."""
 
@@ -1016,7 +1026,7 @@ def get_balance(membership: Membership, at_date: Optional[date] = None) -> Decim
     _require_service_club(club)
     at_date = _balance_date(club, at_date)
     paid, owed = _balance_aggregates(club=club, at_date=at_date)
-    return (paid.get(membership.pk) or Decimal("0.00")) - (owed.get(membership.pk) or Decimal("0.00"))
+    return _net_balance(paid, owed, membership.pk)
 
 
 def get_balances(club, at_date: Optional[date] = None) -> dict[int, Decimal]:
@@ -1026,11 +1036,7 @@ def get_balances(club, at_date: Optional[date] = None) -> dict[int, Decimal]:
     at_date = _balance_date(club, at_date)
     paid, owed = _balance_aggregates(club=club, at_date=at_date)
     membership_ids = Membership.all_objects.filter(club=club).values_list("pk", flat=True)
-    return {
-        membership_id: (paid.get(membership_id) or Decimal("0.00"))
-        - (owed.get(membership_id) or Decimal("0.00"))
-        for membership_id in membership_ids
-    }
+    return {membership_id: _net_balance(paid, owed, membership_id) for membership_id in membership_ids}
 
 
 @dataclass(frozen=True)
@@ -1074,14 +1080,24 @@ def _membership_summary(membership: Membership, balance: Decimal, currency: str)
     return summary
 
 
+def _standing_from_balance(balance: Decimal) -> tuple[Decimal, Decimal]:
+    """**Seule regle** « En ordre » d'un solde deja calcule (CDC 4.4.2) :
+    renvoie (solde arrondi a 2 decimales, montant a regulariser). Le joueur
+    est en ordre si et seulement si le montant a regulariser est nul.
+    Partagee par :func:`_summary_from_balance` (donc
+    :func:`is_in_good_standing`) et :func:`get_good_standing_membership_ids`."""
+
+    balance = Decimal(balance).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+    return balance, max(-balance, Decimal("0.00"))
+
+
 def _summary_from_balance(balance: Decimal, currency: str) -> BalanceSummary:
     """Statut « En ordre » / « En dette » et raison lisible d'un solde deja
     calcule (CDC 4.4.2). Seule formulation du statut, partagee par
     :func:`get_balance_summary`, l'apercu d'un paiement et la recherche de
     la Caisse Terrain Express."""
 
-    balance = Decimal(balance).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
-    amount_due = max(-balance, Decimal("0.00"))
+    balance, amount_due = _standing_from_balance(balance)
     if amount_due == 0:
         return BalanceSummary(balance, Decimal("0.00"), True, "Le joueur est en ordre.", currency)
     return BalanceSummary(
@@ -1098,6 +1114,34 @@ def is_in_good_standing(membership: Membership, at_date: Optional[date] = None) 
 
     summary = get_balance_summary(membership, at_date=at_date)
     return summary.is_in_good_standing, summary.amount_due, summary.reason
+
+
+def get_good_standing_membership_ids(
+    club, at_date: Optional[date] = None, membership_ids: Optional[Iterable[int]] = None
+) -> set[int]:
+    """Version groupee de :func:`is_in_good_standing` pour tout un club.
+
+    Renvoie l'ensemble des identifiants d'adhesion **du club** dont
+    ``is_in_good_standing(membership, at_date)[0]`` vaut ``True``, quel que
+    soit le statut d'adhesion (comme :func:`is_in_good_standing` : un filtre
+    sur le statut reste a la charge de l'appelant). Meme calcul, sans aucune
+    regle recopiee : soldes de :func:`get_balances` (types obligatoires,
+    paiements valides, annulations, montants dus echus apres tolerance, date
+    du jour dans le fuseau du club) puis statut par
+    :func:`_standing_from_balance`.
+
+    ``membership_ids`` restreint le resultat ; un identifiant d'un autre club
+    n'y figure jamais (etancheite). Nombre de requetes constant, identique a
+    :func:`get_balances`. Club sans parametres : meme
+    :class:`TreasuryValidationError` que :func:`is_in_good_standing`."""
+
+    balances = get_balances(club, at_date=at_date)
+    wanted = None if membership_ids is None else set(membership_ids)
+    return {
+        membership_id
+        for membership_id, balance in balances.items()
+        if (wanted is None or membership_id in wanted) and _standing_from_balance(balance)[1] == 0
+    }
 
 
 def _month_range(start: date, count: int):

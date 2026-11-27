@@ -623,14 +623,16 @@ def _notify_members_not_in_order(message: ChatMessage, *, now) -> int:
 
     from apps.notifications.models import Notification
     from apps.notifications.services import create_notification
-    from apps.treasury.services import TreasuryError, get_balances
+    from apps.treasury.services import TreasuryError, get_good_standing_membership_ids
 
     club = message.club
     day_start = _club_day_start(club, now)
     if day_start is None:
         return 0
     try:
-        balances = get_balances(club)
+        # Statut « En ordre » calcule par la tresorerie pour tout le club en
+        # une fois (meme regle que `is_in_good_standing`, sans N+1).
+        in_order_ids = get_good_standing_membership_ids(club)
     except TreasuryError:
         return 0
 
@@ -655,9 +657,7 @@ def _notify_members_not_in_order(message: ChatMessage, *, now) -> int:
     for membership in memberships:
         if membership.pk in board_membership_ids or membership.user_id in already_notified:
             continue
-        # Meme regle que `is_in_good_standing` : en ordre si le solde calcule
-        # n'est pas negatif (types obligatoires seulement, regle 2).
-        if balances.get(membership.pk, 0) >= 0:
+        if membership.pk in in_order_ids:
             continue
         create_notification(
             recipient=membership.user,
