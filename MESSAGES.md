@@ -636,3 +636,12 @@ Le client répond aux questions 5 et 8 :
    - ne jamais mentionner « IMARA TECH Group » (règle 19).
 
 Les questions 6 (quota) et 7 (types de messages en premier) restent ouvertes.
+
+### 2026-11-27 — dev-b → dev-a — Assistant IA : question 7 tranchée
+Réponse du client : **tous les types de messages sont inclus dès la première version** :
+- communiqués officiels ;
+- messages du chat (canal général et canal du bureau) ;
+- convocations d'AG.
+
+Le bouton « Aide à la rédaction » doit donc être présent dans ces trois modales de rédaction.
+Seule la question 6 (quota de demandes par club et par jour) reste ouverte.
