@@ -458,3 +458,82 @@ def test_decimal_values_are_strings_not_floats(ctx, rated):
     block = get_stats(ctx.coach.user, session).data["evaluations"]
     assert isinstance(block["average"], str)
     assert all(isinstance(row["note"], str) for row in block["best"])
+
+
+# ---------------------------------------------------------------------------
+# Écarts « par rapport aux 10 dernières séances » : définitions uniques
+# (propositions par défaut, à confirmer par le client)
+# ---------------------------------------------------------------------------
+
+
+def test_attendance_delta_uses_total_present_over_total_expected(ctx):
+    """A4.1 et CDC 10.3 n° 185 : la référence est ``summarize_attendance``
+    (total des présents ÷ total des attendus), pas la moyenne des taux."""
+
+    backdate_members(ctx)
+    base = list(Membership.all_objects.filter(club=ctx.club, status=Membership.Status.ACTIVE))
+    assert len(base) == ROSTER_SIZE
+    pointed_session(ctx, *base, days_ago=6)  # 8 / 8 = 100 %
+    newcomers = [
+        make_member(ctx.club, joined_on=club_today(ctx) - datetime.timedelta(days=5)) for _ in range(ROSTER_SIZE)
+    ]
+    pointed_session(ctx, *base[:4], days_ago=4)  # 4 / 16 = 25 %
+    pointed_session(ctx, *base[:4], days_ago=3)  # 4 / 16 = 25 %
+    make_session(ctx, days_ago=2)  # non pointée : exclue de la référence
+    current = pointed_session(ctx, *base, *newcomers)  # 16 / 16 = 100 %
+
+    delta = get_stats(ctx.coach.user, current).data["attendance"]["delta_vs_average"]
+    # Référence : 16 / 40 = 40 % -> écart 60. L'ancienne moyenne des taux
+    # ((100 + 25 + 25) / 3 = 50 %) aurait donné 50.
+    assert delta == 60
+
+
+def test_notes_delta_uses_the_average_of_player_averages(ctx):
+    """A4.2 et CDC 10.3 n° 190 : la référence est ``summarize_ratings``
+    (moyenne des moyennes par joueur), pas la moyenne des moyennes par séance."""
+
+    backdate_members(ctx)
+    first = pointed_session(ctx, ctx.player, ctx.captain, days_ago=4)
+    evaluate(ctx, first, ctx.player, "6.0")
+    evaluate(ctx, first, ctx.captain, "6.0")
+    for days_ago in (3, 2):
+        session = pointed_session(ctx, ctx.player, days_ago=days_ago)
+        evaluate(ctx, session, ctx.player, "9.0")
+    current = pointed_session(ctx, ctx.player)
+    evaluate(ctx, current, ctx.player, "8.0")
+
+    block = get_stats(ctx.coach.user, current).data["evaluations"]
+    # Joueur : (6 + 9 + 9) / 3 = 8,0 ; capitaine : 6,0 -> équipe 7,0 ; écart
+    # 8,0 - 7,0 = 1,0. L'ancienne moyenne des séances ((6 + 9 + 9) / 3 = 8,0)
+    # aurait donné 0,0.
+    assert block["delta_vs_average"] == "1.0"
+
+
+def test_notes_delta_still_needs_three_rated_previous_sessions(ctx):
+    backdate_members(ctx)
+    for days_ago in (3, 2):
+        evaluate(ctx, pointed_session(ctx, ctx.player, days_ago=days_ago), ctx.player, "6.0")
+    pointed_session(ctx, ctx.player, days_ago=1)  # pointée mais pas évaluée : ne compte pas
+    current = pointed_session(ctx, ctx.player)
+    evaluate(ctx, current, ctx.player, "7.0")
+    assert get_stats(ctx.coach.user, current).data["evaluations"]["delta_vs_average"] is None
+
+
+def test_history_serves_marked_with_the_dashboard_rule(ctx):
+    """``marked`` = au moins un pointage (même règle que le tableau de bord
+    du bureau), et non ``attendance_rate is None`` : une séance pointée sans
+    aucun attendu a un taux ``None`` mais reste pointée."""
+
+    # Adhésions du jour (pas de recul) : personne n'est attendu il y a 3 jours.
+    no_one_expected = make_session(ctx, days_ago=3)
+    point(ctx, no_one_expected, ctx.player)
+    make_session(ctx, days_ago=2)  # aucun pointage
+    today = pointed_session(ctx, ctx.player)
+
+    rows = history(ctx.coach.user).data["results"]
+    assert [row["session_id"] for row in rows] == [no_one_expected.event.pk, rows[1]["session_id"], today.event.pk]
+    assert [(row["expected"], row["attendance_rate"], row["marked"]) for row in rows] == [
+        (0, None, True),
+        (0, None, False),
+        (ROSTER_SIZE, 13, True),
+    ]

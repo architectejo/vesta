@@ -264,11 +264,15 @@ class ClubOffersView(APIView):
             offers = TransferOffer.objects.filter(origin_club=club)
         else:
             offers = TransferOffer.objects.filter(target_club=club)
+        offers = offers.select_related("origin_club", "target_club", "target_membership__user").order_by("-created_at")
+        data = [ser.serialize_offer(o, viewer=request.user, viewer_club=club) for o in offers]
+        # Filtre appliqué au statut TEL QUE SERVI à ce lecteur, jamais au
+        # statut stocké : sinon ``?status=blocked_debt`` révélerait une dette
+        # à qui ne doit voir que « Quitus en attente » (club B ; DS, Coach et
+        # Assistant du club A -- CDC 10.3 n° 188).
         status_filter = request.query_params.get("status")
         if status_filter:
-            offers = offers.filter(status=status_filter)
-        offers = offers.order_by("-created_at")
-        data = [ser.serialize_offer(o, viewer=request.user, viewer_club=club) for o in offers]
+            data = [item for item in data if item["status"] == status_filter]
         return Response({"count": len(data), "results": data})
 
 

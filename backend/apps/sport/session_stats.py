@@ -327,13 +327,21 @@ def get_session_stats(session: Session, *, viewer, request=None) -> dict:
     expected = _expected_on(roster, event.event_date)
     rows_here = rows.get(event.pk, {})
     counts = _event_counts(expected, rows_here, counts_absent)
-    prior_rates = [
-        _event_counts(_expected_on(roster, p.event_date), rows.get(p.pk, {}), counts_absent)["rate"] for p in prior
-    ]
-    prior_rates = [rate for rate in prior_rates if rate is not None]
+    # Écart « par rapport aux 10 dernières séances » (A4.1) : la moyenne de
+    # référence suit la définition UNIQUE de la moyenne de présence
+    # (:func:`summarize_attendance`, CDC 10.3 n° 185, proposition par défaut
+    # à confirmer) -- total des présents comptés ÷ total des attendus sur les
+    # séances pointées, et non plus la moyenne des taux par séance. Un seul
+    # arrondi, sur l'écart.
+    prior_summary = summarize_attendance(club, prior, roster=roster, rows=rows, counts_absent=counts_absent)
+    prior_totals = prior_summary["totals"]
     attendance_delta = None
-    if counts["rate"] is not None and len(prior_rates) >= MIN_PRIOR_FOR_DELTA:
-        average = Decimal(sum(prior_rates)) / Decimal(len(prior_rates))
+    if (
+        counts["rate"] is not None
+        and prior_summary["sessions_counted"] >= MIN_PRIOR_FOR_DELTA
+        and prior_totals["expected"]
+    ):
+        average = Decimal(prior_totals["counted_present"]) * Decimal(100) / Decimal(prior_totals["expected"])
         attendance_delta = int((Decimal(counts["rate"]) - average).quantize(_ONE, rounding=ROUND_HALF_UP))
 
     late_list, excused_list, absent_list = [], [], []
@@ -428,14 +436,20 @@ def _build_evaluations_block(
     notes = {mid: row["overall"] for mid, row in retained_event.items()}
     average = _mean(notes.values(), _TENTH)
 
-    prior_ids = [p.pk for p in prior]
-    prior_retained = _retained_by_event(club, prior_ids) if prior_ids else {}
-    prior_averages = [
-        avg for avg in (_event_average(prior_retained.get(pk, {})) for pk in prior_ids) if avg is not None
-    ]
+    # Écart « par rapport aux 10 dernières séances » (A4.2) : la note de
+    # référence suit la définition UNIQUE de la note moyenne de l'équipe
+    # (:func:`summarize_ratings`, CDC 10.3 n° 190, proposition par défaut à
+    # confirmer) -- moyenne des moyennes par joueur, et non plus moyenne des
+    # moyennes par séance. Seuil inchangé : au moins 3 séances évaluées.
+    prior_ratings = summarize_ratings(club, prior)
+    prior_rated_events = sum(1 for row in prior_ratings["per_event"].values() if row["average"] is not None)
     delta = None
-    if average is not None and len(prior_averages) >= MIN_PRIOR_FOR_DELTA:
-        delta = (average - _mean(prior_averages, Decimal("0.01"))).quantize(_TENTH, rounding=ROUND_HALF_UP)
+    if (
+        average is not None
+        and prior_rated_events >= MIN_PRIOR_FOR_DELTA
+        and prior_ratings["team_average"] is not None
+    ):
+        delta = (average - prior_ratings["team_average"]).quantize(_TENTH, rounding=ROUND_HALF_UP)
 
     evaluated_members = [(members_by_id.get(mid), note) for mid, note in notes.items() if mid in members_by_id]
     ranking_available = len(evaluated_members) >= 2
@@ -665,6 +679,11 @@ def get_stats_history(club, *, viewer, period: str) -> dict:
                 "expected": counts["expected"],
                 "present": counts["present"],
                 "attendance_rate": counts["rate"],
+                # Séance pointée (au moins un pointage) : même règle que le
+                # tableau de bord du bureau (``_event_counts``). ``False`` =
+                # « Non pointée » ; à ne pas déduire de ``attendance_rate``
+                # (``None`` aussi pour une séance pointée sans attendu).
+                "marked": counts["marked"],
                 "average_rating": str(average_rating) if average_rating is not None else None,
                 "my_rating": str(my_rating) if my_rating is not None else None,
                 "locked": services.is_event_locked(event),

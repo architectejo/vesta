@@ -394,10 +394,21 @@ def _unfit_label(return_date: Optional[datetime.date]) -> str:
     return medical_services.unfitness_label(return_date)
 
 
-def staff_availability(availability: Availability) -> Optional[dict]:
+def staff_availability(
+    availability: Availability,
+    *,
+    viewer=None,
+    membership: Optional[Membership] = None,
+    roles: Optional[frozenset] = None,
+) -> Optional[dict]:
     """Disponibilité telle que le staff la voit sur la page sportive :
-    suspension et inaptitude avec leur libellé ; une dette n'est JAMAIS
-    nommée ici (page sans donnée financière) : simple « Indisponible »."""
+    suspension et inaptitude avec leur libellé. Une dette n'est JAMAIS
+    nommée ici (page sans donnée financière, aucun montant pour personne) :
+    le libellé passe par le filtre UNIQUE
+    :func:`apps.sport.services.describe_reason_for_viewer`, appliqué à un
+    motif déjà neutre (« Indisponible ») -- le Coach et l'Assistant du Coach
+    y lisent donc « Non éligible. » (CDC 10.3 n° 188), comme dans la
+    composition, et les autres rôles « Indisponible »."""
 
     if not availability.code:
         return None
@@ -407,7 +418,13 @@ def staff_availability(availability: Availability) -> Optional[dict]:
         return {"label": _unfit_label(availability.return_date), "family": "unfit"}
     if availability.code == "pending_membership":
         return {"label": "En attente d'adhésion", "family": "pending"}
-    return {"label": "Indisponible", "family": "unavailable"}
+    label = "Indisponible"
+    if availability.code == "debt" and membership is not None:
+        neutral = services.Playability(eligible=False, reason_code="debt", detail="Indisponible")
+        label = services.describe_reason_for_viewer(
+            neutral, viewer=viewer, membership=membership, viewer_roles=roles
+        )
+    return {"label": label, "family": "unavailable"}
 
 
 def viewer_roles(club, viewer) -> frozenset:
@@ -517,7 +534,8 @@ def list_player_cards(*, club, viewer, params: dict, request=None) -> dict:
     if tokens:
         members = [m for m in members if _matches_search(m, tokens)]
 
-    staff = bool(viewer_roles(club, viewer) & STAFF_AVAILABILITY_ROLES)
+    roles = viewer_roles(club, viewer)
+    staff = bool(roles & STAFF_AVAILABILITY_ROLES)
     if params["availability"] and not staff:
         raise PlayerStatsError("Le filtre de disponibilité est réservé au staff du club.")
     availabilities: dict[int, Availability] = {}
@@ -541,7 +559,11 @@ def list_player_cards(*, club, viewer, params: dict, request=None) -> dict:
                 "overall_rating": None,
                 "stats": stats_block(aggregate),
                 "recent_ratings": [str(note[3]) for note in aggregate.ratings[:RECENT_FORM_SIZE]],
-                "availability": staff_availability(availabilities[membership.pk]) if staff else None,
+                "availability": (
+                    staff_availability(availabilities[membership.pk], viewer=viewer, membership=membership, roles=roles)
+                    if staff
+                    else None
+                ),
             }
         )
         results.append(row)

@@ -155,3 +155,125 @@ def test_third_club_officer_cannot_read_a_thread_between_two_other_clubs(ctx: Me
     client_third = client_for(third_ctx.president.user)
     response = client_third.get(reverse("mercato:thread-messages", args=[thread_id]))
     assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# CDC 10.3 n° 188 (décision du client du 27/11/2026) : le Coach, l'Assistant
+# du Coach et le Directeur sportif du club d'origine ne voient rien de la
+# dette d'un transfert bloqué ; Président, VP et Trésorier inchangés.
+# ---------------------------------------------------------------------------
+
+
+def _blocked_offer(ctx: MercatoClubContext, other_ctx: MercatoClubContext) -> TransferOffer:
+    """Offre du club B (``ctx``) pour un joueur en dette du club A
+    (``other_ctx``), acceptée puis bloquée."""
+
+    services.set_market_availability(membership=other_ctx.player, actor=other_ctx.player.user, is_on_market=True)
+    make_debtor(other_ctx.club, other_ctx.player)
+    offer = services.create_transfer_offer(
+        initiated_by=ctx.president.user, target_club=ctx.club, target_membership=other_ctx.player, message="Bonjour"
+    )
+    offer = services.respond_to_offer(offer=offer, actor=other_ctx.player.user, accept=True)
+    assert offer.status == TransferOffer.Status.BLOCKED_DEBT
+    return offer
+
+
+def _assert_no_debt_information(payload) -> None:
+    text = str(payload).lower()
+    assert "dette" not in text
+    assert "blocked_debt" not in text
+    assert "10.00" not in text
+    assert "amount_due" not in text
+
+
+@pytest.mark.parametrize("role_attr", ["coach", "assistant_coach", "sports_director"])
+def test_origin_club_sports_staff_never_see_debt_of_a_blocked_transfer(
+    ctx: MercatoClubContext, other_ctx: MercatoClubContext, role_attr: str
+):
+    from apps.clubs.models import MembershipRole
+    from apps.mercato.tests.conftest import make_member
+
+    offer = _blocked_offer(ctx, other_ctx)
+    if role_attr == "assistant_coach":
+        viewer = make_member(other_ctx.club, roles=[MembershipRole.Role.ASSISTANT_COACH])
+    else:
+        viewer = getattr(other_ctx, role_attr)
+    client = client_for(viewer.user)
+
+    detail = client.get(reverse("mercato:offer-detail", args=[offer.pk]))
+    assert detail.status_code == status.HTTP_200_OK
+    assert detail.data["status"] == "awaiting_quitus"
+    assert detail.data["debt_amount"] is None
+    assert detail.data["debt_checked_at"] is None
+    _assert_no_debt_information(detail.data)
+
+    listing = client.get(reverse("mercato:offer-club"), {"direction": "received"})
+    assert listing.status_code == status.HTTP_200_OK
+    row = next(item for item in listing.data["results"] if item["id"] == offer.pk)
+    assert row["status"] == "awaiting_quitus"
+    _assert_no_debt_information(listing.data)
+
+    # Le filtre porte sur le statut servi : ``blocked_debt`` ne révèle rien.
+    filtered = client.get(reverse("mercato:offer-club"), {"direction": "received", "status": "blocked_debt"})
+    assert filtered.data["count"] == 0
+    neutral = client.get(reverse("mercato:offer-club"), {"direction": "received", "status": "awaiting_quitus"})
+    assert [item["id"] for item in neutral.data["results"]] == [offer.pk]
+
+
+@pytest.mark.parametrize("role_attr", ["president", "vice_president", "treasurer"])
+def test_origin_club_finance_roles_still_see_the_debt(
+    ctx: MercatoClubContext, other_ctx: MercatoClubContext, role_attr: str
+):
+    offer = _blocked_offer(ctx, other_ctx)
+    client = client_for(getattr(other_ctx, role_attr).user)
+
+    detail = client.get(reverse("mercato:offer-detail", args=[offer.pk]))
+    assert detail.data["status"] == TransferOffer.Status.BLOCKED_DEBT
+    assert detail.data["debt_amount"] == "10.00"
+    assert detail.data["debt_checked_at"] is not None
+
+    filtered = client.get(reverse("mercato:offer-club"), {"direction": "received", "status": "blocked_debt"})
+    assert [item["id"] for item in filtered.data["results"]] == [offer.pk]
+
+
+def test_assistant_coach_who_is_also_treasurer_sees_the_debt(ctx: MercatoClubContext, other_ctx: MercatoClubContext):
+    """Rôles cumulables (matrice 2.4, droits = union) : le rôle sportif ne
+    retire pas l'accès aux finances que donne la fonction de Trésorier."""
+
+    from django.utils import timezone
+
+    from apps.clubs.models import MembershipRole
+    from apps.clubs.tests.factories import MembershipRoleFactory
+
+    offer = _blocked_offer(ctx, other_ctx)
+    viewer = other_ctx.treasurer
+    MembershipRoleFactory(
+        membership=viewer, club=other_ctx.club, role=MembershipRole.Role.ASSISTANT_COACH, appointed_at=timezone.now()
+    )
+    detail = client_for(viewer.user).get(reverse("mercato:offer-detail", args=[offer.pk]))
+    assert detail.data["status"] == TransferOffer.Status.BLOCKED_DEBT
+    assert detail.data["debt_amount"] == "10.00"
+
+
+def test_the_blocked_player_still_sees_his_debt(ctx: MercatoClubContext, other_ctx: MercatoClubContext):
+    offer = _blocked_offer(ctx, other_ctx)
+    response = client_for(other_ctx.player.user).get(reverse("mercato:offer-mine"))
+    row = next(item for item in response.data["results"] if item["id"] == offer.pk)
+    assert row["status"] == TransferOffer.Status.BLOCKED_DEBT
+    assert row["debt_amount"] == "10.00"
+
+
+@pytest.mark.parametrize("role_attr", ["president", "vice_president", "sports_director", "treasurer", "coach"])
+def test_target_club_never_sees_any_debt_information(
+    ctx: MercatoClubContext, other_ctx: MercatoClubContext, role_attr: str
+):
+    offer = _blocked_offer(ctx, other_ctx)
+    client = client_for(getattr(ctx, role_attr).user)
+
+    detail = client.get(reverse("mercato:offer-detail", args=[offer.pk]))
+    assert detail.data["status"] == "awaiting_quitus"
+    assert detail.data["debt_checked_at"] is None
+    _assert_no_debt_information(detail.data)
+
+    filtered = client.get(reverse("mercato:offer-club"), {"direction": "sent", "status": "blocked_debt"})
+    assert filtered.data["count"] == 0

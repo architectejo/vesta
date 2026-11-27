@@ -333,10 +333,30 @@ def test_staff_sees_availability_labels_without_any_financial_motive(ctx, world,
     }
     assert by_id[blocked["unfit"].pk]["availability"]["family"] == "unfit"
     assert by_id[blocked["unfit"].pk]["availability"]["label"].startswith("Inapte · retour prévu le ")
-    assert by_id[ctx.debtor.pk]["availability"] == {"label": "Indisponible", "family": "unavailable"}
+    # CDC 10.3 n° 188 : le Coach lit « Non éligible. », comme dans la
+    # composition ; les autres rôles « Indisponible » (page sans finance).
+    debt_label = "Non éligible." if role == "coach" else "Indisponible"
+    assert by_id[ctx.debtor.pk]["availability"] == {"label": debt_label, "family": "unavailable"}
     assert by_id[ctx.player.pk]["availability"] is None
     text = json.dumps(body)
     assert "dette" not in text.lower() and "MEDHIST-SECRET" not in text
+
+
+def test_assistant_coach_reads_non_eligible_for_a_debtor_on_the_cards(ctx, world, blocked):
+    """CDC 10.3 n° 188 : l'Assistant du Coach, comme le Coach, ne lit que
+    « Non éligible. » (``COACH_DEBT_MASKED_DETAIL``) : ni montant ni dette."""
+
+    from apps.clubs.models import MembershipRole
+    from apps.sport.services import COACH_DEBT_MASKED_DETAIL
+
+    assistant = make_member(ctx.club, roles=[MembershipRole.Role.ASSISTANT_COACH])
+    body = _cards(assistant.user, limit=100).json()
+    by_id = {r["membership_id"]: r for r in body["results"]}
+
+    assert by_id[ctx.debtor.pk]["availability"] == {"label": COACH_DEBT_MASKED_DETAIL, "family": "unavailable"}
+    assert by_id[blocked["suspended"].pk]["availability"]["family"] == "suspension"
+    text = json.dumps(body).lower()
+    assert "dette" not in text and "amount_due" not in text
 
 
 @pytest.mark.parametrize("who", ["player", "captain"])

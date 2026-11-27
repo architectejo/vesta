@@ -127,39 +127,55 @@ class MessageCreateSerializer(serializers.Serializer):
 # ---------------------------------------------------------------------------
 
 
-def _offer_status_for_viewer(offer: TransferOffer, *, viewer_club_id: int) -> str:
-    """Le club destinataire (B) ne voit jamais « Bloquée (dette) » : il voit
-    « Quitus en attente », sans montant ni mention de dette (§2.1 point 2,
-    §5.3, §8 de la fiche d'écran -- l'API choisit la clé, jamais l'interface)."""
+def sees_transfer_debt(offer: TransferOffer, *, viewer, viewer_club) -> bool:
+    """Le lecteur a-t-il droit à l'information financière d'une offre bloquée
+    (statut « Bloquée (dette) », montant, date de relecture du solde) ?
 
-    if offer.status == TransferOffer.Status.BLOCKED_DEBT and viewer_club_id == offer.target_club_id:
+    Oui seulement pour le joueur concerné et, côté club d'origine (A), pour
+    les rôles qui ont accès aux finances dans la matrice 2.4 : Président, VP,
+    Trésorier (rôles cumulables : un Coach qui est aussi Trésorier y a
+    droit). Jamais le Directeur sportif, le Coach ni l'Assistant du Coach du
+    club A (CDC 10.3 n° 188 ; fiche mercato §5.3, point ouvert n° 3), jamais
+    le club B (§2.1 point 2, point ouvert n° 2)."""
+
+    from apps.clubs.models import MembershipRole
+    from apps.core.roles import has_any_role
+
+    if offer.target_membership.user_id == getattr(viewer, "id", None):
+        return True
+    if getattr(viewer_club, "id", None) != offer.origin_club_id:
+        return False
+    finance_roles = {
+        MembershipRole.Role.PRESIDENT,
+        MembershipRole.Role.VICE_PRESIDENT,
+        MembershipRole.Role.TREASURER,
+    }
+    return has_any_role(viewer, finance_roles, club=viewer_club)
+
+
+def _offer_status_for_viewer(offer: TransferOffer, *, sees_debt: bool) -> str:
+    """Un lecteur sans droit à l'information financière (club B, et DS /
+    Coach / Assistant du club A) ne voit jamais « Bloquée (dette) » : il voit
+    « Quitus en attente » (``awaiting_quitus``), sans montant ni mention de
+    dette (§2.1 point 2, §5.3, §8 de la fiche d'écran ; CDC 10.3 n° 188 --
+    l'API choisit la clé, jamais l'interface)."""
+
+    if offer.status == TransferOffer.Status.BLOCKED_DEBT and not sees_debt:
         return "awaiting_quitus"
     return offer.status
 
 
 def serialize_offer(offer: TransferOffer, *, viewer, viewer_club) -> dict:
-    from apps.clubs.models import COACHING_STAFF_ROLES, MembershipRole
-    from apps.core.roles import has_any_role
-
-    viewer_club_id = getattr(viewer_club, "id", None)
-    is_origin_side = viewer_club_id == offer.origin_club_id
-    # Le montant de la dette n'est jamais visible du côté du club B (§2.1
-    # point 2), et seulement visible côté club A pour les rôles ayant accès
-    # aux finances (Pdt/VP/Trés) -- pas DS/Coach (§5.3 point ouvert n° 3,
-    # position la plus prudente).
-    show_amount = (
-        is_origin_side
-        and offer.status == TransferOffer.Status.BLOCKED_DEBT
-        and not has_any_role(
-            viewer,
-            {MembershipRole.Role.SPORTS_DIRECTOR, *COACHING_STAFF_ROLES},
-            club=viewer_club,
-        )
-    )
+    sees_debt = sees_transfer_debt(offer, viewer=viewer, viewer_club=viewer_club)
+    blocked = offer.status == TransferOffer.Status.BLOCKED_DEBT
+    # Montant et date de relecture du solde : seulement pour qui voit la
+    # dette (joueur ; Pdt/VP/Trés du club A). Pour les autres, une offre
+    # bloquée ne laisse filtrer aucune donnée financière.
+    show_amount = blocked and sees_debt
 
     return {
         "id": offer.pk,
-        "status": _offer_status_for_viewer(offer, viewer_club_id=viewer_club_id),
+        "status": _offer_status_for_viewer(offer, sees_debt=sees_debt),
         "origin_club": _club_brief(offer.origin_club),
         "target_club": _club_brief(offer.target_club),
         "player": serialize_public_player(offer.target_membership),
@@ -167,7 +183,7 @@ def serialize_offer(offer: TransferOffer, *, viewer, viewer_club) -> dict:
         "conditions": offer.conditions,
         "membership_fee_due_at_target": offer.membership_fee_due_at_target,
         "debt_amount": str(offer.debt_amount) if (show_amount and offer.debt_amount is not None) else None,
-        "debt_checked_at": offer.debt_checked_at,
+        "debt_checked_at": offer.debt_checked_at if (sees_debt or not blocked) else None,
         "player_decision_at": offer.player_decision_at,
         "quitus_available": bool(offer.quitus_file),
         "completed_at": offer.completed_at,

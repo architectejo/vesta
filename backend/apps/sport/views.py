@@ -1372,9 +1372,14 @@ class LockerRoomView(APIView):
 
 class EligibilityListView(APIView):
     """Éligibilité groupée des joueurs du club actif (sport-feuille-de-match.md
-    §4.1 et §4.1 bis ; CDC 4.8 : « en dette (montant affiché), suspendu
-    (nombre de matchs restants), inapte (avis médical), en attente
-    d'adhésion »).
+    §4.1 et §4.1 bis ; CDC 4.8 tel que modifié par la décision du client du
+    27/11/2026, CDC 10.3 n° 188). Motifs de non-éligibilité : attente
+    d'adhésion, suspension (nombre de matchs restants), inaptitude (aptitude
+    et date de retour seulement, jamais de diagnostic : CLAUDE.md règle
+    n° 11) et dette. Pour une dette, le Coach et l'Assistant du Coach ne
+    lisent que « Non éligible. » (``services.COACH_DEBT_MASKED_DETAIL``) :
+    ni montant, ni le mot « dette », code ``unavailable`` ; le motif et le
+    montant ne sont servis qu'au Président, au VP et au joueur lui-même.
 
     Réservée aux rôles qui composent (matrice 2.4, « Feuille de match et
     composition » et « Plan tactique » : É pour le Coach seul, donc aussi son
