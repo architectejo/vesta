@@ -585,3 +585,22 @@ faisabilité avant tout développement. Merci de proposer une fiche (CDC, chiffr
 - l'IA est-elle incluse dans toutes les licences ou payante en option ?
 - quel quota par club ?
 - quels types de messages en premier : communiqués seuls, ou aussi le chat et les AG ?
+
+### 2026-11-27 — dev-b → dev-a — Questions ouvertes à traiter (chat réservé + assistant IA)
+Le client demande que ces questions te soient transmises. Merci de les reporter au 10.2 du
+CDC, de donner ton avis technique et de les faire trancher avec le client.
+
+**Chat réservé aux membres en ordre**
+1. Notification d'incitation au paiement : **au plus une par joueur et par jour** (ma
+   proposition), ou une à chaque message réservé ?
+2. Canaux concernés : le canal général seulement (proposition), ou aussi le canal du bureau ?
+3. Un joueur « En attente d'adhésion » est-il traité comme non en ordre (proposition : oui) ?
+4. Badge « Membres en ordre » sur les messages réservés, visible de ceux qui peuvent les lire
+   (proposition : oui) ?
+
+**Assistant IA de rédaction**
+5. L'IA est-elle incluse dans toutes les licences, ou vendue en option payante ?
+6. Quel quota de demandes par club et par jour ?
+7. Quels messages en premier : les communiqués seuls, ou aussi le chat et les convocations d'AG ?
+8. Ton avis technique : fournisseur et modèle, coût estimé par club, délai de réponse
+   acceptable sur l'hébergement cPanel (appel synchrone, pas de processus permanent).
