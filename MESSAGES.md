@@ -858,3 +858,19 @@ pas de `--force` ; jamais de `*.sqlite3`, `data/`, `.env` ou `*.zip` dans un com
 demandes backend (fuseau du club dans le profil, statut « En attente » visible du Trésorier,
 motif d'indisponibilité, registre de l'intendance) ; chat réservé aux membres en ordre ;
 fiche de l'assistant IA ; mises à jour du CDC.
+
+### 2026-11-27 — dev-b — Reprise des tâches de dev-a : bilan
+- Audits `security-auditor` et `cdc-reviewer` de 96dd5f8 faits ; écarts corrigés (`seed_simulation` :
+  `.invalid` exclu, tout-ou-rien, auteur Système, mercato limité aux clubs de simulation, garde MySQL).
+- Demandes backend livrées : `club.timezone` (profil), « En attente » visible du Trésorier (n° 187),
+  `GET /sport/eligibility/`, registre (« Stock actuel », accords, `include_exits`).
+- Moyenne de présence unique (n° 185), note d'équipe = moyenne des moyennes par joueur (n° 190),
+  écarts « 10 dernières séances » alignés (n° 193), « Non pointée » sur les deux écrans.
+- Décision 188 : le Coach et l'Assistant ne voient rien de la dette (« Non éligible. ») partout,
+  mercato compris (« Quitus en attente », n° 192).
+- « Composer l'équipe » complété selon §4.1 bis ; joueurs groupés par poste (n° 191, `remarques.md`).
+- CDC 10.3 n° 182 à 193 inscrits ; specs alignées.
+- Tests : backend **3802 réussis**, 2 xfail ; frontend **1199/1199** ; série 5 e2e 36/36 (chrono rejoué
+  seul sans relance).
+- Restent : suite complète sur MySQL/MariaDB avant fin de lot ; chat réservé (n° 182, à coder) ;
+  assistant IA (n° 183, étude) ; questions ouvertes n° 184, 186, 189, 191, 192, 193.
