@@ -440,7 +440,7 @@ Un match accepté en défi (`challenge_status = accepted`) apparaît comme deux 
 
 Contrainte : **unique `(club, match, jersey_number)`** — deux joueurs d'un même club ne peuvent porter le même numéro de maillot du jour sur le même match (cas d'erreur attendu par `sport-espace-coach.md`).
 
-**Règle métier non négociable** (règle n° 5, CDC 4.8) : la composition refuse un `membership` en dette (`finance-engine.is_in_good_standing` faux), suspendu (`Suspension` active, §5.9), inapte (`HealthRecord.fitness_status = inapte`) ou en attente d'adhésion (`Membership.status = pending`), avec la raison retournée par le service et affichée en français (montant dû, nombre de matchs restants, avis médical…). La régularisation en Caisse Terrain Express (trésorerie) rend le joueur immédiatement sélectionnable, sans latence perceptible.
+**Règle métier non négociable** (règle n° 5, CDC 4.8) : la composition refuse un `membership` en dette (`finance-engine.is_in_good_standing` faux), suspendu (`Suspension` active, §5.9), inapte (`HealthRecord.fitness_status = inapte`) ou en attente d'adhésion (`Membership.status = pending`), avec la raison retournée par le service et affichée en français (montant dû pour le Président et le VP seulement, « Non éligible » pour le Coach (CDC 10.3 n° 188), nombre de matchs restants, date de retour d'un inapte sans diagnostic…). La régularisation en Caisse Terrain Express (trésorerie) rend le joueur immédiatement sélectionnable, sans latence perceptible.
 
 ### 5.7 `MatchSheet` et `MatchGoal` — Feuille de match (CDC 4.8)
 
