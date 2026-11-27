@@ -50,7 +50,7 @@ Ouverte depuis la liste, depuis le lien « Voir le plan tactique » de la page d
 - **Corps** :
   1. `PitchBoard` en mode `readonly` : le terrain, les pions (numéro et « Prénom N. ») et le calque du tableau noir (flèches, zones, textes). Un toucher sur un pion ouvre une petite fenêtre avec le nom complet, le numéro, le poste et, s'il en a une, la consigne du joueur. Aucun glisser-déposer, aucune barre d'outils.
   2. **« Consignes »** : d'abord les consignes par ligne (« Défense », « Milieu », « Attaque »), puis les consignes par joueur (avatar 24 px, nom, texte). Pour un joueur connecté qui a une consigne, un bloc « Pour vous » apparaît en tête, sur fond `--color-surface-muted`.
-  3. **Joueurs devenus indisponibles depuis la publication** : le pion est grisé, avec cadenas. Le Coach voit la raison complète (« En dette : {montant} », « Suspendu : encore {n} match(s) », « Inapte · retour prévu le {date} », « En attente d'adhésion »). Tous les autres rôles voient seulement le badge gris « Indisponible », sans motif (10.2 n° 16).
+  3. **Joueurs devenus indisponibles depuis la publication** : le pion est grisé, avec cadenas. Le Coach voit la raison (« Non éligible » pour une dette, sans montant ni mention de dette (décision du client, CDC 10.3 n° 188), « Suspendu : encore {n} match(s) », « Inapte · retour prévu le {date} », « En attente d'adhésion »). Tous les autres rôles voient seulement le badge gris « Indisponible », sans motif (10.2 n° 16).
 - **Pied** : « Fermer ». Pour le Coach seulement, action principale « Modifier sur le tableau noir » (vers `/plans/{id}/tableau`). Menu « … » de l'en-tête, pour le Coach : « Dupliquer », « Supprimer le plan ».
 
 ### 4.2 « Nouveau plan » — taille `md`
@@ -77,7 +77,7 @@ Ouverte par un toucher sur un emplacement vide (l'alternative au glisser-dépose
 - En-tête : « Choisir un joueur » ; sous-titre « Emplacement : {Défenseur central gauche} ».
 - Corps : `PlayerSearch` avec la portée club et le contexte d'éligibilité `eligibleFor="plan:{id}"`. Les suggestions montrent d'abord les joueurs du poste de l'emplacement, puis les autres.
   - Les joueurs déjà placés sur ce plan apparaissent avec la mention « Déjà placé ({emplacement}) ». Les choisir les **déplace** vers cet emplacement.
-  - Les joueurs **non éligibles** sont visibles mais grisés, non sélectionnables (`aria-disabled`), avec la raison de l'API en 14 px : « En dette : {montant} », « Suspendu : encore {n} match(s) », « Inapte (avis médical) », « En attente d'adhésion ».
+  - Les joueurs **non éligibles** sont visibles mais grisés, non sélectionnables (`aria-disabled`), avec la raison de l'API en 14 px : « Non éligible » (dette, décision du client, CDC 10.3 n° 188), « Suspendu : encore {n} match(s) », « Inapte · retour prévu le {date} », « En attente d'adhésion ».
 - Pied : « Annuler » seul, car la sélection d'une suggestion place immédiatement le joueur. Toast : « {nom} placé en {emplacement}. », avec l'action « Annuler ».
 
 ### 4.5 « Modifier le numéro et le poste » (4.11) — taille `sm`
@@ -172,7 +172,7 @@ Sur écran tactile, le glissement démarre après un appui long de 250 ms (desig
 
 ### 5.3 Joueurs non éligibles : aucun contournement (CLAUDE.md §2.5, CDC 4.11, critère 9.2 du Lot 3)
 
-La raison est toujours affichée : « En dette : {montant} », « Suspendu : encore {n} match(s) », « Inapte (avis médical) », « En attente d'adhésion ». Le Coach est le seul à éditer, et il voit les raisons complètes du 4.8, sans jamais de diagnostic.
+La raison est toujours affichée : « Non éligible » (dette), « Suspendu : encore {n} match(s) », « Inapte · retour prévu le {date} », « En attente d'adhésion ». Le Coach est le seul à éditer ; il ne voit jamais de diagnostic ni rien de la dette d'un joueur (décision du client, CDC 10.3 n° 188).
 
 | Chemin | Comportement exigé |
 | --- | --- |

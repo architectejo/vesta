@@ -629,7 +629,7 @@ stateDiagram-v2
 - Liste de tous les joueurs du club avec case à cocher, recherche et filtre par poste.
 - Aucune limite artificielle : le Coach peut cocher tous les joueurs disponibles.
 - Chaque joueur coché est marqué titulaire ou remplaçant, avec son poste et son numéro du jour.
-- Les joueurs non sélectionnables sont grisés avec la raison : en dette (montant affiché), suspendu (nombre de matchs restants), inapte (avis médical), en attente d'adhésion.
+- Les joueurs non sélectionnables sont grisés avec la raison : non éligible (joueur en dette : ni montant ni mention de dette pour le Coach, 10.3 n° 188), suspendu (nombre de matchs restants), inapte (date de retour, jamais de diagnostic), en attente d'adhésion.
 - Régularisation sur place : un paiement validé par la Caisse Terrain Express rend le joueur immédiatement sélectionnable.
 - Bouton « Publier la composition » : visible par les joueurs du club, en lecture seule, après connexion ; notification aux joueurs convoqués.
 
