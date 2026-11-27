@@ -225,7 +225,7 @@ class ChatMessageSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ChatMessage
-        fields = ["id", "channel_id", "sender", "body", "image_url", "sent_at"]
+        fields = ["id", "channel_id", "sender", "body", "image_url", "sent_at", "members_in_order_only"]
         read_only_fields = fields
 
     def get_sender(self, obj: ChatMessage) -> dict:
@@ -242,15 +242,30 @@ class ChatMessageSerializer(serializers.ModelSerializer):
 class ChatMessageCreateInputSerializer(serializers.Serializer):
     body = serializers.CharField(required=False, allow_blank=True, max_length=2000, default="")
     image = serializers.ImageField(required=False, allow_null=True, default=None)
+    members_in_order_only = serializers.BooleanField(required=False, default=False)
 
 
 class ChatChannelSerializer(serializers.ModelSerializer):
+    """Canal de chat vu par le lecteur courant. Le contexte porte ``reader``
+    (``apps.social.services.ChatReader``, calcule une fois par requete) :
+    non-lus et dernier message ne comptent jamais un message reserve que le
+    lecteur ne peut pas lire (10.3 n° 182)."""
+
     unread_count = serializers.SerializerMethodField()
     last_message = serializers.SerializerMethodField()
+    can_restrict_to_members_in_order = serializers.SerializerMethodField()
+    has_hidden_reserved_messages = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatChannel
-        fields = ["id", "channel_type", "unread_count", "last_message"]
+        fields = [
+            "id",
+            "channel_type",
+            "unread_count",
+            "last_message",
+            "can_restrict_to_members_in_order",
+            "has_hidden_reserved_messages",
+        ]
         read_only_fields = fields
 
     def get_unread_count(self, obj: ChatChannel) -> int:
@@ -259,10 +274,26 @@ class ChatChannelSerializer(serializers.ModelSerializer):
             return 0
         from apps.social.services import get_unread_count
 
-        return get_unread_count(channel=obj, membership=membership)
+        return get_unread_count(channel=obj, membership=membership, reader=self.context.get("reader"))
 
     def get_last_message(self, obj: ChatChannel) -> dict | None:
-        message = obj.messages.order_by("-sent_at").first()
+        from apps.social.services import filter_readable_messages
+
+        message = (
+            filter_readable_messages(obj.messages.select_related("sender"), reader=self.context.get("reader"))
+            .order_by("-sent_at", "-id")
+            .first()
+        )
         if message is None:
             return None
         return ChatMessageSerializer(message, context=self.context).data
+
+    def get_can_restrict_to_members_in_order(self, obj: ChatChannel) -> bool:
+        from apps.social.services import can_restrict_to_members_in_order
+
+        return can_restrict_to_members_in_order(reader=self.context.get("reader"), channel=obj)
+
+    def get_has_hidden_reserved_messages(self, obj: ChatChannel) -> bool:
+        from apps.social.services import has_hidden_reserved_messages
+
+        return has_hidden_reserved_messages(channel=obj, reader=self.context.get("reader"))

@@ -349,6 +349,11 @@ class ChatMessage(TenantModel):
         help_text="Toujours prive (point de securite critique, voir docstring du module).",
     )
     sent_at = models.DateTimeField(auto_now_add=True)
+    # 10.3 n° 182 (decision du client du 27/11/2026) : message reserve aux
+    # joueurs « En ordre » (statut calcule a la lecture, jamais stocke),
+    # a son auteur et aux roles du canal du bureau. Pose uniquement par un
+    # role du bureau, dans le canal General (``apps.social.services``).
+    members_in_order_only = models.BooleanField(default=False)
 
     class Meta(TenantModel.Meta):
         verbose_name = "Message de chat"

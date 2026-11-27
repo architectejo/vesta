@@ -23,10 +23,14 @@ resultats).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime, time
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.clubs.models import Membership, MembershipRole
@@ -68,6 +72,13 @@ __all__ = [
     "get_announcement_read_summary",
     "ensure_channels",
     "can_access_channel",
+    "ChatReader",
+    "get_chat_reader",
+    "filter_readable_messages",
+    "can_read_message",
+    "can_restrict_to_members_in_order",
+    "has_hidden_reserved_messages",
+    "MEMBERS_IN_ORDER_INCENTIVE_MESSAGE",
     "send_chat_message",
     "mark_channel_read",
     "get_unread_count",
@@ -463,10 +474,218 @@ def can_access_channel(*, user, channel: ChatChannel) -> bool:
     return True
 
 
-def send_chat_message(*, channel: ChatChannel, actor, body: str = "", image=None, now=None) -> ChatMessage:
+# ---------------------------------------------------------------------------
+# Messages reserves aux membres en ordre (10.3 n° 182, decision du client du
+# 27/11/2026)
+# ---------------------------------------------------------------------------
+
+MEMBERS_IN_ORDER_INCENTIVE_MESSAGE = (
+    "Un message réservé aux membres en ordre a été publié dans le chat. "
+    "Régularisez votre cotisation pour voir toutes les informations et tous les messages du groupe."
+)
+_RESTRICTED_ROLE_REFUSED = "Seuls les membres du bureau peuvent réserver un message aux membres en ordre."
+_RESTRICTED_CHANNEL_REFUSED = (
+    "Un message réservé aux membres en ordre ne peut être publié que dans le canal Général."
+)
+
+
+@dataclass(frozen=True)
+class ChatReader:
+    """Ce que le lecteur courant a le droit de voir dans le chat, calcule UNE
+    fois par requete (pas de N+1) par :func:`get_chat_reader`.
+
+    - ``user_id`` : l'auteur voit toujours ses propres messages reserves ;
+    - ``is_board_member`` : role du canal du bureau (n° 165) -- voit les
+      messages reserves meme en dette, et seul a pouvoir en publier ;
+    - ``can_read_reserved`` : vrai pour un role du bureau ou un joueur
+      « En ordre » (statut calcule par la tresorerie, a la lecture) ;
+    - ``is_player`` : faux pour un Superuser en session de support (Ghost
+      Mode, sans fiche joueur) -- ni bandeau, ni case, ni incitation."""
+
+    user_id: Optional[int]
+    is_board_member: bool
+    can_read_reserved: bool
+    is_player: bool = True
+
+
+def _is_member_in_order(membership: Membership) -> bool:
+    """Statut « En ordre » calcule par la tresorerie (regle 2 : jamais de
+    solde stocke ; cotisations libres exclues par la formule du solde).
+    Un joueur « En attente » d'adhesion est traite comme non en ordre
+    (proposition par defaut du n° 182). Parametres du club absents (devise,
+    fuseau) : statut inconnu, donc position la plus prudente (non en ordre)."""
+
+    from apps.treasury.services import TreasuryError, is_in_good_standing
+
+    if membership.status != Membership.Status.ACTIVE:
+        return False
+    try:
+        in_order, _amount_due, _reason = is_in_good_standing(membership)
+    except TreasuryError:
+        return False
+    return bool(in_order)
+
+
+def get_chat_reader(*, user, club, membership: Optional[Membership]) -> ChatReader:
+    """Point d'entree unique du droit de lecture des messages reserves.
+
+    ``membership`` vaut ``None`` pour un Superuser en Ghost Mode (aucune
+    fiche joueur) : position prudente, il ne voit pas les messages
+    reserves (point ouvert signale au compte rendu)."""
+
+    user_id = getattr(user, "id", None)
+    if membership is None or club is None:
+        return ChatReader(user_id=user_id, is_board_member=False, can_read_reserved=False, is_player=False)
+    is_board_member = has_any_role(user, BOARD_CHANNEL_ROLES, club=club)
+    if is_board_member:
+        return ChatReader(user_id=user_id, is_board_member=True, can_read_reserved=True)
+    return ChatReader(user_id=user_id, is_board_member=False, can_read_reserved=_is_member_in_order(membership))
+
+
+def filter_readable_messages(queryset, *, reader: Optional[ChatReader]):
+    """Restreint ``queryset`` (messages de chat) a ce que ``reader`` peut lire.
+    Seule regle de filtrage du n° 182 : liste, interrogation ``after=``,
+    dernier message, compteur de non-lus et image s'appuient dessus.
+    ``reader`` absent : position la plus restrictive (aucun message reserve)."""
+
+    if reader is not None and reader.can_read_reserved:
+        return queryset
+    visible = Q(members_in_order_only=False)
+    if reader is not None and reader.user_id is not None:
+        visible |= Q(sender_id=reader.user_id)
+    return queryset.filter(visible)
+
+
+def can_read_message(*, message: ChatMessage, reader: Optional[ChatReader]) -> bool:
+    """Version unitaire de :func:`filter_readable_messages` (meme regle)."""
+
+    if not message.members_in_order_only:
+        return True
+    if reader is None:
+        return False
+    return reader.can_read_reserved or (reader.user_id is not None and message.sender_id == reader.user_id)
+
+
+def can_restrict_to_members_in_order(*, reader: Optional[ChatReader], channel: ChatChannel) -> bool:
+    """La case « Réservé aux membres en ordre » est-elle proposee ? (role du
+    bureau, canal General seulement -- proposition par defaut du n° 182)."""
+
+    return bool(reader and reader.is_board_member) and channel.channel_type == ChatChannel.ChannelType.GENERAL
+
+
+def has_hidden_reserved_messages(*, channel: ChatChannel, reader: Optional[ChatReader]) -> bool:
+    """Indicateur du bandeau (docs/ecrans/fil-public-communication.md C7.4) :
+    vrai seulement pour un joueur du canal General a qui au moins un message
+    reserve est cache. Un seul booleen -- jamais de nombre, de date ni
+    d'auteur. Faux pour un Superuser en session de support (pas de bandeau).
+    Une requete ``exists()`` au plus par canal."""
+
+    if reader is None or not reader.is_player or reader.can_read_reserved:
+        return False
+    if channel.channel_type != ChatChannel.ChannelType.GENERAL:
+        return False
+    hidden = ChatMessage.all_objects.filter(club=channel.club, channel=channel, members_in_order_only=True)
+    if reader.user_id is not None:
+        hidden = hidden.exclude(sender_id=reader.user_id)
+    return hidden.exists()
+
+
+def _club_day_start(club, now) -> Optional[datetime]:
+    """Debut du jour courant dans le fuseau du club (``None`` si le club n'a
+    pas de fuseau valide)."""
+
+    from apps.clubs.models import ClubSettings
+
+    club_settings = ClubSettings.objects.filter(club_id=club.id).first()
+    if club_settings is None:
+        return None
+    try:
+        tz = ZoneInfo(club_settings.timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+    return datetime.combine(now.astimezone(tz).date(), time.min, tzinfo=tz)
+
+
+def _notify_members_not_in_order(message: ChatMessage, *, now) -> int:
+    """Incitation aux joueurs actifs non en ordre (n° 182, CDC 4.17) : texte
+    fixe, jamais le contenu du message ; au plus une par joueur et par jour
+    dans le fuseau du club (proposition par defaut). Synchrone et borne a
+    l'effectif du club (pas de processus permanent, CLAUDE.md §4).
+
+    Le chat n'emet aucune notification pour ses messages ordinaires : les
+    lecteurs autorises sont « prevenus » par le compteur de non-lus, deja
+    filtre par :func:`filter_readable_messages` ; aucune notification n'est
+    donc creee pour eux.
+
+    Destination : aucun objet cible (``link_object_type`` vide) ; l'interface
+    oriente ``event_type = chat_members_in_order_incentive`` vers le solde du
+    joueur (son profil)."""
+
+    from apps.notifications.models import Notification
+    from apps.notifications.services import create_notification
+    from apps.treasury.services import TreasuryError, get_balances
+
+    club = message.club
+    day_start = _club_day_start(club, now)
+    if day_start is None:
+        return 0
+    try:
+        balances = get_balances(club)
+    except TreasuryError:
+        return 0
+
+    board_membership_ids = set(
+        MembershipRole.all_objects.filter(
+            club=club, revoked_at__isnull=True, role__in=BOARD_CHANNEL_ROLES
+        ).values_list("membership_id", flat=True)
+    )
+    already_notified = set(
+        Notification.objects.filter(
+            club=club,
+            event_type=Notification.EventType.CHAT_MEMBERS_IN_ORDER_INCENTIVE,
+            created_at__gte=day_start,
+        ).values_list("recipient_id", flat=True)
+    )
+    memberships = (
+        Membership.all_objects.filter(club=club, status=Membership.Status.ACTIVE)
+        .exclude(user_id=message.sender_id)
+        .select_related("user")
+    )
+    sent = 0
+    for membership in memberships:
+        if membership.pk in board_membership_ids or membership.user_id in already_notified:
+            continue
+        # Meme regle que `is_in_good_standing` : en ordre si le solde calcule
+        # n'est pas negatif (types obligatoires seulement, regle 2).
+        if balances.get(membership.pk, 0) >= 0:
+            continue
+        create_notification(
+            recipient=membership.user,
+            event_type=Notification.EventType.CHAT_MEMBERS_IN_ORDER_INCENTIVE,
+            message=MEMBERS_IN_ORDER_INCENTIVE_MESSAGE,
+            club=club,
+            target=None,
+            now=now,
+        )
+        already_notified.add(membership.user_id)
+        sent += 1
+    return sent
+
+
+def send_chat_message(
+    *, channel: ChatChannel, actor, body: str = "", image=None, members_in_order_only: bool = False, now=None
+) -> ChatMessage:
     now = now or timezone.now()
     if not can_access_channel(user=actor, channel=channel):
         raise SocialPermissionError("Vous n'avez pas accès à ce canal.")
+
+    members_in_order_only = bool(members_in_order_only)
+    if members_in_order_only:
+        # 10.3 n° 182 : roles du canal du bureau (n° 165), canal General seulement.
+        if not has_any_role(actor, BOARD_CHANNEL_ROLES, club=channel.club):
+            raise SocialPermissionError(_RESTRICTED_ROLE_REFUSED)
+        if channel.channel_type != ChatChannel.ChannelType.GENERAL:
+            raise SocialValidationError(_RESTRICTED_CHANNEL_REFUSED)
 
     body = (body or "").strip()
     if not body and not image:
@@ -474,14 +693,28 @@ def send_chat_message(*, channel: ChatChannel, actor, body: str = "", image=None
 
     if image:
         rename_upload_to_real_type(image)
-    message = ChatMessage.all_objects.create(club=channel.club, channel=channel, sender=actor, body=body, image=image)
+    message = ChatMessage.all_objects.create(
+        club=channel.club,
+        channel=channel,
+        sender=actor,
+        body=body,
+        image=image,
+        members_in_order_only=members_in_order_only,
+    )
+    # Journal sans le texte du message (n° 166).
     log_action(
         actor=actor,
         club=channel.club,
         action_type="social.chat_message.sent",
         obj=message,
-        after={"channel_type": channel.channel_type, "has_image": bool(image)},
+        after={
+            "channel_type": channel.channel_type,
+            "has_image": bool(image),
+            "members_in_order_only": members_in_order_only,
+        },
     )
+    if members_in_order_only:
+        _notify_members_not_in_order(message, now=now)
     return message
 
 
@@ -496,9 +729,14 @@ def mark_channel_read(*, channel: ChatChannel, membership: Membership, message: 
     return read
 
 
-def get_unread_count(*, channel: ChatChannel, membership: Membership) -> int:
+def get_unread_count(*, channel: ChatChannel, membership: Membership, reader: Optional[ChatReader] = None) -> int:
+    """Non-lus du canal, sans jamais compter un message que ``reader`` ne
+    peut pas lire (n° 182). ``reader`` omis : aucun message reserve compte."""
+
     read = ChatChannelRead.all_objects.filter(club=channel.club, channel=channel, membership=membership).first()
-    queryset = ChatMessage.all_objects.filter(club=channel.club, channel=channel)
+    queryset = filter_readable_messages(
+        ChatMessage.all_objects.filter(club=channel.club, channel=channel), reader=reader
+    )
     if read is not None and read.last_read_message_id is not None:
         queryset = queryset.filter(id__gt=read.last_read_message_id)
     return queryset.count()

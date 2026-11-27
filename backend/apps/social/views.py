@@ -39,6 +39,7 @@ _POST_NOT_FOUND = "Cette publication n'existe plus."
 _COMMENT_NOT_FOUND = "Ce commentaire n'existe pas."
 _ANNOUNCEMENT_NOT_FOUND = "Ce communiqué n'existe pas dans ce club."
 _CHANNEL_NOT_FOUND = "Ce canal n'existe pas dans ce club."
+_CHAT_MESSAGE_NOT_FOUND = "Ce message n'existe pas dans ce club."
 _INTERACTION_RESTRICTED = (
     "Commenter, aimer et signaler restent pour l'instant réservés aux publications de votre "
     "propre club, y compris quand la publication est Publique (restriction technique provisoire, "
@@ -412,6 +413,13 @@ class AnnouncementImageDownloadView(APIView):
 # ---------------------------------------------------------------------------
 
 
+def _chat_reader(request, membership: Optional[Membership]) -> services.ChatReader:
+    """Droit de lecture des messages reserves (10.3 n° 182), calcule UNE fois
+    par requete (le statut « En ordre » est calcule a la lecture)."""
+
+    return services.get_chat_reader(user=request.user, club=get_active_club(), membership=membership)
+
+
 class ChatChannelListView(APIView):
     permission_classes = _GATE + [IsActiveClubMember]
 
@@ -419,8 +427,11 @@ class ChatChannelListView(APIView):
         club = get_active_club()
         services.ensure_channels(club)
         membership = _own_membership(request)
+        reader = _chat_reader(request, membership)
         channels = [c for c in ChatChannel.objects.filter(club=club) if services.can_access_channel(user=request.user, channel=c)]
-        data = ser.ChatChannelSerializer(channels, many=True, context={"request": request, "membership": membership}).data
+        data = ser.ChatChannelSerializer(
+            channels, many=True, context={"request": request, "membership": membership, "reader": reader}
+        ).data
         return Response({"results": data})
 
 
@@ -442,18 +453,21 @@ class ChatMessageListCreateView(APIView):
         if channel is None:
             return _not_found(_CHANNEL_NOT_FOUND)
 
-        queryset = ChatMessage.objects.filter(channel=channel)
+        reader = _chat_reader(request, _own_membership(request))
+        queryset = services.filter_readable_messages(
+            ChatMessage.objects.filter(channel=channel).select_related("sender"), reader=reader
+        )
         after = request.query_params.get("after")
         if after:
             try:
-                queryset = queryset.filter(id__gt=int(after)).order_by("sent_at")
+                queryset = queryset.filter(id__gt=int(after)).order_by("sent_at", "id")
             except ValueError:
                 pass
             items = list(queryset)
             count = len(items)
             next_offset = None
         else:
-            queryset = queryset.order_by("-sent_at")
+            queryset = queryset.order_by("-sent_at", "-id")
             items, count, next_offset = _paginate(request, queryset)
             items = list(reversed(items))
 
@@ -471,7 +485,11 @@ class ChatMessageListCreateView(APIView):
 
         try:
             message = services.send_chat_message(
-                channel=channel, actor=request.user, body=data.get("body", ""), image=data.get("image")
+                channel=channel,
+                actor=request.user,
+                body=data.get("body", ""),
+                image=data.get("image"),
+                members_in_order_only=data.get("members_in_order_only", False),
             )
         except services.SocialError as exc:
             return _social_error_response(exc)
@@ -489,21 +507,29 @@ class ChatChannelReadView(APIView):
         if channel is None:
             return _not_found(_CHANNEL_NOT_FOUND)
 
+        membership = _own_membership(request)
+        # Un message reserve que le lecteur ne peut pas lire n'est jamais pris
+        # comme dernier lu (10.3 n° 182).
+        readable = services.filter_readable_messages(
+            ChatMessage.objects.filter(channel=channel), reader=_chat_reader(request, membership)
+        )
         message = None
         last_read_message_id = request.data.get("last_read_message_id")
         if last_read_message_id:
-            message = ChatMessage.objects.filter(pk=last_read_message_id, channel=channel).first()
+            message = readable.filter(pk=last_read_message_id).first()
         else:
-            message = ChatMessage.objects.filter(channel=channel).order_by("-sent_at").first()
+            message = readable.order_by("-sent_at", "-id").first()
 
-        services.mark_channel_read(channel=channel, membership=_own_membership(request), message=message)
+        services.mark_channel_read(channel=channel, membership=membership, message=message)
         return Response({"detail": "ok"})
 
 
 class ChatMessageImageDownloadView(APIView):
     """Vue authentifiee pour une image de chat (point de securite critique,
     TOUJOURS privee, meme canal General -- voir docstring de
-    apps.social.models)."""
+    apps.social.models). Un message reserve aux membres en ordre que le
+    lecteur ne peut pas lire repond 404, comme un message inexistant
+    (10.3 n° 182 : le message est absent pour lui)."""
 
     permission_classes = _GATE + [IsActiveClubMember]
 
@@ -511,12 +537,15 @@ class ChatMessageImageDownloadView(APIView):
         try:
             message = ChatMessage.objects.select_related("channel").get(pk=pk)
         except ChatMessage.DoesNotExist:
-            return _not_found("Ce message n'existe pas dans ce club.")
+            return _not_found(_CHAT_MESSAGE_NOT_FOUND)
 
         if not message.image:
             return _not_found("Cette image n'existe pas.")
 
         if not services.can_access_channel(user=request.user, channel=message.channel):
             return Response({"detail": "Vous n'avez plus accès à ce canal."}, status=status.HTTP_403_FORBIDDEN)
+
+        if not services.can_read_message(message=message, reader=_chat_reader(request, _own_membership(request))):
+            return _not_found(_CHAT_MESSAGE_NOT_FOUND)
 
         return private_file_response(message.image, download_stem=f"image-{message.pk}", as_attachment=False)

@@ -137,6 +137,14 @@ class Notification(models.Model):
             "performance_results_available",
             "Mesures de performance disponibles",
         )
+        # 10.3 n° 182 (decision du client du 27/11/2026) : incitation envoyee
+        # aux joueurs actifs non en ordre quand un message du chat reserve
+        # aux membres en ordre est publie (au plus une par joueur et par jour,
+        # proposition par defaut). In-app seulement ; jamais le contenu.
+        CHAT_MEMBERS_IN_ORDER_INCENTIVE = (
+            "chat_members_in_order_incentive",
+            "Message réservé aux membres en ordre",
+        )
 
     class EmailStatus(models.TextChoices):
         NOT_APPLICABLE = "not_applicable", "Sans objet"
