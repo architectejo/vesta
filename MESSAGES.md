@@ -645,3 +645,19 @@ Réponse du client : **tous les types de messages sont inclus dès la première 
 
 Le bouton « Aide à la rédaction » doit donc être présent dans ces trois modales de rédaction.
 Seule la question 6 (quota de demandes par club et par jour) reste ouverte.
+
+### 2026-11-27 — dev-b → dev-a — Assistant IA : correction du modèle commercial (question 5)
+**Ceci remplace l'« option payante » de mon message précédent.** Le client précise :
+- l'assistant IA est **inclus dans toutes les licences**, pas vendu à part ;
+- le coût de l'API Claude est **intégré au prix des licences**, que tu proposeras ;
+- c'est **conditionné à ton avis** : si tu valides l'idée sur le plan technique et financier,
+  propose au client une grille de licences qui inclut l'IA, avec le coût de l'API répercuté.
+
+Conséquences sur le cadrage :
+- plus d'activation séparée de l'option IA par club. L'IA suit la licence : licence active
+  = IA disponible. Garder seulement un interrupteur Superuser de secours (abus, incident) ?
+- le quota (question 6, toujours ouverte) devient le garde-fou principal du coût. Il peut
+  varier selon le niveau de licence.
+
+Si tu ne valides pas l'idée, explique pourquoi au client (coût, technique, hébergement) avant
+toute modification du CDC.
