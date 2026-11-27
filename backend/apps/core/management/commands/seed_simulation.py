@@ -49,6 +49,7 @@ from apps.accounts import services as accounts_services
 from apps.assemblies import services as assemblies_services
 from apps.clubs import services as clubs_services
 from apps.clubs.models import Club, Membership, MembershipRole, Season
+from apps.core.services import log_action
 from apps.core.tenant import active_club
 from apps.logistics import services as logistics_services
 from apps.logistics.models import Article
@@ -63,6 +64,27 @@ from apps.treasury import services as treasury_services
 from apps.treasury.models import ContributionType, Expense, ExpenseCategory, SocialAssistanceRequest
 
 TZ = datetime.timezone.utc
+
+# Motif ecrit lors du deverrouillage temporaire des evenements historiques
+# (sert aussi a retrouver, pour les re-verrouiller, ceux qu'une execution
+# precedente de cette commande aurait laisses deverrouilles).
+SEED_UNLOCK_REASON_PREFIX = "Peuplement de la démo"
+
+# Domaines reserves/fictifs (RFC 2606, RFC 6761) : seuls les comptes portant
+# un de ces domaines sont consideres comme des comptes de simulation (jamais
+# les comptes reels du club pilote).
+FICTITIOUS_EMAIL_DOMAINS = frozenset({"example.com", "example.org", "example.net"})
+FICTITIOUS_EMAIL_SUFFIXES = (".local", ".invalid", ".test", ".example", ".localhost")
+
+
+def is_simulation_email(email: str) -> bool:
+    """Vrai pour un email de compte de simulation (domaine reserve/fictif)."""
+
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        return False
+    domain = email.rsplit("@", 1)[1]
+    return domain in FICTITIOUS_EMAIL_DOMAINS or domain.endswith(FICTITIOUS_EMAIL_SUFFIXES)
 
 
 def _dt(y, m, d, hh=8, mm=0):
@@ -88,8 +110,23 @@ class Command(BaseCommand):
             ),
         )
 
+        parser.add_argument(
+            "--prepare-e2e-accounts",
+            action="store_true",
+            default=False,
+            help=(
+                "Desactive par defaut. Pour les seuls comptes du club a email de domaine reserve/fictif "
+                "(example.com/.org/.net, *.local, *.invalid, *.test, *.example, *.localhost) : leve "
+                "l'obligation de changer le mot de passe initial et accepte la derniere version des CGU "
+                "(journalise), pour les sessions de recette e2e. A NE PAS utiliser sur un club reel dont "
+                "des comptes ont une adresse provisoire (ex. .invalid) : ils perdraient l'obligation de "
+                "changer leur mot de passe initial."
+            ),
+        )
+
     def handle(self, *args, **options):
         refuse_outside_development("seed_simulation")
+        self.prepare_e2e_accounts = bool(options.get("prepare_e2e_accounts"))
         try:
             club = Club.objects.get(slug=options["club"])
         except Club.DoesNotExist:
@@ -135,6 +172,8 @@ class Command(BaseCommand):
         self._section("6. Assemblée générale (quorum, décision, PV en brouillon)", self._seed_assembly)
         self._section("7. Fil social (publications, communiqué, chat)", self._seed_social)
         self._section("8. Démonstration des règles de blocage (dette, suspension, inaptitude)", self._seed_blocking_rules_demo)
+        self._section("9. Re-verrouillage des séances/matchs passés (CDC 4.7)", self._relock_seeded_events)
+        self._section("10. Comptes de simulation e2e (option --prepare-e2e-accounts)", self._prepare_simulation_accounts)
 
         self.stdout.write(self.style.SUCCESS("seed_simulation terminé."))
 
@@ -145,6 +184,13 @@ class Command(BaseCommand):
         fichier non plus."""
 
         logo_path = Path(settings.BASE_DIR).parent / "data" / "logo.jpeg"
+        if not logo_path.is_file():
+            if not getattr(self, "_logo_missing_reported", False):
+                self.stdout.write(
+                    f"  Logo absent ({logo_path}) : les pièces jointes et images de démonstration sont omises."
+                )
+                self._logo_missing_reported = True
+            return None
         with open(logo_path, "rb") as fh:
             return SimpleUploadedFile(name, fh.read(), content_type="image/jpeg")
 
@@ -160,6 +206,8 @@ class Command(BaseCommand):
         from django import forms
 
         upload = self._jpeg_file(name)
+        if upload is None:
+            return None
         return forms.ImageField().clean(upload)
 
     def _section(self, title, fn):
@@ -367,6 +415,9 @@ class Command(BaseCommand):
                 self.stdout.write("  Demande d'assistance sociale déjà présente : rien à refaire.")
             else:
                 piece = self._jpeg_file("acte_naissance.jpg")
+                if piece is None:
+                    self.stdout.write("  Demande d'assistance sociale non créée : pièce justificative indisponible (logo absent).")
+                    return
                 treasury_services.submit_social_assistance_request(
                     membership=requester, submitted_by=requester.user, event_type=treasury_services.SocialAssistanceEvent.BIRTH,
                     event_date=datetime.date(2026, 9, 10), description="Naissance de mon enfant", attachment=piece, now=_dt(2026, 9, 11),
@@ -456,12 +507,15 @@ class Command(BaseCommand):
                 club=club, season=self.season, event_date=date_, gathering_time=datetime.time(15, 0),
                 late_arrival_cutoff=datetime.time(15, 15), created_by=self.coach, location="Terrain principal",
             )
-            sport_services.unlock_event(session.event, superuser=superuser, reason="Peuplement de la démo (séance historique).")
+            sport_services.unlock_event(session.event, superuser=superuser, reason=f"{SEED_UNLOCK_REASON_PREFIX} (séance historique).")
             for i, membership in enumerate(present):
                 arrived = _dt(2026, 9, day, 15, 5) if i % 5 != 0 else _dt(2026, 9, day, 15, 20)
                 sport_services.mark_arrival(session=session, membership=membership, arrived_at=arrived, marked_by=self.coach)
                 if i % 5 != 0:
                     sport_services.assign_team(session=session, membership=membership, team=("A" if i % 2 == 0 else "B"), assigned_by=self.coach)
+            # Séance passée : re-verrouillée dès le pointage terminé (CDC 4.7,
+            # verrouillage à minuit) -- jamais laissée déverrouillée.
+            self._relock_event(session.event, actor=superuser)
             self.sessions.append(session)
         self.stdout.write(f"  {len(self.sessions)} séances créées avec pointage et répartition A/B (dont retards).")
 
@@ -475,7 +529,7 @@ class Command(BaseCommand):
                 match_type=Match.MatchType.FRIENDLY, venue=Match.Venue.HOME, created_by=self.coach,
                 opponent_name=f"Adversaire amical {idx + 1}",
             )
-            sport_services.unlock_event(match.event, superuser=superuser, reason="Peuplement de la démo (match historique).")
+            sport_services.unlock_event(match.event, superuser=superuser, reason=f"{SEED_UNLOCK_REASON_PREFIX} (match historique).")
             # Éligibilité réévaluée à CHAQUE match (pas une seule fois avant
             # la boucle) : un joueur suspendu par le carton rouge du match
             # précédent (idx-1) ne doit plus être composé dans celui-ci.
@@ -507,6 +561,7 @@ class Command(BaseCommand):
                     event=match.event, membership=red_target, incident_type=Incident.IncidentType.RED_CARD,
                     cause=Incident.Cause.SERIOUS_FOUL, recorded_by=self.coach, minute=70,
                 )
+            self._relock_event(match.event, actor=superuser)
             self.matches.append(match)
         self.yellow_suspended_membership = yellow_target
         self.red_suspended_membership = red_target
@@ -516,13 +571,18 @@ class Command(BaseCommand):
             f"carton rouge direct pour {getattr(red_target, 'user', None) and red_target.user.email}."
         )
 
-        # Plan tactique supplémentaire publié (un premier existe déjà).
-        if len(present) >= 11:
+        # Plan tactique supplémentaire publié. Éligibilité réévaluée APRÈS
+        # les matchs (CLAUDE.md règle n° 5) : les joueurs que les cartons
+        # ci-dessus viennent de suspendre ne sont jamais placés.
+        plan_players = [p for p in present if sport_services.get_playability(p).eligible][:11]
+        if len(plan_players) < 11:
+            self.stdout.write(f"  Plan tactique non créé : seulement {len(plan_players)} joueur(s) éligible(s) (11 requis).")
+        else:
             plan = sport_services.create_tactical_plan(
                 club=club, name="Simulation — plan de démonstration", formation="4-3-3", squad_size=11,
                 created_by=self.coach, match=self.matches[-1] if self.matches else None,
             )
-            for i, membership in enumerate(present[:11]):
+            for i, membership in enumerate(plan_players):
                 sport_services.place_on_plan(plan=plan, membership=membership, x_coord=Decimal("10") + i * 8, y_coord=Decimal("50"), placed_by=self.coach)
             sport_services.publish_tactical_plan(plan=plan, published_by=self.coach)
             self.stdout.write(f"  Plan tactique supplémentaire publié (id={plan.pk}).")
@@ -555,6 +615,27 @@ class Command(BaseCommand):
                         comment="Bonne séance, continue ainsi.", comment_visible_to_player=True,
                     )
             self.stdout.write(f"  Évaluations soumises pour {min(3, len(present))} joueur(s) (séance du jour, id={eval_session.pk}).")
+
+    def _relock_event(self, event, *, actor) -> bool:
+        """Re-verrouille un événement passé que cette commande a dû
+        déverrouiller pour le peupler (CDC 4.7). La règle
+        ``is_event_locked`` n'est pas modifiée : on efface simplement le
+        déverrouillage, et l'opération est journalisée (CLAUDE.md règle 6)."""
+
+        if not event.unlocked_by_id:
+            return False
+        if event.event_date >= sport_services.get_club_today(event.club):
+            return False  # événement du jour ou futur : pas de verrouillage à rétablir
+        before = {"unlocked_by": event.unlocked_by_id, "unlock_reason": event.unlock_reason}
+        event.unlocked_by = None
+        event.unlocked_at = None
+        event.unlock_reason = ""
+        event.save(update_fields=["unlocked_by", "unlocked_at", "unlock_reason"])
+        log_action(
+            actor=actor, club=event.club, action_type="sport.event_relocked", obj=event, before=before,
+            after={"unlocked_by": None, "unlock_reason": "", "context": "seed_simulation"},
+        )
+        return True
 
     # ------------------------------------------------------------------
     def _seed_medical(self) -> None:
@@ -665,14 +746,27 @@ class Command(BaseCommand):
     def _seed_mercato(self) -> None:
         from apps.clubs.models import Club as ClubModel
 
-        other_club = ClubModel.objects.filter(slug="club-test-1").first()
+        # Second club quelconque ayant au moins un joueur actif (jamais un
+        # slug figé : la base peut ne contenir que des clubs fictifs).
+        other_club = None
+        target_membership = None
+        for candidate in ClubModel.objects.exclude(pk=self.club.pk).order_by("pk"):
+            with active_club(candidate):
+                president_ids = MembershipRole.all_objects.filter(
+                    club=candidate, role=MembershipRole.Role.PRESIDENT, revoked_at__isnull=True
+                ).values_list("membership_id", flat=True)
+                target_membership = (
+                    Membership.all_objects.filter(club=candidate, status=Membership.Status.ACTIVE)
+                    .exclude(pk__in=president_ids)
+                    .select_related("user")
+                    .order_by("pk")
+                    .first()
+                )
+            if target_membership is not None:
+                other_club = candidate
+                break
         if other_club is None:
-            self.stdout.write("  Aucun second club disponible (club-test-1 introuvable) : mercato non peuplé.")
-            return
-        with active_club(other_club):
-            target_membership = Membership.all_objects.filter(club=other_club, status=Membership.Status.ACTIVE).first()
-        if target_membership is None:
-            self.stdout.write("  club-test-1 n'a aucun joueur actif : mercato non peuplé.")
+            self.stdout.write("  Aucun autre club avec un joueur actif : section mercato ignorée.")
             return
 
         with active_club(other_club):
@@ -687,7 +781,7 @@ class Command(BaseCommand):
 
         offer = mercato_services.create_transfer_offer(
             initiated_by=self.president, target_club=self.club, target_membership=target_membership,
-            message="Nous aimerions vous accueillir à Fc Malaïka pour la saison en cours.", now=_dt(2026, 9, 16),
+            message=f"Nous aimerions vous accueillir à {self.club.name} pour la saison en cours.", now=_dt(2026, 9, 16),
         )
         thread = mercato_services.get_or_create_thread(club_a=self.club, club_b=other_club, subject="Transfert", transfer_offer=offer, now=_dt(2026, 9, 16))
         mercato_services.send_message(thread=thread, actor=self.president, club=self.club, body="Bonjour, avez-vous des questions sur notre proposition ?", now=_dt(2026, 9, 16, 10, 0))
@@ -695,7 +789,7 @@ class Command(BaseCommand):
             mercato_services.send_message(thread=thread, actor=target_membership.user, club=other_club, body="Bonjour, je vais réfléchir et vous répondre rapidement.", now=_dt(2026, 9, 17, 9, 0))
         except Exception as exc:  # noqa: BLE001
             self.stdout.write(f"  (réponse du joueur non envoyée : {exc})")
-        self.stdout.write(f"  Offre de transfert créée (id={offer.pk}) pour {target_membership.user.email} (club-test-1), messagerie inter-clubs amorcée.")
+        self.stdout.write(f"  Offre de transfert créée (id={offer.pk}) pour {target_membership.user.email} ({other_club.slug}), messagerie inter-clubs amorcée.")
 
     # ------------------------------------------------------------------
     def _seed_assembly(self) -> None:
@@ -746,11 +840,14 @@ class Command(BaseCommand):
         if Post.all_objects.filter(club=club, body=image_body).exists():
             self.stdout.write("  Publication avec image déjà présente : rien à refaire.")
         else:
+            image = self._social_image_file("logo.jpeg")
             social_services.create_post(
                 club=club, actor=self.coach, body=image_body,
-                visibility=Post.Visibility.CLUB_ONLY, images=[self._social_image_file("logo.jpeg")], now=_dt(2026, 9, 23, 20, 0),
+                visibility=Post.Visibility.CLUB_ONLY, images=[image] if image is not None else [], now=_dt(2026, 9, 23, 20, 0),
             )
-            self.stdout.write("  Publication avec image créée (logo.jpeg).")
+            self.stdout.write(
+                "  Publication avec image créée (logo.jpeg)." if image is not None else "  Publication créée sans image (logo absent)."
+            )
 
         public_body = "Merci à tous pour votre engagement ce mois-ci."
         if not Post.all_objects.filter(club=club, body=public_body).exists():
@@ -805,3 +902,67 @@ class Command(BaseCommand):
                 self.stdout.write(f"  INATTENDU : {label} a été composé sans blocage ({membership.user.email}).")
             except Exception as exc:  # noqa: BLE001
                 self.stdout.write(f"  Blocage confirmé pour joueur {label} ({membership.user.email}) : {exc}")
+
+    # ------------------------------------------------------------------
+    def _relock_seeded_events(self) -> None:
+        """Filet de sécurité (et réparation des bases peuplées par une
+        version antérieure de cette commande) : aucun événement passé
+        déverrouillé par cette commande ne reste ouvert (CDC 4.7)."""
+
+        from apps.sport.models import Event
+
+        relocked = 0
+        candidates = Event.all_objects.filter(
+            club=self.club, unlocked_by__isnull=False, unlock_reason__startswith=SEED_UNLOCK_REASON_PREFIX
+        ).select_related("club", "unlocked_by")
+        for event in candidates:
+            if self._relock_event(event, actor=event.unlocked_by):
+                relocked += 1
+        self.stdout.write(f"  {relocked} événement(s) passé(s) re-verrouillé(s) (aucune séance passée laissée ouverte).")
+
+    # ------------------------------------------------------------------
+    def _prepare_simulation_accounts(self) -> None:
+        """Comptes de simulation uniquement (email à domaine réservé/fictif,
+        voir ``is_simulation_email``) : lève l'obligation de changer le mot
+        de passe initial et accepte la dernière version des CGU via le
+        service existant (``accept_terms``, journalisé par son signal), pour
+        permettre les sessions de recette e2e. Les comptes réels ne sont
+        jamais touchés."""
+
+        if not getattr(self, "prepare_e2e_accounts", False):
+            self.stdout.write(
+                "  Section sautée (option --prepare-e2e-accounts non fournie) : aucun mot de passe initial "
+                "levé, aucune CGU acceptée."
+            )
+            return
+
+        from apps.accounts.models import TermsVersion, User
+
+        latest_terms = TermsVersion.objects.order_by("-published_at", "-id").first()
+        users = (
+            User.objects.filter(memberships__club=self.club, is_superuser=False)
+            .distinct()
+            .order_by("pk")
+        )
+        password_waived = terms_accepted = skipped_real = 0
+        for user in users:
+            if not is_simulation_email(user.email):
+                skipped_real += 1
+                continue
+            if user.must_change_password:
+                user.must_change_password = False
+                user.save(update_fields=["must_change_password"])
+                log_action(
+                    actor=user, club=self.club, action_type="accounts.simulation_password_change_waived", obj=user,
+                    before={"must_change_password": True}, after={"must_change_password": False, "context": "seed_simulation"},
+                )
+                password_waived += 1
+            if latest_terms is not None and accounts_services.get_pending_terms_version(user) is not None:
+                accounts_services.accept_terms(user=user, terms_version=latest_terms)
+                terms_accepted += 1
+        if latest_terms is None:
+            self.stdout.write("  Aucune version des CGU publiée : acceptation non effectuée.")
+        self.stdout.write(
+            f"  Comptes de simulation : {password_waived} mot(s) de passe initial(aux) levé(s), "
+            f"{terms_accepted} acceptation(s) des CGU ; {skipped_real} compte(s) réel(s) non modifié(s)."
+        )

@@ -157,9 +157,10 @@ def test_notes_block_aggregates_retained_notes(ctx, rated):
     assert block["average"] == "5.5"
     assert (block["evaluated"], block["eligible"]) == (4, 5)
     assert block["remaining"] == 1
-    assert [(row["rank"], row["note"]) for row in block["best"]] == [(1, "8.5"), (2, "6.5"), (3, "5.0")]
+    # 4 évalués : les deux listes se partagent l'effectif (2 + 2), sans répétition.
+    assert [(row["rank"], row["note"]) for row in block["best"]] == [(1, "8.5"), (2, "6.5")]
     assert block["best"][0]["player"]["membership_id"] == ctx.player.pk
-    assert [row["note"] for row in block["lowest"]] == ["2.0"]  # les 3 meilleurs ne sont pas répétés
+    assert [(row["rank"], row["note"]) for row in block["lowest"]] == [(1, "2.0"), (2, "5.0")]
     assert block["ranking_available"] is True
     distribution = {row["label"]: row["count"] for row in block["distribution"]}
     assert distribution == {"0 à 2": 0, "2 à 4": 1, "4 à 6": 1, "6 à 8": 1, "8 à 10": 1}
@@ -177,6 +178,40 @@ def test_ties_share_a_rank_and_are_all_listed(ctx):
         evaluate(ctx, session, membership, "7.0")
     block = get_stats(ctx.coach.user, session).data["evaluations"]
     assert [row["rank"] for row in block["best"]] == [1, 1, 1, 1, 1]  # au plus 5 lignes
+    assert block["lowest"] == []
+
+
+@pytest.mark.parametrize(
+    "notes, best, lowest",
+    [
+        (["8.0", "4.0"], ["8.0"], ["4.0"]),
+        (["8.0", "6.0", "4.0"], ["8.0", "6.0"], ["4.0"]),
+        (["9.0", "8.0", "7.0", "6.0", "5.0"], ["9.0", "8.0", "7.0"], ["5.0", "6.0"]),
+        (["9.0", "8.0", "7.0", "6.0", "5.0", "4.0", "3.0"], ["9.0", "8.0", "7.0"], ["3.0", "4.0", "5.0"]),
+    ],
+)
+def test_lowest_notes_shown_for_small_squads(ctx, notes, best, lowest):
+    """Décision par défaut (A4.2 muette) : sous 6 évalués, meilleures = moitié
+    haute, plus faibles = le reste ; jamais un joueur dans les deux listes."""
+
+    players = extra_players(ctx, len(notes))
+    session = pointed_session(ctx, *players)
+    for membership, note in zip(players, notes):
+        evaluate(ctx, session, membership, note)
+    block = get_stats(ctx.coach.user, session).data["evaluations"]
+    assert [row["note"] for row in block["best"]] == best
+    assert [row["note"] for row in block["lowest"]] == lowest
+    best_ids = {row["player"]["membership_id"] for row in block["best"]}
+    assert not best_ids & {row["player"]["membership_id"] for row in block["lowest"]}
+
+
+def test_ties_across_the_split_are_kept_with_the_best(ctx):
+    players = extra_players(ctx, 3)
+    session = pointed_session(ctx, *players)
+    for membership in players:
+        evaluate(ctx, session, membership, "7.0")
+    block = get_stats(ctx.coach.user, session).data["evaluations"]
+    assert [row["rank"] for row in block["best"]] == [1, 1, 1]
     assert block["lowest"] == []
 
 
