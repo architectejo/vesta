@@ -490,3 +490,51 @@ et `PostDetailModal`. Évite d'y toucher d'ici mon message « B7 livré ».
 
 **B9** attend toujours ton push des corrections backend n° 1 à 4 (série 5). Je le relance
 dès que je les vois sur `origin/dev-a`.
+
+### 2026-11-27 — dev-b → dev-a — Nouvelle demande du client (circuit 9.4) : messages du chat réservés aux membres en ordre
+**Décidé par le client le 27/11/2026.** Merci de l'ajouter au cahier des charges (§4.16 Chat
+d'équipe, §2.4 matrice, 10.2/10.3) puis de faire le backend. Je ferai l'interface quand l'API
+sera prête (dis-moi si `club/chat` reste dans ta zone).
+
+**Le besoin, en une phrase** : dans le chat **uniquement** (pas les communiqués, ni le fil),
+un message envoyé par l'administration du club porte une case à cocher « Réservé aux
+membres en ordre ».
+- **Cochée** : seuls les joueurs « En ordre » de cotisation voient le message.
+- **Décochée** (par défaut) : message général, visible par tout le monde, comme aujourd'hui.
+
+**Règles demandées**
+1. **Qui voit la case** : seulement les membres de l'administration, c'est-à-dire les rôles du
+   canal du bureau (10.3 n° 165) : Président, VP, DS, Trésorier, adjoint, Intendant, Secrétaire.
+   Les autres joueurs ne la voient pas ; leurs messages restent toujours visibles par tous.
+2. **« En ordre »** = statut calculé (règle 2 : paiements validés − montants dus échus,
+   types obligatoires uniquement). Aucun champ stocké. Les cotisations libres ne comptent pas.
+3. **Visibilité calculée à la lecture**, pas à l'envoi : un joueur qui régularise voit
+   aussitôt les messages réservés, y compris les anciens ; un joueur qui tombe en dette ne les
+   voit plus.
+4. **Filtrage côté serveur** : la liste des messages, l'interrogation `after=`, les images
+   et les compteurs de non-lus ne doivent jamais renvoyer ni compter un message réservé pour
+   un joueur non en ordre. Pas de masquage uniquement dans l'interface.
+5. **Toujours visibles** pour l'auteur et pour les rôles de l'administration, même s'ils
+   sont eux-mêmes en dette. Rappel règle 1 : tous sont joueurs, d'où cette exception.
+6. **Journal d'activité** (règle 6) : l'envoi note `members_in_order_only: true/false`, sans le texte
+   (10.2 n° 166).
+
+**Points à trancher** (propositions par défaut, à valider avec le client)
+- A. **Ce que voit un joueur non en ordre.** Proposition : rien du tout, le message est
+  absent. Variante : une ligne grise « Message réservé aux membres en ordre de cotisation ».
+- B. **Canaux concernés.** Proposition : le canal général seulement ; dans le canal du bureau,
+  la case n'a pas de sens.
+- C. **Un joueur « En attente d'adhésion »** est-il considéré non en ordre ? Proposition :
+  oui, il ne voit pas les messages réservés.
+- D. **Notifications.** Proposition : un message réservé ne notifie que ceux qui peuvent le voir.
+- E. **Repère dans l'interface.** Proposition : badge « Membres en ordre » sur le message, vu
+  par ceux qui peuvent le lire.
+
+**Tests attendus** :
+- joueur en ordre / en dette / en attente ;
+- régularisation puis relecture ;
+- auteur en dette ;
+- interrogation `after=` ;
+- compteur de non-lus ;
+- image d'un message réservé (404 pour un joueur non en ordre) ;
+- étanchéité entre clubs.
