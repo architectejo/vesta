@@ -145,7 +145,11 @@ def test_commandes_de_simulation_refusees_sur_mysql(settings):
 
     from apps.core.management.commands._guards import refuse_outside_development
 
+    # Independant du moteur reel de la suite (SQLite en dev, MySQL via
+    # config.settings.test_mysql) : moteur et autorisation poses explicitement.
     settings.DEBUG = True
+    settings.VESTA_DEV_COMMANDS_ALLOW_NON_SQLITE = False
+    settings.DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3"}}
     refuse_outside_development("seed_simulation")  # SQLite + DEBUG : autorise
     settings.DATABASES = {"default": {"ENGINE": "django.db.backends.mysql"}}
     with pytest.raises(CommandError, match="pas SQLite"):
@@ -158,3 +162,35 @@ def test_commandes_de_simulation_refusees_sur_mysql(settings):
     settings.DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3"}}
     with pytest.raises(CommandError, match="DEBUG=False"):
         refuse_outside_development("issue_e2e_session")
+
+
+def test_autorisation_explicite_mysql_ne_leve_jamais_debug(settings):
+    """``VESTA_DEV_COMMANDS_ALLOW_NON_SQLITE`` (pose uniquement par
+    ``config.settings.test_mysql``) autorise un moteur non SQLite, mais
+    jamais avec ``DEBUG=False`` ; une valeur non booleenne ne suffit pas."""
+
+    from django.core.management.base import CommandError
+
+    from apps.core.management.commands._guards import refuse_outside_development
+
+    settings.DATABASES = {"default": {"ENGINE": "django.db.backends.mysql"}}
+    settings.DEBUG = True
+    settings.VESTA_DEV_COMMANDS_ALLOW_NON_SQLITE = True
+    refuse_outside_development("seed_simulation")  # autorise explicitement
+    settings.VESTA_DEV_COMMANDS_ALLOW_NON_SQLITE = "True"
+    with pytest.raises(CommandError, match="pas SQLite"):
+        refuse_outside_development("seed_simulation")
+    settings.VESTA_DEV_COMMANDS_ALLOW_NON_SQLITE = True
+    settings.DEBUG = False
+    with pytest.raises(CommandError, match="DEBUG=False"):
+        refuse_outside_development("seed_simulation")
+
+
+def test_autorisation_non_sqlite_absente_des_settings_dev_et_prod():
+    """Le parametre n'existe que dans ``test_mysql.py`` (jamais en dev ni en
+    production)."""
+
+    settings_dir = BACKEND_DIR / "config" / "settings"
+    for name in ("base.py", "dev.py", "prod.py"):
+        assert "VESTA_DEV_COMMANDS_ALLOW_NON_SQLITE" not in (settings_dir / name).read_text(encoding="utf-8"), name
+    assert "VESTA_DEV_COMMANDS_ALLOW_NON_SQLITE = True" in (settings_dir / "test_mysql.py").read_text(encoding="utf-8")

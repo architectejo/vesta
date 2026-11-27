@@ -16,6 +16,13 @@ from .base import env
 
 DEBUG = True
 
+# Autorise les commandes reservees au developpement (seed_simulation,
+# issue_e2e_session) sur cette base MySQL de TEST jetable, pour que leurs
+# tests passent aussi sur MySQL (CLAUDE.md §9, sans desactiver de test).
+# Voir apps/core/management/commands/_guards.py : DEBUG reste exige ; ce
+# parametre n'existe dans aucun autre module de settings (jamais en prod).
+VESTA_DEV_COMMANDS_ALLOW_NON_SQLITE = True
+
 ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
 DATABASES = {

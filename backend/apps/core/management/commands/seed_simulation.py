@@ -15,8 +15,13 @@ comme le reste de l'application.
 Portee volontairement limitee (CLAUDE.md §3 : jamais de simulation en
 production, jamais dans les migrations) :
 
-- Refuse de s'executer si ``settings.DEBUG`` est faux (garde-fou de
-  securite : cette commande ne doit jamais tourner en production).
+- Refuse de s'executer si ``settings.DEBUG`` est faux ou si la base n'est
+  pas SQLite (sauf base de test MySQL jetable autorisee explicitement par
+  ``config.settings.test_mysql``, voir ``_guards.py``) : cette commande ne
+  doit jamais tourner en production.
+- Ne touche jamais un club reel au-dela du club cible : ``--prepare-e2e-
+  accounts`` est refusee si le club cible a un seul compte reel, et le
+  mercato n'utilise qu'un autre club 100 % simulation.
 - Ne cree aucun joueur reel supplementaire au-dela du strict necessaire :
   un seul compte synthetique est cree (voir ci-dessous), explicitement
   nomme comme tel.
@@ -73,8 +78,14 @@ SEED_UNLOCK_REASON_PREFIX = "Peuplement de la démo"
 # Domaines reserves/fictifs (RFC 2606, RFC 6761) : seuls les comptes portant
 # un de ces domaines sont consideres comme des comptes de simulation (jamais
 # les comptes reels du club pilote).
+#
+# ``.invalid`` est VOLONTAIREMENT exclu (audit de securite M1) : il est
+# reserve au compte « Systeme » et aux ADRESSES PROVISOIRES de comptes reels
+# (``apps.core.reserved_accounts``) -- un vrai joueur importe sans email
+# porte une adresse ``.invalid`` et ne doit jamais etre traite comme un
+# compte de simulation.
 FICTITIOUS_EMAIL_DOMAINS = frozenset({"example.com", "example.org", "example.net"})
-FICTITIOUS_EMAIL_SUFFIXES = (".local", ".invalid", ".test", ".example", ".localhost")
+FICTITIOUS_EMAIL_SUFFIXES = (".local", ".test", ".example", ".localhost")
 
 
 def is_simulation_email(email: str) -> bool:
@@ -85,6 +96,20 @@ def is_simulation_email(email: str) -> bool:
         return False
     domain = email.rsplit("@", 1)[1]
     return domain in FICTITIOUS_EMAIL_DOMAINS or domain.endswith(FICTITIOUS_EMAIL_SUFFIXES)
+
+
+def non_simulation_account_emails(club) -> list[str]:
+    """Emails des comptes non Superuser rattaches au club (adhesion de tout
+    statut) qui ne sont PAS de domaine de simulation. Liste vide = club
+    100 % simulation (critere commun a ``--prepare-e2e-accounts`` et au
+    choix du club partenaire du mercato, audit de securite M1/m2)."""
+
+    emails = (
+        Membership.all_objects.filter(club=club, user__is_superuser=False)
+        .values_list("user__email", flat=True)
+        .distinct()
+    )
+    return sorted({e for e in emails if not is_simulation_email(e)})
 
 
 def _dt(y, m, d, hh=8, mm=0):
@@ -115,12 +140,12 @@ class Command(BaseCommand):
             action="store_true",
             default=False,
             help=(
-                "Desactive par defaut. Pour les seuls comptes du club a email de domaine reserve/fictif "
-                "(example.com/.org/.net, *.local, *.invalid, *.test, *.example, *.localhost) : leve "
-                "l'obligation de changer le mot de passe initial et accepte la derniere version des CGU "
-                "(journalise), pour les sessions de recette e2e. A NE PAS utiliser sur un club reel dont "
-                "des comptes ont une adresse provisoire (ex. .invalid) : ils perdraient l'obligation de "
-                "changer leur mot de passe initial."
+                "Desactive par defaut. Tout ou rien : refusee (aucune donnee modifiee) si le club a au "
+                "moins un compte non Superuser dont l'email n'est pas de domaine de simulation "
+                "(example.com/.org/.net, *.local, *.test, *.example, *.localhost ; jamais *.invalid, "
+                "reserve aux adresses provisoires de comptes reels). Sinon : leve l'obligation de changer "
+                "le mot de passe initial et accepte la derniere version des CGU (journalise au nom du "
+                "compte Systeme), pour les sessions de recette e2e."
             ),
         )
 
@@ -132,11 +157,51 @@ class Command(BaseCommand):
         except Club.DoesNotExist:
             raise CommandError(f"Aucun club avec le slug « {options['club']} ».") from None
 
+        if self.prepare_e2e_accounts:
+            # Tout ou rien (audit de securite M1), verifie AVANT toute
+            # ecriture : un club ayant le moindre compte reel est refuse.
+            real_emails = non_simulation_account_emails(club)
+            if real_emails:
+                raise CommandError(
+                    f"Option --prepare-e2e-accounts refusée : le club « {club.slug} » compte "
+                    f"{len(real_emails)} compte(s) dont l'adresse email n'est pas d'un domaine de simulation "
+                    "(example.com/.org/.net, .local, .test, .example, .localhost). Cette option lèverait "
+                    "l'obligation de changer le mot de passe initial et accepterait les CGU au nom de vraies "
+                    "personnes : elle est réservée aux clubs entièrement fictifs. Aucune donnée n'a été modifiée."
+                )
+
         self.superuser_email = (
             options.get("superuser_email") or os.environ.get("VESTA_SIMULATION_SUPERUSER_EMAIL") or ""
         ).strip()
         with active_club(club):
             self._run(club)
+
+    def _resolve_superuser(self):
+        """Superuser designe (``--superuser-email`` / variable
+        d'environnement), sinon le premier Superuser de la base."""
+
+        superusers = accounts_services.User.objects.filter(is_superuser=True)
+        if self.superuser_email:
+            return superusers.filter(email__iexact=self.superuser_email).first()
+        return superusers.order_by("pk").first()
+
+    def _resolve_command_actor(self):
+        """Auteur au journal des ecritures faites PAR LA COMMANDE elle-meme
+        (et non par un joueur) : le compte technique « Systeme »
+        (``treasury_services.get_system_actor``, meme helper que les
+        traitements cron), a defaut le Superuser resolu par la commande
+        (audit de securite m1)."""
+
+        try:
+            return treasury_services.get_system_actor()
+        except treasury_services.SystemActorCompromisedError:
+            superuser = self._resolve_superuser()
+            if superuser is None:
+                raise CommandError(
+                    "Compte « Système » altéré et aucun Superuser disponible : impossible d'attribuer "
+                    "correctement les écritures de la commande au journal."
+                ) from None
+            return superuser
 
     # ------------------------------------------------------------------
     def _run(self, club) -> None:
@@ -483,11 +548,7 @@ class Command(BaseCommand):
                 event.delete()
             self.stdout.write(f"  Nettoyage de {len(existing_sessions)} séance(s)/{len(existing_matches)} match(s) partiel(s) d'une exécution précédente.")
 
-        superusers = accounts_services.User.objects.filter(is_superuser=True)
-        if self.superuser_email:
-            superuser = superusers.filter(email__iexact=self.superuser_email).first()
-        else:
-            superuser = superusers.order_by("pk").first()
+        superuser = self._resolve_superuser()
         if superuser is None:
             self.stdout.write("  Aucun Superuser trouvé : les séances/matchs passés resteront verrouillés (non peuplés).")
             return
@@ -746,11 +807,18 @@ class Command(BaseCommand):
     def _seed_mercato(self) -> None:
         from apps.clubs.models import Club as ClubModel
 
-        # Second club quelconque ayant au moins un joueur actif (jamais un
-        # slug figé : la base peut ne contenir que des clubs fictifs).
+        # Second club ENTIÈREMENT DE SIMULATION (tous ses comptes non
+        # Superuser à domaine fictif, même critère que
+        # --prepare-e2e-accounts, audit de sécurité m2) ayant au moins un
+        # joueur actif. Jamais un slug figé, jamais un club réel : un vrai
+        # joueur ne doit pas être mis sur le marché ni recevoir d'offre.
         other_club = None
         target_membership = None
+        skipped_real_clubs = 0
         for candidate in ClubModel.objects.exclude(pk=self.club.pk).order_by("pk"):
+            if non_simulation_account_emails(candidate):
+                skipped_real_clubs += 1
+                continue
             with active_club(candidate):
                 president_ids = MembershipRole.all_objects.filter(
                     club=candidate, role=MembershipRole.Role.PRESIDENT, revoked_at__isnull=True
@@ -766,7 +834,10 @@ class Command(BaseCommand):
                 other_club = candidate
                 break
         if other_club is None:
-            self.stdout.write("  Aucun autre club avec un joueur actif : section mercato ignorée.")
+            self.stdout.write(
+                "  Aucun autre club de simulation (tous comptes à domaine fictif) avec un joueur actif : "
+                f"section mercato ignorée ({skipped_real_clubs} club(s) réel(s) écarté(s), jamais modifié(s))."
+            )
             return
 
         with active_club(other_club):
@@ -922,12 +993,16 @@ class Command(BaseCommand):
 
     # ------------------------------------------------------------------
     def _prepare_simulation_accounts(self) -> None:
-        """Comptes de simulation uniquement (email à domaine réservé/fictif,
-        voir ``is_simulation_email``) : lève l'obligation de changer le mot
-        de passe initial et accepte la dernière version des CGU via le
-        service existant (``accept_terms``, journalisé par son signal), pour
-        permettre les sessions de recette e2e. Les comptes réels ne sont
-        jamais touchés."""
+        """Club 100 % simulation uniquement (vérifié dans ``handle`` AVANT
+        toute écriture : la commande est refusée si le club a le moindre
+        compte non Superuser hors domaine de simulation -- jamais ``.invalid``,
+        réservé aux adresses provisoires de comptes réels ; voir
+        ``is_simulation_email``). Lève l'obligation de changer le mot de
+        passe initial et accepte la dernière version des CGU via le service
+        existant (``accept_terms``). Auteur au journal : le compte
+        « Système » (la commande), jamais le joueur ; l'acceptation des CGU,
+        que le signal attribue à l'utilisateur, reçoit en plus une entrée
+        explicite « acceptation simulée » au nom du Système."""
 
         if not getattr(self, "prepare_e2e_accounts", False):
             self.stdout.write(
@@ -938,6 +1013,7 @@ class Command(BaseCommand):
 
         from apps.accounts.models import TermsVersion, User
 
+        command_actor = self._resolve_command_actor()
         latest_terms = TermsVersion.objects.order_by("-published_at", "-id").first()
         users = (
             User.objects.filter(memberships__club=self.club, is_superuser=False)
@@ -953,12 +1029,24 @@ class Command(BaseCommand):
                 user.must_change_password = False
                 user.save(update_fields=["must_change_password"])
                 log_action(
-                    actor=user, club=self.club, action_type="accounts.simulation_password_change_waived", obj=user,
-                    before={"must_change_password": True}, after={"must_change_password": False, "context": "seed_simulation"},
+                    actor=command_actor, club=self.club, action_type="accounts.simulation_password_change_waived", obj=user,
+                    before={"must_change_password": True},
+                    after={"must_change_password": False, "target_user_id": user.pk, "context": "seed_simulation"},
                 )
                 password_waived += 1
             if latest_terms is not None and accounts_services.get_pending_terms_version(user) is not None:
-                accounts_services.accept_terms(user=user, terms_version=latest_terms)
+                acceptance = accounts_services.accept_terms(user=user, terms_version=latest_terms)
+                # Le signal ``log_terms_accepted`` attribue l'acceptation à
+                # l'utilisateur : entrée explicite au nom du Système pour que
+                # le journal montre qu'elle a été SIMULÉE par la commande.
+                log_action(
+                    actor=command_actor, club=self.club, action_type="accounts.simulation_terms_accepted", obj=acceptance,
+                    before=None,
+                    after={
+                        "target_user_id": user.pk, "terms_version_id": latest_terms.pk, "simulated": True,
+                        "context": "seed_simulation",
+                    },
+                )
                 terms_accepted += 1
         if latest_terms is None:
             self.stdout.write("  Aucune version des CGU publiée : acceptation non effectuée.")
